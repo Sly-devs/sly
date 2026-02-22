@@ -42,6 +42,19 @@ interface WalletRecord {
   currency: string;
 }
 
+/** DB row from agent_skills table */
+export interface DbSkill {
+  skill_id: string;
+  name: string;
+  description?: string | null;
+  input_modes?: string[];
+  output_modes?: string[];
+  tags?: string[];
+  input_schema?: Record<string, unknown> | null;
+  base_price: number;
+  currency: string;
+}
+
 /**
  * Generate a per-agent A2A Agent Card from a Sly agent record.
  */
@@ -50,9 +63,10 @@ export function generateAgentCard(
   account: AccountRecord,
   wallet?: WalletRecord | null,
   baseUrl?: string,
+  dbSkills?: DbSkill[],
 ): A2AAgentCard {
   const BASE_URL = resolveBaseUrl(baseUrl);
-  const skills = buildSkills(agent);
+  const skills = buildSkills(agent, dbSkills);
   const extensions = buildExtensions(agent, wallet, BASE_URL);
   const endpointUrl = `${BASE_URL}/a2a/${agent.id}`;
 
@@ -239,9 +253,25 @@ function hasPerm(perms: Record<string, any>, category: string, perm: string): bo
 }
 
 /**
- * Build A2A skills from agent permissions.
+ * Build A2A skills from DB rows (preferred) or agent permissions (fallback).
  */
-function buildSkills(agent: AgentRecord): A2ASkill[] {
+function buildSkills(agent: AgentRecord, dbSkills?: DbSkill[]): A2ASkill[] {
+  // If DB skills exist, use them directly
+  if (dbSkills?.length) {
+    return dbSkills.map((s) => ({
+      id: s.skill_id,
+      name: s.name,
+      description: s.description
+        ? `${s.description}${Number(s.base_price) > 0 ? ` Fee: ${s.base_price} ${s.currency}.` : ''}`
+        : undefined,
+      inputModes: s.input_modes || ['text'],
+      outputModes: s.output_modes || ['text', 'data'],
+      tags: s.tags || [],
+      inputSchema: s.input_schema || undefined,
+    }));
+  }
+
+  // Fallback: derive from permissions
   const skills: A2ASkill[] = [];
   const perms = agent.permissions || {};
 

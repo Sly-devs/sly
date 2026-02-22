@@ -86,6 +86,23 @@ export function injectContext(
         enriched.account_id = ctx.accountId;
       }
       break;
+
+    // x402 payment: auto-fill walletId
+    case 'x402_pay':
+      if (!enriched.walletId && ctx.walletId) {
+        enriched.walletId = ctx.walletId;
+      }
+      break;
+
+    // AP2 mandate creation: auto-fill account_id and agent_id
+    case 'ap2_create_mandate':
+      if (!enriched.account_id) {
+        enriched.account_id = ctx.accountId;
+      }
+      if (!enriched.agent_id) {
+        enriched.agent_id = ctx.agentId;
+      }
+      break;
   }
 
   return enriched;

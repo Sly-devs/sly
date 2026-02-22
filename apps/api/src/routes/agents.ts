@@ -1695,4 +1695,155 @@ agents.post('/:id/sign-request', async (c) => {
   });
 });
 
+// ============================================
+// AGENT SKILLS CRUD
+// ============================================
+
+const skillSchema = z.object({
+  skill_id: z.string().min(1).max(255),
+  name: z.string().min(1).max(255),
+  description: z.string().optional(),
+  input_modes: z.array(z.string()).optional().default(['text']),
+  output_modes: z.array(z.string()).optional().default(['text', 'data']),
+  tags: z.array(z.string()).optional().default([]),
+  input_schema: z.record(z.unknown()).optional(),
+  base_price: z.number().min(0).default(0),
+  currency: z.string().max(10).optional().default('USDC'),
+  status: z.enum(['active', 'disabled']).optional().default('active'),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+/**
+ * GET /v1/agents/:id/skills — List agent's skills
+ */
+agents.get('/:id/skills', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID');
+
+  const supabase = createClient();
+
+  // Verify agent belongs to tenant
+  const { data: agent } = await supabase
+    .from('agents')
+    .select('id')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (!agent) throw new NotFoundError('Agent');
+
+  const { data: skills, error } = await supabase
+    .from('agent_skills')
+    .select('*')
+    .eq('agent_id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .order('created_at');
+
+  if (error) throw new Error(error.message);
+
+  return c.json({ data: skills || [] });
+});
+
+/**
+ * POST /v1/agents/:id/skills — Register a new skill
+ */
+agents.post('/:id/skills', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID');
+
+  const body = await c.req.json();
+  const parsed = skillSchema.safeParse(body);
+  if (!parsed.success) throw new ValidationError('Invalid skill data: ' + parsed.error.message);
+
+  const supabase = createClient();
+
+  // Verify agent belongs to tenant
+  const { data: agent } = await supabase
+    .from('agents')
+    .select('id')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (!agent) throw new NotFoundError('Agent');
+
+  const { data: skill, error } = await supabase
+    .from('agent_skills')
+    .upsert({
+      tenant_id: ctx.tenantId,
+      agent_id: id,
+      ...parsed.data,
+    }, { onConflict: 'tenant_id,agent_id,skill_id' })
+    .select('*')
+    .single();
+
+  if (error) throw new Error(error.message);
+
+  logAudit(supabase, ctx, 'agent.skill.created', { agentId: id, skillId: parsed.data.skill_id });
+  return c.json(skill, 201);
+});
+
+/**
+ * PATCH /v1/agents/:id/skills/:skillId — Update a skill
+ */
+agents.patch('/:id/skills/:skillId', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  const skillId = c.req.param('skillId');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID');
+
+  const body = await c.req.json();
+  const allowed = ['name', 'description', 'base_price', 'currency', 'status', 'tags', 'input_modes', 'output_modes', 'input_schema', 'metadata'];
+  const updates: Record<string, unknown> = {};
+  for (const key of allowed) {
+    if (key in body) updates[key] = body[key];
+  }
+
+  if (Object.keys(updates).length === 0) throw new ValidationError('No valid fields to update');
+
+  updates.updated_at = new Date().toISOString();
+
+  const supabase = createClient();
+
+  const { data: skill, error } = await supabase
+    .from('agent_skills')
+    .update(updates)
+    .eq('agent_id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('skill_id', skillId)
+    .select('*')
+    .single();
+
+  if (error || !skill) throw new NotFoundError('Skill');
+
+  logAudit(supabase, ctx, 'agent.skill.updated', { agentId: id, skillId });
+  return c.json(skill);
+});
+
+/**
+ * DELETE /v1/agents/:id/skills/:skillId — Remove a skill
+ */
+agents.delete('/:id/skills/:skillId', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  const skillId = c.req.param('skillId');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID');
+
+  const supabase = createClient();
+
+  const { error } = await supabase
+    .from('agent_skills')
+    .delete()
+    .eq('agent_id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('skill_id', skillId);
+
+  if (error) throw new Error(error.message);
+
+  logAudit(supabase, ctx, 'agent.skill.deleted', { agentId: id, skillId });
+  return c.json({ deleted: true });
+});
+
 export default agents;

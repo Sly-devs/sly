@@ -167,8 +167,16 @@ export class A2ATaskProcessor {
           return await this.handleStream(taskId, intent);
         case 'info':
           return await this.handleInfo(taskId, agentCtx);
+        case 'checkout':
+          return await this.handleCheckout(taskId, intent, agentCtx);
+        case 'x402_access':
+          return await this.handleX402Access(taskId, intent, agentCtx);
+        case 'mandate':
+          return await this.handleMandate(taskId, intent, agentCtx);
+        case 'research':
+          return await this.handleResearch(taskId, intent, agentCtx);
         default:
-          return await this.handleGeneric(taskId, text);
+          return await this.handleGeneric(taskId, text, agentCtx);
       }
     } catch (err: any) {
       console.error(`[A2A Processor] Error processing ${taskId.slice(0, 8)}:`, err.message);
@@ -178,6 +186,116 @@ export class A2ATaskProcessor {
       ]);
       return this.taskService.getTask(taskId);
     }
+  }
+
+  // --- Service Fee Charging ---
+
+  /**
+   * Charge a service fee for a skill invocation.
+   * Looks up the skill in agent_skills, deducts base_price from wallet,
+   * creates a transfer record, and increments usage stats.
+   * Returns true if fee was charged (or no fee needed), false if insufficient funds.
+   */
+  private async chargeServiceFee(
+    taskId: string,
+    skillId: string,
+    agentCtx: AgentContext,
+  ): Promise<{ charged: boolean; fee: number; currency: string }> {
+    // Look up skill pricing from DB
+    const { data: skill } = await this.supabase
+      .from('agent_skills')
+      .select('id, base_price, currency')
+      .eq('agent_id', agentCtx.agentId)
+      .eq('tenant_id', this.tenantId)
+      .eq('skill_id', skillId)
+      .eq('status', 'active')
+      .single();
+
+    const fee = skill ? Number(skill.base_price) : 0;
+    const currency = skill?.currency || 'USDC';
+
+    if (fee <= 0) {
+      return { charged: true, fee: 0, currency };
+    }
+
+    if (!agentCtx.walletId) {
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `This skill requires a fee of ${fee} ${currency}, but no wallet is available.` },
+      ]);
+      return { charged: false, fee, currency };
+    }
+
+    // Check balance
+    const { data: wallet } = await this.supabase
+      .from('wallets')
+      .select('balance')
+      .eq('id', agentCtx.walletId)
+      .eq('tenant_id', this.tenantId)
+      .single();
+
+    if (!wallet || Number(wallet.balance) < fee) {
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `Insufficient funds for skill fee. Required: ${fee} ${currency}. Available: ${wallet ? Number(wallet.balance) : 0} ${currency}.` },
+      ]);
+      return { charged: false, fee, currency };
+    }
+
+    // Deduct atomically
+    const { error: deductError } = await this.supabase
+      .from('wallets')
+      .update({ balance: Number(wallet.balance) - fee })
+      .eq('id', agentCtx.walletId)
+      .eq('tenant_id', this.tenantId)
+      .gte('balance', fee);
+
+    if (deductError) {
+      return { charged: false, fee, currency };
+    }
+
+    // Create transfer record for the service fee
+    await this.supabase
+      .from('transfers')
+      .insert({
+        tenant_id: this.tenantId,
+        type: 'internal',
+        status: 'completed',
+        amount: fee,
+        currency,
+        destination_amount: fee,
+        destination_currency: currency,
+        fx_rate: 1,
+        fee_amount: 0,
+        description: `A2A service fee: ${skillId}`,
+        from_account_id: agentCtx.accountId,
+        from_account_name: 'Agent Account',
+        to_account_id: agentCtx.accountId,
+        to_account_name: 'Agent Account',
+        initiated_by_type: 'agent',
+        initiated_by_id: agentCtx.agentId,
+        initiated_by_name: 'Agent',
+        completed_at: new Date().toISOString(),
+        protocol_metadata: { protocol: 'a2a', serviceFee: true, skillId },
+      });
+
+    // Increment usage stats on the skill row (best-effort)
+    if (skill) {
+      const { error: rpcError } = await this.supabase.rpc('increment_agent_skill_usage', {
+        p_skill_id: skill.id,
+        p_fee: fee,
+      });
+      if (rpcError) {
+        // RPC doesn't exist — update directly
+        await this.supabase
+          .from('agent_skills')
+          .update({
+            total_invocations: ((skill as any).total_invocations || 0) + 1,
+            total_fees_collected: Number((skill as any).total_fees_collected || 0) + fee,
+          })
+          .eq('id', skill.id);
+      }
+    }
+
+    return { charged: true, fee, currency };
   }
 
   // --- Intent Parsing ---
@@ -203,6 +321,21 @@ export class A2ATaskProcessor {
     if (lower.includes('stream') || lower.includes('per second') || lower.includes('flow rate')) {
       return { action: 'stream', amount, currency };
     }
+
+    // New intents: checkout, x402, mandate, research
+    if (lower.includes('checkout') || lower.includes('cart') || lower.includes('create order') || (lower.includes('buy') && lower.includes('item'))) {
+      return { action: 'checkout', amount, currency, description: text };
+    }
+    if (lower.includes('x402') || ((lower.includes('access') || lower.includes('fetch')) && (lower.includes('api') || lower.includes('endpoint') || lower.includes('data')))) {
+      return { action: 'x402_access', amount, currency, description: text };
+    }
+    if (lower.includes('mandate') || lower.includes('recurring') || lower.includes('subscription') || lower.includes('budget')) {
+      return { action: 'mandate', amount, currency, description: text };
+    }
+    if (lower.includes('research') || lower.includes('analyze') || lower.includes('corridor') || lower.includes('compare') || lower.includes('report')) {
+      return { action: 'research', amount, currency, description: text };
+    }
+
     if (lower.includes('find') || lower.includes('search') || lower.includes('lookup') || lower.includes('list supplier') || lower.includes('list vendor') || lower.includes('list account')) {
       return { action: 'lookup', amount, currency, description: text };
     }
@@ -905,10 +1038,339 @@ export class A2ATaskProcessor {
     return this.taskService.getTask(taskId);
   }
 
-  private async handleGeneric(taskId: string, text: string): Promise<A2ATask | null> {
+  // --- New Skill Economy Handlers ---
+
+  /**
+   * Handle checkout — Create a UCP checkout session.
+   * Charges the create_checkout skill fee, then creates the checkout.
+   */
+  private async handleCheckout(
+    taskId: string,
+    intent: { amount: number; currency: string; description?: string },
+    agentCtx: AgentContext,
+  ): Promise<A2ATask | null> {
+    const feeResult = await this.chargeServiceFee(taskId, 'create_checkout', agentCtx);
+    if (!feeResult.charged) {
+      await this.taskService.updateTaskState(taskId, 'failed', 'Insufficient funds for checkout fee');
+      return this.taskService.getTask(taskId);
+    }
+
+    // Parse line items from the description
+    const lineItems = this.parseLineItems(intent.description || '', intent.amount, intent.currency);
+
+    const result = await toolHandlers.ucp_create_checkout(this.supabase, agentCtx, {
+      line_items: lineItems,
+      currency: intent.currency,
+    });
+
+    if (!result.success || !result.data) {
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `Checkout creation failed: ${result.error?.message || 'Unknown error'}` },
+      ]);
+      await this.taskService.updateTaskState(taskId, 'failed', 'Checkout creation failed');
+      return this.taskService.getTask(taskId);
+    }
+
+    const checkout = result.data as Record<string, unknown>;
+    const totals = checkout.totals as Record<string, unknown> | undefined;
+    const totalDisplay = totals?.total ?? 'N/A';
+    const feeNote = feeResult.fee > 0 ? ` Service fee: ${feeResult.fee} ${feeResult.currency}.` : '';
+
     await this.taskService.addMessage(taskId, 'agent', [
       {
-        text: `I received your message. I can help with:\n- **Payments**: "Send 500 USDC to Brazil"\n- **Balance checks**: "Check my USDC balance"\n- **Streams**: "Create a stream at 0.01 USDC/second"\n- **Agent info**: "What are your capabilities?"\n\nPlease let me know what you'd like to do.`,
+        text: `Checkout created successfully. ID: ${checkout.id}. Total: ${totalDisplay} ${checkout.currency}.${feeNote}`,
+      },
+      {
+        data: { type: 'checkout_created', ...checkout, serviceFee: feeResult.fee },
+        metadata: { mimeType: 'application/json' },
+      },
+    ]);
+
+    await this.taskService.addArtifact(taskId, {
+      name: `checkout-${taskId.slice(0, 8)}`,
+      mediaType: 'application/json',
+      parts: [
+        {
+          data: { type: 'checkout', ...checkout },
+          metadata: { mimeType: 'application/json' },
+        },
+      ],
+    });
+
+    await this.taskService.updateTaskState(taskId, 'completed', 'Checkout created');
+    return this.taskService.getTask(taskId);
+  }
+
+  /**
+   * Handle x402 API access.
+   * Charges the access_api skill fee, then lists or pays for endpoints.
+   */
+  private async handleX402Access(
+    taskId: string,
+    intent: { amount: number; currency: string; description?: string },
+    agentCtx: AgentContext,
+  ): Promise<A2ATask | null> {
+    const feeResult = await this.chargeServiceFee(taskId, 'access_api', agentCtx);
+    if (!feeResult.charged) {
+      await this.taskService.updateTaskState(taskId, 'failed', 'Insufficient funds for API access fee');
+      return this.taskService.getTask(taskId);
+    }
+
+    const result = await toolHandlers.x402_list_endpoints(this.supabase, agentCtx, {});
+    const endpoints = (result.success && Array.isArray(result.data)) ? result.data : [];
+
+    const feeNote = feeResult.fee > 0 ? ` Service fee: ${feeResult.fee} ${feeResult.currency}.` : '';
+
+    if (endpoints.length === 0) {
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `No active x402 endpoints found.${feeNote}` },
+      ]);
+    } else {
+      const summary = endpoints
+        .map((e: any, i: number) => `${i + 1}. **${e.name || e.path}** — ${e.base_price} ${e.currency} per call (${e.total_calls || 0} calls)`)
+        .join('\n');
+
+      await this.taskService.addMessage(taskId, 'agent', [
+        {
+          text: `Available x402 endpoints (${endpoints.length}):\n${summary}\n${feeNote}`,
+        },
+        {
+          data: { type: 'x402_endpoints', endpoints, serviceFee: feeResult.fee },
+          metadata: { mimeType: 'application/json' },
+        },
+      ]);
+    }
+
+    await this.taskService.updateTaskState(taskId, 'completed', 'x402 endpoints listed');
+    return this.taskService.getTask(taskId);
+  }
+
+  /**
+   * Handle mandate creation.
+   * Charges the create_mandate skill fee, then creates an AP2 mandate.
+   */
+  private async handleMandate(
+    taskId: string,
+    intent: { amount: number; currency: string; description?: string },
+    agentCtx: AgentContext,
+  ): Promise<A2ATask | null> {
+    // If no amount specified, list existing mandates
+    if (intent.amount <= 0) {
+      const listResult = await toolHandlers.ap2_list_mandates(this.supabase, agentCtx, { agentId: agentCtx.agentId });
+      if (listResult.success && Array.isArray(listResult.data) && listResult.data.length > 0) {
+        const mandates = listResult.data as Array<Record<string, unknown>>;
+        const summary = mandates
+          .map((m, i) => `${i + 1}. ${m.mandate_id} — ${m.authorized_amount} ${m.currency} (${m.status})`)
+          .join('\n');
+
+        await this.taskService.addMessage(taskId, 'agent', [
+          { text: `Existing mandates (${mandates.length}):\n${summary}` },
+          { data: { type: 'mandate_list', mandates }, metadata: { mimeType: 'application/json' } },
+        ]);
+      } else {
+        await this.taskService.addMessage(taskId, 'agent', [
+          { text: 'No existing mandates found. Specify an amount to create one, e.g. "Create a 5000 USDC monthly mandate".' },
+        ]);
+      }
+      await this.taskService.updateTaskState(taskId, 'completed', 'Mandates listed');
+      return this.taskService.getTask(taskId);
+    }
+
+    const feeResult = await this.chargeServiceFee(taskId, 'create_mandate', agentCtx);
+    if (!feeResult.charged) {
+      await this.taskService.updateTaskState(taskId, 'failed', 'Insufficient funds for mandate creation fee');
+      return this.taskService.getTask(taskId);
+    }
+
+    const mandateType = intent.description?.toLowerCase().includes('cart') ? 'cart' :
+      intent.description?.toLowerCase().includes('intent') ? 'intent' : 'payment';
+
+    const result = await toolHandlers.ap2_create_mandate(this.supabase, agentCtx, {
+      authorized_amount: intent.amount,
+      currency: intent.currency,
+      mandate_type: mandateType,
+      description: intent.description || `Mandate for ${intent.amount} ${intent.currency}`,
+    });
+
+    if (!result.success || !result.data) {
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `Mandate creation failed: ${result.error?.message || 'Unknown error'}` },
+      ]);
+      await this.taskService.updateTaskState(taskId, 'failed', 'Mandate creation failed');
+      return this.taskService.getTask(taskId);
+    }
+
+    const mandate = result.data as Record<string, unknown>;
+    const feeNote = feeResult.fee > 0 ? ` Service fee: ${feeResult.fee} ${feeResult.currency}.` : '';
+
+    await this.taskService.addMessage(taskId, 'agent', [
+      {
+        text: `Mandate created. ID: ${mandate.mandate_id}. Authorization: ${mandate.authorized_amount} ${mandate.currency}. Type: ${mandate.mandate_type}.${feeNote}`,
+      },
+      {
+        data: { type: 'mandate_created', ...mandate, serviceFee: feeResult.fee },
+        metadata: { mimeType: 'application/json' },
+      },
+    ]);
+
+    await this.taskService.addArtifact(taskId, {
+      name: `mandate-${taskId.slice(0, 8)}`,
+      mediaType: 'application/json',
+      parts: [
+        {
+          data: { type: 'mandate', ...mandate },
+          metadata: { mimeType: 'application/json' },
+        },
+      ],
+    });
+
+    await this.taskService.updateTaskState(taskId, 'completed', 'Mandate created');
+    return this.taskService.getTask(taskId);
+  }
+
+  /**
+   * Handle research — aggregates real data and returns a structured report.
+   * Charges the research skill fee. This is a paid computational service.
+   */
+  private async handleResearch(
+    taskId: string,
+    intent: { amount: number; currency: string; description?: string },
+    agentCtx: AgentContext,
+  ): Promise<A2ATask | null> {
+    const feeResult = await this.chargeServiceFee(taskId, 'research', agentCtx);
+    if (!feeResult.charged) {
+      await this.taskService.updateTaskState(taskId, 'failed', 'Insufficient funds for research fee');
+      return this.taskService.getTask(taskId);
+    }
+
+    // Aggregate real data for the report
+    const [accountsResult, transactionsResult] = await Promise.all([
+      toolHandlers.list_accounts(this.supabase, agentCtx, { limit: 20 }),
+      toolHandlers.get_agent_transactions(this.supabase, agentCtx, { limit: 50 }),
+    ]);
+
+    const accounts = (accountsResult.success && Array.isArray(accountsResult.data)) ? accountsResult.data : [];
+    const transactions = (transactionsResult.success && Array.isArray(transactionsResult.data)) ? transactionsResult.data : [];
+
+    // Build report
+    const totalVolume = transactions.reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+    const currencies = [...new Set(transactions.map((t: any) => t.currency).filter(Boolean))];
+    const statuses = transactions.reduce((acc: Record<string, number>, t: any) => {
+      acc[t.status || 'unknown'] = (acc[t.status || 'unknown'] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const rates: Record<string, number> = { BRL: 5.05, MXN: 17.2, USD: 1, USDC: 1 };
+    const corridors = currencies
+      .filter((c: string) => c !== 'USDC')
+      .map((c: string) => ({ pair: `USDC/${c}`, rate: rates[c] || 1, rail: c === 'BRL' ? 'Pix' : c === 'MXN' ? 'SPEI' : 'x402' }));
+
+    const report = {
+      type: 'research_report',
+      query: intent.description || 'Payment corridor analysis',
+      generatedAt: new Date().toISOString(),
+      summary: {
+        totalAccounts: accounts.length,
+        totalTransactions: transactions.length,
+        totalVolume,
+        volumeCurrency: 'USDC',
+        activeCurrencies: currencies,
+        transactionStatuses: statuses,
+      },
+      corridors: corridors.length > 0 ? corridors : [
+        { pair: 'USDC/BRL', rate: 5.05, rail: 'Pix' },
+        { pair: 'USDC/MXN', rate: 17.2, rail: 'SPEI' },
+      ],
+      recommendations: [
+        'Consider diversifying payment corridors for better rate arbitrage.',
+        'Pix (Brazil) offers fastest settlement times for LATAM.',
+        'SPEI (Mexico) provides reliable same-day settlement.',
+      ],
+      serviceFee: feeResult.fee,
+    };
+
+    const feeNote = feeResult.fee > 0 ? ` Service fee: ${feeResult.fee} ${feeResult.currency}.` : '';
+
+    await this.taskService.addMessage(taskId, 'agent', [
+      {
+        text: `Research report generated.${feeNote}\n\n**Summary**: ${accounts.length} accounts, ${transactions.length} transactions, ${totalVolume.toFixed(2)} USDC total volume. ${corridors.length || 2} payment corridor(s) analyzed.`,
+      },
+      {
+        data: report,
+        metadata: { mimeType: 'application/json' },
+      },
+    ]);
+
+    await this.taskService.addArtifact(taskId, {
+      name: `research-${taskId.slice(0, 8)}`,
+      mediaType: 'application/json',
+      parts: [
+        {
+          data: report,
+          metadata: { mimeType: 'application/json' },
+        },
+      ],
+    });
+
+    await this.taskService.updateTaskState(taskId, 'completed', 'Research report generated');
+    return this.taskService.getTask(taskId);
+  }
+
+  /**
+   * Parse line items from natural language text.
+   * Falls back to a single item if parsing fails.
+   */
+  private parseLineItems(
+    text: string,
+    fallbackAmount: number,
+    currency: string,
+  ): Array<{ name: string; quantity: number; unit_price: number }> {
+    // Try to parse "N items at $X each" patterns
+    const itemMatch = text.match(/(\d+)\s+(\w[\w\s]*?)\s+(?:at|@)\s+\$?([\d.]+)/i);
+    if (itemMatch) {
+      return [{
+        name: itemMatch[2].trim(),
+        quantity: parseInt(itemMatch[1]),
+        unit_price: parseFloat(itemMatch[3]),
+      }];
+    }
+
+    // Fallback: single item
+    return [{
+      name: 'Item',
+      quantity: 1,
+      unit_price: fallbackAmount || 10,
+    }];
+  }
+
+  private async handleGeneric(taskId: string, text: string, agentCtx?: AgentContext): Promise<A2ATask | null> {
+    // Build skill list from DB if available
+    let skillList = '';
+    if (agentCtx) {
+      const { data: skills } = await this.supabase
+        .from('agent_skills')
+        .select('skill_id, name, base_price, currency')
+        .eq('agent_id', agentCtx.agentId)
+        .eq('tenant_id', this.tenantId)
+        .eq('status', 'active')
+        .order('base_price');
+
+      if (skills?.length) {
+        const free = skills.filter((s) => Number(s.base_price) === 0);
+        const paid = skills.filter((s) => Number(s.base_price) > 0);
+
+        const freeList = free.map((s) => s.name).join(', ');
+        const paidList = paid.map((s) => `${s.name} (${s.base_price} ${s.currency})`).join(', ');
+
+        skillList = `\n\n**Available skills:**`;
+        if (freeList) skillList += `\n- Free: ${freeList}`;
+        if (paidList) skillList += `\n- Paid: ${paidList}`;
+      }
+    }
+
+    await this.taskService.addMessage(taskId, 'agent', [
+      {
+        text: `I received your message. I can help with:\n- **Payments**: "Send 500 USDC to Brazil"\n- **Balance checks**: "Check my USDC balance"\n- **Checkouts**: "Create a checkout for 3 widgets at $25 each"\n- **API Access**: "Access the premium data API"\n- **Mandates**: "Set up a 5000 USDC monthly mandate"\n- **Research**: "Research payment corridors for Brazil"\n- **Streams**: "Create a stream at 0.01 USDC/second"\n- **Agent info**: "What are your capabilities?"${skillList}\n\nPlease let me know what you'd like to do.`,
       },
     ]);
 

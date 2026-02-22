@@ -62,11 +62,22 @@ async function fetchAgentCard(agentId: string, tenantId?: string, baseUrl?: stri
   if (tenantId) walletQuery = walletQuery.eq('tenant_id', tenantId);
   const { data: wallet } = await walletQuery.maybeSingle();
 
+  // Fetch DB-registered skills for this agent
+  let skillsQuery = supabase
+    .from('agent_skills')
+    .select('skill_id, name, description, input_modes, output_modes, tags, input_schema, base_price, currency')
+    .eq('agent_id', agentId)
+    .eq('status', 'active')
+    .order('created_at');
+  if (tenantId) skillsQuery = skillsQuery.eq('tenant_id', tenantId);
+  const { data: dbSkills } = await skillsQuery;
+
   const card = generateAgentCard(
     agent as any,
     account || { id: agent.parent_account_id, name: 'Unknown' },
     wallet,
     baseUrl,
+    dbSkills || [],
   );
 
   return { card };

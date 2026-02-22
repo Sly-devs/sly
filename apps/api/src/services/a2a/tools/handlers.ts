@@ -446,6 +446,213 @@ async function handleSendA2aTask(
 }
 
 /**
+ * ucp_create_checkout — Create a UCP checkout session with line items.
+ */
+async function handleUcpCreateCheckout(
+  supabase: SupabaseClient,
+  ctx: AgentContext,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const lineItems = args.line_items as Array<{ name: string; quantity: number; unit_price: number }> | undefined;
+  const currency = (args.currency as string) || 'USDC';
+  const metadata = (args.metadata as Record<string, unknown>) || {};
+
+  if (!lineItems || !Array.isArray(lineItems) || lineItems.length === 0) {
+    return { success: false, error: { code: 'INVALID_INPUT', message: 'line_items array is required with at least one item' } };
+  }
+
+  const totalAmount = lineItems.reduce((sum, item) => sum + (item.quantity || 1) * (item.unit_price || 0), 0);
+
+  const checkoutId = `cs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const { data, error } = await supabase
+    .from('ucp_checkout_sessions')
+    .insert({
+      id: checkoutId,
+      tenant_id: ctx.tenantId,
+      agent_id: ctx.agentId,
+      currency,
+      line_items: lineItems,
+      totals: { subtotal: totalAmount, total: totalAmount, currency },
+      status: 'incomplete',
+      metadata: { ...metadata, source: 'a2a', agentId: ctx.agentId },
+    })
+    .select('id, currency, status, line_items, totals, created_at')
+    .single();
+
+  if (error || !data) {
+    return { success: false, error: { code: 'CREATE_FAILED', message: error?.message || 'Failed to create checkout' } };
+  }
+
+  return { success: true, data };
+}
+
+/**
+ * x402_list_endpoints — List active x402 endpoints.
+ */
+async function handleX402ListEndpoints(
+  supabase: SupabaseClient,
+  ctx: AgentContext,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const limit = Number(args.limit) || 20;
+
+  const { data, error } = await supabase
+    .from('x402_endpoints')
+    .select('id, name, path, base_price, currency, total_calls, status, created_at')
+    .eq('tenant_id', ctx.tenantId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    return { success: false, error: { code: 'QUERY_ERROR', message: error.message } };
+  }
+
+  return { success: true, data: data || [] };
+}
+
+/**
+ * x402_pay — Pay for an x402 endpoint access.
+ */
+async function handleX402Pay(
+  supabase: SupabaseClient,
+  ctx: AgentContext,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const endpointId = args.endpoint_id as string;
+  if (!endpointId) {
+    return { success: false, error: { code: 'MISSING_PARAM', message: 'endpoint_id is required' } };
+  }
+
+  const walletId = (args.walletId as string) || ctx.walletId;
+  if (!walletId) {
+    return { success: false, error: { code: 'MISSING_WALLET', message: 'No wallet available' } };
+  }
+
+  // Fetch endpoint
+  const { data: endpoint } = await supabase
+    .from('x402_endpoints')
+    .select('id, name, path, base_price, currency, status')
+    .eq('id', endpointId)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (!endpoint || endpoint.status !== 'active') {
+    return { success: false, error: { code: 'ENDPOINT_NOT_FOUND', message: 'Endpoint not found or inactive' } };
+  }
+
+  const amount = Number(endpoint.base_price);
+
+  // Deduct from wallet
+  const { data: wallet } = await supabase
+    .from('wallets')
+    .select('balance')
+    .eq('id', walletId)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (!wallet || Number(wallet.balance) < amount) {
+    return { success: false, error: { code: 'INSUFFICIENT_BALANCE', message: `Need ${amount} ${endpoint.currency}, wallet has ${wallet?.balance || 0}` } };
+  }
+
+  const { error: deductError } = await supabase
+    .from('wallets')
+    .update({ balance: Number(wallet.balance) - amount })
+    .eq('id', walletId)
+    .eq('tenant_id', ctx.tenantId)
+    .gte('balance', amount);
+
+  if (deductError) {
+    return { success: false, error: { code: 'DEDUCT_FAILED', message: deductError.message } };
+  }
+
+  // Create transfer record
+  const { data: transfer } = await supabase
+    .from('transfers')
+    .insert({
+      tenant_id: ctx.tenantId,
+      type: 'internal',
+      status: 'completed',
+      amount,
+      currency: endpoint.currency,
+      destination_amount: amount,
+      destination_currency: endpoint.currency,
+      fx_rate: 1,
+      fee_amount: 0,
+      description: `x402 payment: ${endpoint.name || endpoint.path}`,
+      from_account_id: ctx.accountId,
+      from_account_name: 'Agent Account',
+      to_account_id: ctx.accountId,
+      to_account_name: 'Agent Account',
+      initiated_by_type: 'agent',
+      initiated_by_id: ctx.agentId,
+      initiated_by_name: 'Agent',
+      completed_at: new Date().toISOString(),
+      protocol_metadata: { protocol: 'x402', endpointId: endpoint.id },
+    })
+    .select('id')
+    .single();
+
+  // Increment endpoint stats (best-effort)
+  await supabase.rpc('increment_x402_endpoint_calls', { p_endpoint_id: endpointId });
+
+  return {
+    success: true,
+    data: {
+      transferId: transfer?.id,
+      endpointId: endpoint.id,
+      endpointName: endpoint.name,
+      amount,
+      currency: endpoint.currency,
+    },
+  };
+}
+
+/**
+ * ap2_create_mandate — Create an AP2 payment mandate.
+ */
+async function handleAp2CreateMandate(
+  supabase: SupabaseClient,
+  ctx: AgentContext,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const mandateType = (args.mandate_type as string) || 'payment';
+  const authorizedAmount = Number(args.authorized_amount || args.amount || 0);
+  const currency = (args.currency as string) || 'USDC';
+  const description = (args.description as string) || '';
+
+  if (authorizedAmount <= 0) {
+    return { success: false, error: { code: 'INVALID_AMOUNT', message: 'authorized_amount must be positive' } };
+  }
+
+  const mandateId = `mandate_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const { data, error } = await supabase
+    .from('ap2_mandates')
+    .insert({
+      tenant_id: ctx.tenantId,
+      account_id: ctx.accountId,
+      agent_id: ctx.agentId,
+      mandate_id: mandateId,
+      mandate_type: mandateType,
+      authorized_amount: authorizedAmount,
+      used_amount: 0,
+      currency,
+      status: 'active',
+      metadata: { source: 'a2a', agentId: ctx.agentId, description },
+    })
+    .select('id, mandate_id, mandate_type, authorized_amount, currency, status, created_at')
+    .single();
+
+  if (error || !data) {
+    return { success: false, error: { code: 'CREATE_FAILED', message: error?.message || 'Failed to create mandate' } };
+  }
+
+  return { success: true, data };
+}
+
+/**
  * Registry of in-process tool handlers.
  * Tools not in this map fall back to HTTP via the API client.
  */
@@ -472,4 +679,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   // Intra-platform agent-to-agent (Story 58.7)
   a2a_send_task: handleSendA2aTask,
+
+  // Commerce & protocol handlers (Agent Skill Economy)
+  ucp_create_checkout: handleUcpCreateCheckout,
+  x402_list_endpoints: handleX402ListEndpoints,
+  x402_pay: handleX402Pay,
+  ap2_create_mandate: handleAp2CreateMandate,
 };

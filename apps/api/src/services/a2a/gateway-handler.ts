@@ -12,7 +12,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { A2AJsonRpcRequest, A2AJsonRpcResponse, A2APart } from './types.js';
 import { JSON_RPC_ERRORS } from './types.js';
 
-const BASE_URL = process.env.API_BASE_URL || 'http://localhost:4000';
+const DEFAULT_BASE_URL = process.env.API_BASE_URL || 'http://localhost:4000';
 
 interface DiscoverableAgent {
   id: string;
@@ -38,11 +38,13 @@ interface AgentSummary {
 export async function handleGatewayJsonRpc(
   request: A2AJsonRpcRequest,
   supabase: SupabaseClient,
+  baseUrl?: string,
 ): Promise<A2AJsonRpcResponse> {
+  const BASE_URL = baseUrl || DEFAULT_BASE_URL;
   try {
     switch (request.method) {
       case 'message/send':
-        return await handleGatewayMessage(request, supabase);
+        return await handleGatewayMessage(request, supabase, BASE_URL);
       default:
         return {
           jsonrpc: '2.0',
@@ -72,6 +74,7 @@ export async function handleGatewayJsonRpc(
 async function handleGatewayMessage(
   request: A2AJsonRpcRequest,
   supabase: SupabaseClient,
+  BASE_URL: string,
 ): Promise<A2AJsonRpcResponse> {
   const params = request.params || {};
   const message = params.message as { parts?: A2APart[] } | undefined;

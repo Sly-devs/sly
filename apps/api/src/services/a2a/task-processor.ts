@@ -410,7 +410,7 @@ export class A2ATaskProcessor {
         amount: intent.amount,
         currency: intent.currency,
         description: intent.description,
-        x402Endpoint: 'http://localhost:4000/v1/x402/pay',
+        x402Endpoint: `${process.env.API_BASE_URL || 'http://localhost:4000'}/v1/x402/pay`,
       });
 
       // Merge the original intent into task metadata so we can resume after payment

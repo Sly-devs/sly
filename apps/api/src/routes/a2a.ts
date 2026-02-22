@@ -179,7 +179,7 @@ a2aPublicRouter.post('/', async (c) => {
   }
 
   const supabase = createClient();
-  const rpcResponse = await handleGatewayJsonRpc(rpcRequest, supabase);
+  const rpcResponse = await handleGatewayJsonRpc(rpcRequest, supabase, getBaseUrl(c));
   return jsonRpc(rpcResponse as Record<string, unknown>);
 });
 

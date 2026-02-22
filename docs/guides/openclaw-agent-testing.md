@@ -13,9 +13,10 @@ A practical guide for OpenClaw bot developers to test Sly's A2A (Agent-to-Agent)
 5. [Phase 3 — Paid Skill Testing (Skill Economy)](#5-phase-3--paid-skill-testing-skill-economy)
 6. [Phase 4 — Payment Flow Testing](#6-phase-4--payment-flow-testing)
 7. [Phase 5 — Advanced Patterns](#7-phase-5--advanced-patterns)
-8. [Phase 6 — Edge Case & Error Testing](#8-phase-6--edge-case--error-testing)
-9. [Bot Implementation Reference](#9-bot-implementation-reference)
-10. [Test Matrix](#10-test-matrix)
+8. [Phase 6 — Agent Forwarding (Your Bot AS the Agent)](#8-phase-6--agent-forwarding-your-bot-as-the-agent)
+9. [Phase 7 — Edge Case & Error Testing](#9-phase-7--edge-case--error-testing)
+10. [Bot Implementation Reference](#10-bot-implementation-reference)
+11. [Test Matrix](#11-test-matrix)
 
 ---
 
@@ -25,13 +26,21 @@ A practical guide for OpenClaw bot developers to test Sly's A2A (Agent-to-Agent)
 
 This guide walks through using OpenClaw bots as **external A2A agents** that interact with Sly's payment platform. Sly implements the [Google A2A protocol](https://google.github.io/A2A/) with extensions for payment gating, a DB-driven skill economy, SSE streaming, and multi-turn conversations.
 
-Your bot will:
+Your bot can operate in two modes:
+
+**As a Caller** (Phases 1-5):
 - Discover Sly agents and their skills (free and paid)
 - Submit tasks via JSON-RPC 2.0
 - Handle the full task lifecycle: `submitted` → `working` → `input-required` → `completed`/`failed`
 - Submit payment proofs (x402, AP2, wallet)
 - Stream results via SSE
 - Conduct multi-turn conversations using `contextId`
+
+**As an Agent** (Phase 6 — NEW):
+- Register your bot as a Sly agent with its own A2A or webhook endpoint
+- Provide custom skills (`handler_type: "agent_provided"`) that Sly forwards to your bot
+- Mix custom skills with Sly-native skills on the same agent
+- Sly handles discovery, payment/settlement, and protocol — your bot just does the work
 
 ### Prerequisites
 
@@ -62,6 +71,7 @@ pnpm --filter @sly/api seed:db
 ```
 ┌──────────────────┐         ┌──────────────────────────────────────────┐
 │   OpenClaw Bot    │         │              Sly Platform                │
+│  (as Caller)      │         │                                          │
 │                   │         │                                          │
 │  1. Discover  ────┼── GET ──┤→ /a2a/{agentId}/.well-known/agent.json  │
 │                   │         │                                          │
@@ -82,7 +92,31 @@ pnpm --filter @sly/api seed:db
 │                   │         │   ├─ POST   /tasks/:id/cancel           │
 │                   │         │   └─ POST   /tasks/:id/process          │
 └──────────────────┘         └──────────────────────────────────────────┘
+
+┌──────────────────┐         ┌──────────────────────────────────────────┐
+│   OpenClaw Bot    │         │              Sly Platform                │
+│  (as Agent)       │         │                                          │
+│                   │         │  5. Register  ─── PUT  /v1/agents/:id/  │
+│  Register your ───┼─ REST ──┤→    endpoint      endpoint              │
+│  endpoint + skills│         │                                          │
+│                   │         │  6. Register  ─── POST /v1/agents/:id/  │
+│                   │         │     skills         skills                │
+│                   │         │     (handler_type: "agent_provided")     │
+│                   │         │                                          │
+│  Receive ◄────────┼─ POST ──┤← Sly forwards tasks to your endpoint   │
+│  forwarded tasks  │         │   (A2A JSON-RPC or webhook POST)        │
+│                   │         │                                          │
+│  Return result ───┼─ POST ──┤→ /a2a/{agentId}/callback                │
+│  (webhook mode)   │         │   (with HMAC signature if secret set)   │
+└──────────────────┘         └──────────────────────────────────────────┘
 ```
+
+### Two Modes of Operation
+
+| Mode | Your Bot Is... | How It Works |
+|---|---|---|
+| **Caller** (Phases 1-5) | Sending tasks to a Sly agent | You call `/a2a/{agentId}` with JSON-RPC |
+| **Agent** (Phase 6) | Registered as a Sly agent with its own skills | Callers send tasks to your agent on Sly, Sly handles payment/settlement, forwards the task to your endpoint |
 
 ### Authentication Options
 
@@ -856,9 +890,367 @@ The processor uses the `a2a_send_task` tool handler, which creates a child task 
 
 ---
 
-## 8. Phase 6 — Edge Case & Error Testing
+## 8. Phase 6 — Agent Forwarding (Your Bot AS the Agent)
 
-### 8a. Insufficient Funds
+This is the key feature for the OpenClaw integration. Instead of just calling Sly agents, your bot **becomes** a Sly agent. You register an endpoint and custom skills, and Sly forwards tasks to your bot for execution. Sly handles discovery, payment/settlement, and the A2A protocol — your bot just processes the work.
+
+### Concepts
+
+**Two skill types:**
+
+| `handler_type` | Who processes it | Example |
+|---|---|---|
+| `sly_native` | Sly processes locally | `check_balance`, `make_payment`, `get_quote` |
+| `agent_provided` | Forwarded to your endpoint | `generate_invoice`, `analyze_portfolio`, any custom skill |
+
+**Two endpoint types:**
+
+| `endpoint_type` | How Sly forwards | How you respond |
+|---|---|---|
+| `a2a` | Sly calls your A2A endpoint via JSON-RPC `message/send` | Return result in the JSON-RPC response (sync) |
+| `webhook` | Sly POSTs task payload to your URL | Call back `POST /a2a/{agentId}/callback` when done (async) |
+
+### 8a. Setup: Create Agent and Get Credentials
+
+If you don't already have an agent, create one:
+
+```bash
+API_KEY="pk_test_xxxxx"
+BASE_URL="http://localhost:4000"
+
+# Create agent under an existing business account
+curl -s -X POST "${BASE_URL}/v1/agents" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -d '{
+    "accountId": "<business-account-uuid>",
+    "name": "OpenClaw Bot",
+    "description": "OpenClaw agent with custom skills"
+  }' | jq .
+```
+
+**Save the returned `credentials.token`** — it's shown only once.
+
+```bash
+AGENT_ID="<agent-id-from-response>"
+AGENT_TOKEN="<credentials.token-from-response>"
+```
+
+### 8b. Register Your Endpoint
+
+**Option A: A2A endpoint (recommended for synchronous processing)**
+
+```bash
+curl -s -X PUT "${BASE_URL}/v1/agents/${AGENT_ID}/endpoint" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -d '{
+    "endpoint_url": "https://your-bot.example.com/a2a",
+    "endpoint_type": "a2a"
+  }' | jq .
+```
+
+**Option B: Webhook endpoint (for async processing)**
+
+```bash
+curl -s -X PUT "${BASE_URL}/v1/agents/${AGENT_ID}/endpoint" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -d '{
+    "endpoint_url": "https://your-bot.example.com/webhook",
+    "endpoint_type": "webhook",
+    "endpoint_secret": "whsec_your_secret_here"
+  }' | jq .
+```
+
+**Verify:**
+
+```bash
+curl -s "${BASE_URL}/v1/agents/${AGENT_ID}/endpoint" \
+  -H "Authorization: Bearer ${API_KEY}" | jq .
+```
+
+**Expected:**
+
+```json
+{
+  "data": {
+    "id": "<agent-uuid>",
+    "endpoint_url": "https://your-bot.example.com/a2a",
+    "endpoint_type": "a2a",
+    "endpoint_enabled": true,
+    "has_secret": false
+  }
+}
+```
+
+### 8c. Register Custom Skills
+
+Register your bot's custom skills with `handler_type: "agent_provided"`:
+
+```bash
+# Custom skill — Sly forwards this to your endpoint
+curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -d '{
+    "skill_id": "generate_invoice",
+    "name": "Generate Invoice",
+    "description": "Generate a professional invoice for a transaction",
+    "handler_type": "agent_provided",
+    "tags": ["invoice", "documents"],
+    "base_price": 0.25,
+    "currency": "USDC"
+  }' | jq .
+```
+
+You can also register Sly-native skills (processed by Sly, not forwarded):
+
+```bash
+# Sly-native skill — processed locally by Sly
+curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -d '{
+    "skill_id": "check_balance",
+    "name": "Check Balance",
+    "description": "Check wallet balance",
+    "handler_type": "sly_native",
+    "tags": ["wallets", "balance"],
+    "base_price": 0
+  }' | jq .
+```
+
+**Valid `sly_native` skill IDs:** `agent_info`, `check_balance`, `transaction_history`, `get_quote`, `lookup_account`, `make_payment`, `create_checkout`, `access_api`, `create_mandate`, `research`.
+
+### 8d. Verify Agent Card Shows Only Registered Skills
+
+```bash
+curl -s "${BASE_URL}/a2a/${AGENT_ID}/.well-known/agent.json" | jq '.skills'
+```
+
+**Expected:** Only the skills you registered — no auto-generated permission-based fallbacks.
+
+```json
+[
+  {
+    "id": "generate_invoice",
+    "name": "Generate Invoice",
+    "description": "Generate a professional invoice for a transaction Fee: 0.25 USDC.",
+    "tags": ["invoice", "documents"]
+  },
+  {
+    "id": "check_balance",
+    "name": "Check Balance",
+    "description": "Check wallet balance",
+    "tags": ["wallets", "balance"]
+  }
+]
+```
+
+### 8e. Test A2A Forwarding (endpoint_type: "a2a")
+
+Your A2A endpoint must accept JSON-RPC 2.0 `message/send` requests and return a task result.
+
+**What your endpoint receives:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "message/send",
+  "id": "<request-uuid>",
+  "params": {
+    "message": {
+      "parts": [{ "text": "Generate an invoice for order #1234" }],
+      "metadata": { "skillId": "generate_invoice", "slyTaskId": "<sly-task-uuid>" }
+    },
+    "contextId": "<sly-task-uuid>"
+  }
+}
+```
+
+**What your endpoint should return (synchronous completion):**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "<request-uuid>",
+  "result": {
+    "id": "<your-task-uuid>",
+    "status": { "state": "completed", "message": "Invoice generated" },
+    "history": [
+      {
+        "role": "agent",
+        "parts": [
+          { "text": "Invoice #INV-1234 generated for $500 USDC." },
+          { "data": { "invoiceId": "INV-1234", "amount": 500 }, "metadata": { "mimeType": "application/json" } }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Sly will relay the agent's response back to the original caller.
+
+**Test it end-to-end:**
+
+```bash
+# Another caller sends a task targeting your agent's custom skill
+curl -s -X POST "${BASE_URL}/a2a/${AGENT_ID}" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "message/send",
+    "id": "fwd-test-1",
+    "params": {
+      "message": {
+        "role": "user",
+        "parts": [{ "text": "Generate an invoice for order #1234" }]
+      }
+    }
+  }' | jq .
+```
+
+**Expected flow:**
+1. Sly receives the task
+2. Sly matches intent to `generate_invoice` skill (`handler_type: agent_provided`)
+3. Sly charges the 0.25 USDC service fee from the caller's wallet
+4. Sly forwards the task to your A2A endpoint via JSON-RPC
+5. Your bot processes and returns the result
+6. Sly relays the result back to the original caller
+
+### 8f. Test Webhook Forwarding (endpoint_type: "webhook")
+
+If your agent uses `endpoint_type: "webhook"`, the flow is asynchronous.
+
+**What your webhook receives:**
+
+```json
+{
+  "event": "task.submitted",
+  "task": {
+    "id": "<sly-task-uuid>",
+    "agentId": "<agent-uuid>",
+    "status": "working",
+    "history": [
+      { "role": "user", "parts": [{ "text": "Generate an invoice for order #1234" }] }
+    ]
+  },
+  "timestamp": "2026-02-22T...",
+  "webhookId": "<delivery-uuid>"
+}
+```
+
+**Headers include:**
+- `X-Sly-Event: task.submitted`
+- `X-Sly-Delivery: <delivery-uuid>`
+- `X-Sly-Signature: t=<timestamp>,v1=<hmac-sha256>` (if you configured `endpoint_secret`)
+
+**How to verify the HMAC signature:**
+
+```typescript
+import crypto from 'crypto';
+
+function verifySignature(payload: string, signature: string, secret: string): boolean {
+  const [tPart, vPart] = signature.split(',');
+  const timestamp = tPart.slice(2);   // strip "t="
+  const providedSig = vPart.slice(3);  // strip "v1="
+
+  // Check timestamp is within 5 minutes
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - parseInt(timestamp)) > 300) return false;
+
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(`${timestamp}.${payload}`)
+    .digest('hex');
+
+  return crypto.timingSafeEqual(Buffer.from(providedSig, 'hex'), Buffer.from(expected, 'hex'));
+}
+```
+
+**Calling back with the result:**
+
+After processing, POST the result to the callback endpoint:
+
+```bash
+curl -s -X POST "${BASE_URL}/a2a/${AGENT_ID}/callback" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "taskId": "<sly-task-uuid>",
+    "state": "completed",
+    "message": {
+      "parts": [
+        { "text": "Invoice #INV-1234 generated." },
+        { "data": { "invoiceId": "INV-1234", "amount": 500 } }
+      ]
+    }
+  }' | jq .
+```
+
+**Expected response:**
+
+```json
+{
+  "data": { "taskId": "<sly-task-uuid>", "state": "completed", "received": true }
+}
+```
+
+If you configured an `endpoint_secret`, sign your callback the same way:
+
+```bash
+curl -s -X POST "${BASE_URL}/a2a/${AGENT_ID}/callback" \
+  -H "Content-Type: application/json" \
+  -H "X-Sly-Signature: t=<timestamp>,v1=<hmac-sha256>" \
+  -d '{ "taskId": "...", "state": "completed", "result": "Invoice generated." }'
+```
+
+### 8g. Test Mixed Skills (Native + Agent-Provided)
+
+Register both skill types on the same agent:
+
+```bash
+# Your custom skill
+curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
+  -H "Authorization: Bearer ${API_KEY}" -H "Content-Type: application/json" \
+  -d '{ "skill_id": "generate_invoice", "name": "Generate Invoice", "handler_type": "agent_provided", "base_price": 0.25 }'
+
+# Sly-native skill
+curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
+  -H "Authorization: Bearer ${API_KEY}" -H "Content-Type: application/json" \
+  -d '{ "skill_id": "check_balance", "name": "Check Balance", "handler_type": "sly_native", "base_price": 0 }'
+```
+
+Now test both:
+
+```bash
+# This should be forwarded to your endpoint
+send_task "Generate an invoice for order #5678"
+
+# This should be processed locally by Sly (NOT forwarded)
+send_task "Check my wallet balance"
+```
+
+**Assert:**
+- `generate_invoice` → your endpoint received the task
+- `check_balance` → processed by Sly locally, your endpoint was NOT called
+
+### 8h. Disable Endpoint
+
+```bash
+curl -s -X DELETE "${BASE_URL}/v1/agents/${AGENT_ID}/endpoint" \
+  -H "Authorization: Bearer ${API_KEY}" | jq .
+```
+
+After disabling, agent-provided skills will fail with "Agent has no endpoint configured".
+
+---
+
+## 9. Phase 7 — Edge Case & Error Testing
+
+### 9a. Insufficient Funds
 
 Send a paid skill request with an empty wallet:
 
@@ -882,7 +1274,7 @@ send_task "Research payment corridors for Brazil"
 }
 ```
 
-### 8b. Invalid Auth
+### 9b. Invalid Auth
 
 ```bash
 curl -s -X POST "${BASE_URL}/a2a/${AGENT_ID}" \
@@ -907,7 +1299,7 @@ curl -s -X GET "${BASE_URL}/v1/a2a/tasks" \
 
 **Expected:** `401 Unauthorized`
 
-### 8c. Inactive Agent
+### 9c. Inactive Agent
 
 ```bash
 INACTIVE_AGENT_ID="00000000-0000-0000-0000-000000000000"
@@ -934,7 +1326,7 @@ curl -s -X POST "${BASE_URL}/a2a/${INACTIVE_AGENT_ID}" \
 }
 ```
 
-### 8d. Malformed JSON-RPC
+### 9d. Malformed JSON-RPC
 
 **Missing required fields:**
 
@@ -997,7 +1389,7 @@ curl -s -X POST "${BASE_URL}/a2a/${AGENT_ID}" \
 }
 ```
 
-### 8e. Rate Limiting
+### 9e. Rate Limiting
 
 The API rate limit is 100 requests/minute per IP.
 
@@ -1017,7 +1409,7 @@ done
 - `X-RateLimit-Remaining: 0`
 - `X-RateLimit-Reset: <epoch>`
 
-### 8f. Concurrent Tasks
+### 9f. Concurrent Tasks
 
 Submit multiple tasks in parallel and verify no double-spend:
 
@@ -1057,7 +1449,7 @@ send_task "Check my wallet balance"
 
 ---
 
-## 9. Bot Implementation Reference
+## 10. Bot Implementation Reference
 
 ### Minimal OpenClaw Bot Skeleton (TypeScript)
 
@@ -1357,7 +1749,7 @@ npx tsx openclaw-sly-test-bot.ts
 
 ---
 
-## 10. Test Matrix
+## 11. Test Matrix
 
 | # | Skill / Scenario | Type | Intent Trigger | Expected State | Fee | Key Assertion |
 |---|---|---|---|---|---|---|
@@ -1381,13 +1773,21 @@ npx tsx openclaw-sly-test-bot.ts
 | 18 | SSE streaming | Advanced | `message/stream` method | completed | 0 | SSE events received |
 | 19 | Task cancellation | Advanced | `tasks/cancel` method | canceled | 0 | Terminal state |
 | 20 | Webhook callback | Advanced | `configuration.callbackUrl` | completed | 0 | Callback received |
-| 21 | Insufficient funds | Error | Paid skill with empty wallet | failed | - | Clear error with amounts |
-| 22 | Invalid agent | Error | Non-existent agent UUID | N/A | - | `-32002` error code |
-| 23 | Malformed JSON-RPC | Error | Missing `id` field | N/A | - | `-32600` error code |
-| 24 | Parse error | Error | Invalid JSON body | N/A | - | `-32700` error code |
-| 25 | Empty parts | Error | Empty parts array | N/A | - | `-32602` error code |
-| 26 | Rate limiting | Error | 100+ requests/min | N/A | - | `429` status, rate headers |
-| 27 | Concurrent tasks | Error | 5 parallel payments | mixed | 0 | No double-spend |
+| 21 | Register endpoint | Forwarding | PUT `/v1/agents/:id/endpoint` | N/A | - | `endpoint_enabled: true` |
+| 22 | Register agent skill | Forwarding | POST skill with `handler_type: agent_provided` | N/A | - | Skill stored, shown on card |
+| 23 | A2A forwarding | Forwarding | Task matches agent_provided skill | completed | 0.25 | Task forwarded to agent A2A endpoint |
+| 24 | Webhook forwarding | Forwarding | Task matches agent_provided skill (webhook) | completed | 0.25 | Task POSTed to webhook, callback works |
+| 25 | Mixed skills | Forwarding | sly_native + agent_provided on same agent | completed | varies | Native local, provided forwarded |
+| 26 | Agent card (no fallback) | Forwarding | Agent with no skills registered | N/A | - | Empty skills array |
+| 27 | No endpoint configured | Forwarding | agent_provided skill, no endpoint | failed | - | Clear error message |
+| 28 | Disable endpoint | Forwarding | DELETE `/v1/agents/:id/endpoint` | N/A | - | `endpoint_enabled: false` |
+| 29 | Insufficient funds | Error | Paid skill with empty wallet | failed | - | Clear error with amounts |
+| 30 | Invalid agent | Error | Non-existent agent UUID | N/A | - | `-32002` error code |
+| 31 | Malformed JSON-RPC | Error | Missing `id` field | N/A | - | `-32600` error code |
+| 32 | Parse error | Error | Invalid JSON body | N/A | - | `-32700` error code |
+| 33 | Empty parts | Error | Empty parts array | N/A | - | `-32602` error code |
+| 34 | Rate limiting | Error | 100+ requests/min | N/A | - | `429` status, rate headers |
+| 35 | Concurrent tasks | Error | 5 parallel payments | mixed | 0 | No double-spend |
 
 ---
 

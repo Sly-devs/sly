@@ -341,6 +341,176 @@ a2aPublicRouter.options('/:agentId', (c) => {
 });
 
 // =============================================================================
+// Webhook Callback Receiver (Agent Forwarding)
+// =============================================================================
+
+/**
+ * POST /a2a/:agentId/callback
+ * Agents POST task results back to Sly after processing a forwarded task.
+ * Verifies HMAC signature if endpoint_secret is configured.
+ * Updates the a2a_tasks row and triggers completion webhook to original caller.
+ */
+a2aPublicRouter.post('/:agentId/callback', async (c) => {
+  const agentId = c.req.param('agentId');
+
+  if (!UUID_RE.test(agentId)) {
+    return c.json({ error: 'Invalid agent ID format' }, 400);
+  }
+
+  const supabase = createClient();
+
+  // Look up the agent and its endpoint secret
+  const { data: agent, error: agentError } = await supabase
+    .from('agents')
+    .select('id, tenant_id, endpoint_secret, endpoint_enabled')
+    .eq('id', agentId)
+    .single();
+
+  if (agentError || !agent) {
+    return c.json({ error: 'Agent not found' }, 404);
+  }
+
+  // Verify HMAC signature if secret is configured
+  if (agent.endpoint_secret) {
+    const signatureHeader = c.req.header('X-Sly-Signature');
+    if (!signatureHeader) {
+      return c.json({ error: 'Missing X-Sly-Signature header' }, 401);
+    }
+
+    const rawBody = await c.req.text();
+
+    // Parse signature: "t=timestamp,v1=signature"
+    const parts = signatureHeader.split(',');
+    const timestampPart = parts.find((p: string) => p.startsWith('t='));
+    const sigPart = parts.find((p: string) => p.startsWith('v1='));
+
+    if (!timestampPart || !sigPart) {
+      return c.json({ error: 'Invalid signature format' }, 401);
+    }
+
+    const timestamp = timestampPart.slice(2);
+    const providedSig = sigPart.slice(3);
+
+    // Verify timestamp is within 5 minutes
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - parseInt(timestamp)) > 300) {
+      return c.json({ error: 'Signature timestamp expired' }, 401);
+    }
+
+    // Compute expected signature
+    const { createHmac } = await import('crypto');
+    const payloadString = `${timestamp}.${rawBody}`;
+    const expectedSig = createHmac('sha256', agent.endpoint_secret)
+      .update(payloadString)
+      .digest('hex');
+
+    // Constant-time comparison
+    const { timingSafeEqual } = await import('crypto');
+    const a = Buffer.from(providedSig, 'hex');
+    const b = Buffer.from(expectedSig, 'hex');
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      return c.json({ error: 'Invalid signature' }, 401);
+    }
+
+    // Re-parse body from raw text (since we consumed it for signature verification)
+    var body = JSON.parse(rawBody);
+  } else {
+    var body = await c.req.json();
+  }
+
+  const taskId = body.taskId || body.task_id;
+  if (!taskId || !UUID_RE.test(taskId)) {
+    return c.json({ error: 'taskId is required' }, 400);
+  }
+
+  const newState = body.state || body.status;
+  if (!newState || !['completed', 'failed'].includes(newState)) {
+    return c.json({ error: 'state must be "completed" or "failed"' }, 400);
+  }
+
+  // Verify the task belongs to this agent and tenant
+  const { data: task, error: taskError } = await supabase
+    .from('a2a_tasks')
+    .select('id, state, tenant_id, callback_url, callback_secret')
+    .eq('id', taskId)
+    .eq('agent_id', agentId)
+    .eq('tenant_id', agent.tenant_id)
+    .single();
+
+  if (taskError || !task) {
+    return c.json({ error: 'Task not found for this agent' }, 404);
+  }
+
+  const taskService = new A2ATaskService(supabase, agent.tenant_id);
+
+  // Add agent's response message if provided
+  if (body.message?.parts?.length) {
+    await taskService.addMessage(taskId, 'agent', normalizeParts(body.message.parts), body.message.metadata);
+  } else if (body.result) {
+    // Accept a simple text/data result
+    const parts: A2APart[] = typeof body.result === 'string'
+      ? [{ text: body.result }]
+      : [{ data: body.result, metadata: { mimeType: 'application/json' } }];
+    await taskService.addMessage(taskId, 'agent', parts);
+  }
+
+  // Add artifacts if provided
+  if (body.artifacts?.length) {
+    for (const artifact of body.artifacts) {
+      if (artifact.parts?.length) {
+        await taskService.addArtifact(taskId, {
+          name: artifact.name,
+          mediaType: artifact.mediaType,
+          parts: normalizeParts(artifact.parts),
+          metadata: artifact.metadata,
+        });
+      }
+    }
+  }
+
+  // Transition task state
+  await taskService.updateTaskState(taskId, newState, body.statusMessage || `Agent ${newState}`);
+
+  // Trigger completion webhook to original caller if callback_url is set
+  if ((task as any).callback_url) {
+    const webhookHandler = new A2AWebhookHandler(supabase);
+    const deliveryId = crypto.randomUUID();
+    try {
+      const result = await webhookHandler.dispatch(
+        { id: taskId, tenant_id: agent.tenant_id, agent_id: agentId, state: newState, context_id: null },
+        { callbackUrl: (task as any).callback_url, callbackSecret: (task as any).callback_secret },
+        deliveryId,
+      );
+      if (result.success) {
+        await webhookHandler.recordSuccess(taskId, result);
+      }
+    } catch (err: any) {
+      console.error(`[A2A Callback] Failed to notify original caller for task ${taskId.slice(0, 8)}:`, err.message);
+    }
+  }
+
+  console.log(`[A2A Callback] Agent ${agentId.slice(0, 8)} reported task ${taskId.slice(0, 8)} as ${newState}`);
+
+  return c.json({ data: { taskId, state: newState, received: true } });
+});
+
+/**
+ * OPTIONS /a2a/:agentId/callback
+ * CORS preflight for callback endpoint.
+ */
+a2aPublicRouter.options('/:agentId/callback', () => {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Sly-Signature',
+      'Access-Control-Max-Age': '86400',
+    },
+  });
+});
+
+// =============================================================================
 // SSE Streaming Handler (Story 58.13)
 // =============================================================================
 

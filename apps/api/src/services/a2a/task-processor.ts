@@ -18,6 +18,8 @@ import { AgentToolRegistry } from './tools/registry.js';
 import { toolHandlers } from './tools/handlers.js';
 import type { AgentContext } from './tools/context-injector.js';
 import type { A2ATask } from './types.js';
+import { A2AClient } from './client.js';
+import { A2AWebhookHandler } from './webhook-handler.js';
 
 interface ProcessorConfig {
   /** Poll interval in ms (default: 5000) */
@@ -150,6 +152,13 @@ export class A2ATaskProcessor {
 
     const intent = this.parseIntent(text);
     console.log(`[A2A Processor] Intent: ${intent.action} (amount: ${intent.amount} ${intent.currency})`);
+
+    // --- Skill-based routing: check if a registered skill should handle this ---
+    const matchedSkill = await this.matchSkill(agentCtx.agentId, intent.action, text);
+
+    if (matchedSkill && matchedSkill.handler_type === 'agent_provided') {
+      return await this.forwardToAgent(taskId, text, matchedSkill, agentCtx);
+    }
 
     try {
       switch (intent.action) {
@@ -296,6 +305,239 @@ export class A2ATaskProcessor {
     }
 
     return { charged: true, fee, currency };
+  }
+
+  // --- Skill Matching & Forwarding ---
+
+  /** Map intent actions to known Sly-native skill_ids */
+  private static INTENT_TO_SKILL: Record<string, string> = {
+    payment: 'make_payment',
+    balance: 'check_balance',
+    lookup: 'lookup_account',
+    quote: 'get_quote',
+    history: 'transaction_history',
+    info: 'agent_info',
+    checkout: 'create_checkout',
+    x402_access: 'access_api',
+    mandate: 'create_mandate',
+    research: 'research',
+  };
+
+  /**
+   * Match parsed intent to a registered skill.
+   * First tries exact skill_id match, then falls back to tag matching.
+   */
+  private async matchSkill(
+    agentId: string,
+    intentAction: string,
+    _text: string,
+  ): Promise<{ skill_id: string; handler_type: string; base_price: number; currency: string } | null> {
+    // Map intent to potential skill_id
+    const skillId = A2ATaskProcessor.INTENT_TO_SKILL[intentAction];
+
+    // Fetch all active skills for this agent
+    const { data: skills } = await this.supabase
+      .from('agent_skills')
+      .select('skill_id, handler_type, base_price, currency, tags')
+      .eq('agent_id', agentId)
+      .eq('tenant_id', this.tenantId)
+      .eq('status', 'active');
+
+    if (!skills?.length) return null;
+
+    // Exact match by skill_id
+    if (skillId) {
+      const exact = skills.find((s: any) => s.skill_id === skillId);
+      if (exact) return exact;
+    }
+
+    // Tag-based matching: check if any skill's tags match the intent action
+    const tagMatch = skills.find((s: any) =>
+      s.tags?.includes(intentAction) || s.tags?.includes(intentAction.replace('_', '-')),
+    );
+    if (tagMatch) return tagMatch;
+
+    return null;
+  }
+
+  /**
+   * Forward a task to the agent's registered endpoint.
+   * Supports both A2A (JSON-RPC) and webhook (HTTP POST) forwarding.
+   */
+  private async forwardToAgent(
+    taskId: string,
+    messageText: string,
+    skill: { skill_id: string; handler_type: string; base_price: number; currency: string },
+    agentCtx: AgentContext,
+  ): Promise<A2ATask | null> {
+    // Look up agent's endpoint configuration
+    const { data: agent } = await this.supabase
+      .from('agents')
+      .select('id, endpoint_url, endpoint_type, endpoint_secret, endpoint_enabled')
+      .eq('id', agentCtx.agentId)
+      .eq('tenant_id', this.tenantId)
+      .single();
+
+    if (!agent?.endpoint_url || !agent.endpoint_enabled || agent.endpoint_type === 'none') {
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `Skill "${skill.skill_id}" is agent-provided but no endpoint is configured. Please register an endpoint.` },
+      ]);
+      await this.taskService.updateTaskState(taskId, 'failed', 'Agent has no endpoint configured');
+      return this.taskService.getTask(taskId);
+    }
+
+    // Charge service fee if applicable
+    if (Number(skill.base_price) > 0) {
+      const feeResult = await this.chargeServiceFee(taskId, skill.skill_id, agentCtx);
+      if (!feeResult.charged) {
+        await this.taskService.updateTaskState(taskId, 'failed', 'Insufficient funds for skill fee');
+        return this.taskService.getTask(taskId);
+      }
+    }
+
+    console.log(`[A2A Processor] Forwarding task ${taskId.slice(0, 8)} to agent endpoint (${agent.endpoint_type}: ${agent.endpoint_url})`);
+
+    if (agent.endpoint_type === 'a2a') {
+      return await this.forwardViaA2A(taskId, messageText, agent, skill);
+    } else if (agent.endpoint_type === 'webhook') {
+      return await this.forwardViaWebhook(taskId, messageText, agent, skill);
+    }
+
+    await this.taskService.updateTaskState(taskId, 'failed', `Unknown endpoint type: ${agent.endpoint_type}`);
+    return this.taskService.getTask(taskId);
+  }
+
+  /**
+   * Forward task via A2A JSON-RPC (message/send).
+   * Sends the message to the agent's A2A endpoint and waits for a response.
+   */
+  private async forwardViaA2A(
+    taskId: string,
+    messageText: string,
+    agent: { id: string; endpoint_url: string; endpoint_secret?: string | null },
+    skill: { skill_id: string },
+  ): Promise<A2ATask | null> {
+    const client = new A2AClient();
+
+    try {
+      const response = await client.sendMessage(
+        agent.endpoint_url,
+        { parts: [{ text: messageText }], metadata: { skillId: skill.skill_id, slyTaskId: taskId } },
+        taskId, // Use Sly task ID as context ID for correlation
+        agent.endpoint_secret || undefined,
+      );
+
+      // Extract result from JSON-RPC response
+      const result = (response as any).result;
+
+      if (result) {
+        // Store remote task ID for tracking
+        await this.supabase
+          .from('a2a_tasks')
+          .update({ remote_task_id: result.id, metadata: { forwarded_to: agent.endpoint_url, skill_id: skill.skill_id } })
+          .eq('id', taskId)
+          .eq('tenant_id', this.tenantId);
+
+        // Check if remote task completed synchronously
+        const remoteState = result.status?.state;
+
+        if (remoteState === 'completed') {
+          // Extract agent's response from the remote task
+          const history = result.history || [];
+          const agentMessages = history.filter((m: any) => m.role === 'agent');
+          const lastMsg = agentMessages[agentMessages.length - 1];
+
+          if (lastMsg?.parts?.length) {
+            await this.taskService.addMessage(taskId, 'agent', lastMsg.parts, lastMsg.metadata);
+          } else {
+            await this.taskService.addMessage(taskId, 'agent', [
+              { text: 'Task completed by agent.' },
+            ]);
+          }
+
+          // Copy artifacts if present
+          if (result.artifacts?.length) {
+            for (const artifact of result.artifacts) {
+              await this.taskService.addArtifact(taskId, artifact);
+            }
+          }
+
+          await this.taskService.updateTaskState(taskId, 'completed', 'Forwarded task completed');
+        } else if (remoteState === 'failed') {
+          const errorMsg = result.status?.message || 'Remote agent failed';
+          await this.taskService.addMessage(taskId, 'agent', [{ text: `Agent returned error: ${errorMsg}` }]);
+          await this.taskService.updateTaskState(taskId, 'failed', errorMsg);
+        } else {
+          // Task is still working on the remote side — mark as working, await callback
+          await this.taskService.addMessage(taskId, 'agent', [
+            { text: `Task forwarded to agent. Awaiting response (remote state: ${remoteState || 'working'}).` },
+          ]);
+          await this.taskService.updateTaskState(taskId, 'working', 'Awaiting agent response');
+        }
+      } else if ((response as any).error) {
+        const rpcError = (response as any).error;
+        await this.taskService.addMessage(taskId, 'agent', [
+          { text: `Agent endpoint error: ${rpcError.message || 'Unknown RPC error'}` },
+        ]);
+        await this.taskService.updateTaskState(taskId, 'failed', rpcError.message || 'RPC error');
+      }
+    } catch (err: any) {
+      console.error(`[A2A Processor] A2A forward failed for task ${taskId.slice(0, 8)}:`, err.message);
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `Failed to reach agent endpoint: ${err.message}` },
+      ]);
+      await this.taskService.updateTaskState(taskId, 'failed', `Forwarding failed: ${err.message}`);
+    }
+
+    return this.taskService.getTask(taskId);
+  }
+
+  /**
+   * Forward task via webhook (HTTP POST).
+   * Sends the task payload to the agent's webhook URL. Agent responds via callback.
+   */
+  private async forwardViaWebhook(
+    taskId: string,
+    messageText: string,
+    agent: { id: string; endpoint_url: string; endpoint_secret?: string | null },
+    skill: { skill_id: string },
+  ): Promise<A2ATask | null> {
+    const webhookHandler = new A2AWebhookHandler(this.supabase);
+    const deliveryId = crypto.randomUUID();
+
+    // Store the delivery ID for tracking
+    await this.supabase
+      .from('a2a_tasks')
+      .update({
+        webhook_delivery_id: deliveryId,
+        webhook_status: 'pending',
+        metadata: { forwarded_to: agent.endpoint_url, skill_id: skill.skill_id },
+      })
+      .eq('id', taskId)
+      .eq('tenant_id', this.tenantId);
+
+    const result = await webhookHandler.dispatch(
+      { id: taskId, tenant_id: this.tenantId, agent_id: agent.id, state: 'working' },
+      { callbackUrl: agent.endpoint_url, callbackSecret: agent.endpoint_secret || undefined },
+      deliveryId,
+    );
+
+    if (result.success) {
+      await webhookHandler.recordSuccess(taskId, result);
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `Task dispatched to agent webhook. Awaiting response.` },
+      ]);
+      // Mark as working — agent will call back via POST /a2a/:agentId/callback
+      await this.taskService.updateTaskState(taskId, 'working', 'Dispatched to agent webhook');
+    } else {
+      await webhookHandler.recordFailure(taskId, this.tenantId, result, 0);
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `Failed to dispatch to agent webhook: ${result.error || 'Unknown error'}` },
+      ]);
+      await this.taskService.updateTaskState(taskId, 'failed', `Webhook dispatch failed: ${result.error}`);
+    }
+
+    return this.taskService.getTask(taskId);
   }
 
   // --- Intent Parsing ---

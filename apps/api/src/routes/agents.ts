@@ -1699,6 +1699,13 @@ agents.post('/:id/sign-request', async (c) => {
 // AGENT SKILLS CRUD
 // ============================================
 
+// Known Sly-native skill IDs that can be processed locally
+const SLY_NATIVE_SKILL_IDS = new Set([
+  'agent_info', 'check_balance', 'transaction_history', 'get_quote',
+  'lookup_account', 'make_payment', 'create_checkout', 'access_api',
+  'create_mandate', 'research',
+]);
+
 const skillSchema = z.object({
   skill_id: z.string().min(1).max(255),
   name: z.string().min(1).max(255),
@@ -1710,6 +1717,7 @@ const skillSchema = z.object({
   base_price: z.number().min(0).default(0),
   currency: z.string().max(10).optional().default('USDC'),
   status: z.enum(['active', 'disabled']).optional().default('active'),
+  handler_type: z.enum(['sly_native', 'agent_provided']).optional().default('agent_provided'),
   metadata: z.record(z.unknown()).optional(),
 });
 
@@ -1757,6 +1765,14 @@ agents.post('/:id/skills', async (c) => {
   const parsed = skillSchema.safeParse(body);
   if (!parsed.success) throw new ValidationError('Invalid skill data: ' + parsed.error.message);
 
+  // Validate sly_native skill IDs are known handlers
+  if (parsed.data.handler_type === 'sly_native' && !SLY_NATIVE_SKILL_IDS.has(parsed.data.skill_id)) {
+    throw new ValidationError(
+      `Unknown sly_native skill_id: "${parsed.data.skill_id}". ` +
+      `Valid sly_native skills: ${[...SLY_NATIVE_SKILL_IDS].join(', ')}`,
+    );
+  }
+
   const supabase = createClient();
 
   // Verify agent belongs to tenant
@@ -1795,10 +1811,15 @@ agents.patch('/:id/skills/:skillId', async (c) => {
   if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID');
 
   const body = await c.req.json();
-  const allowed = ['name', 'description', 'base_price', 'currency', 'status', 'tags', 'input_modes', 'output_modes', 'input_schema', 'metadata'];
+  const allowed = ['name', 'description', 'base_price', 'currency', 'status', 'tags', 'input_modes', 'output_modes', 'input_schema', 'metadata', 'handler_type'];
   const updates: Record<string, unknown> = {};
   for (const key of allowed) {
     if (key in body) updates[key] = body[key];
+  }
+
+  // Validate handler_type if provided
+  if (updates.handler_type && !['sly_native', 'agent_provided'].includes(updates.handler_type as string)) {
+    throw new ValidationError('handler_type must be "sly_native" or "agent_provided"');
   }
 
   if (Object.keys(updates).length === 0) throw new ValidationError('No valid fields to update');
@@ -1844,6 +1865,159 @@ agents.delete('/:id/skills/:skillId', async (c) => {
 
   logAudit(supabase, ctx, 'agent.skill.deleted', { agentId: id, skillId });
   return c.json({ deleted: true });
+});
+
+// ============================================
+// AGENT ENDPOINT MANAGEMENT
+// ============================================
+
+const endpointSchema = z.object({
+  endpoint_url: z.string().url().max(1024),
+  endpoint_type: z.enum(['webhook', 'a2a']),
+  endpoint_secret: z.string().max(255).optional(),
+});
+
+/**
+ * PUT /v1/agents/:id/endpoint — Register or update agent endpoint
+ */
+agents.put('/:id/endpoint', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID');
+
+  const body = await c.req.json();
+  const parsed = endpointSchema.safeParse(body);
+  if (!parsed.success) throw new ValidationError('Invalid endpoint data: ' + parsed.error.message);
+
+  // Validate URL protocol
+  const url = new URL(parsed.data.endpoint_url);
+  if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+    throw new ValidationError('endpoint_url must use HTTPS (or localhost for development)');
+  }
+
+  const supabase = createClient();
+
+  // Verify agent belongs to tenant
+  const { data: agent } = await supabase
+    .from('agents')
+    .select('id, name')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (!agent) throw new NotFoundError('Agent');
+
+  const { data, error } = await supabase
+    .from('agents')
+    .update({
+      endpoint_url: parsed.data.endpoint_url,
+      endpoint_type: parsed.data.endpoint_type,
+      endpoint_secret: parsed.data.endpoint_secret || null,
+      endpoint_enabled: true,
+    })
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .select('id, endpoint_url, endpoint_type, endpoint_enabled')
+    .single();
+
+  if (error) throw new Error(error.message);
+
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'agent',
+    entityId: id,
+    action: 'endpoint_configured',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+    metadata: { endpoint_type: parsed.data.endpoint_type, endpoint_url: parsed.data.endpoint_url },
+  });
+
+  return c.json({
+    data: {
+      id: data.id,
+      endpoint_url: data.endpoint_url,
+      endpoint_type: data.endpoint_type,
+      endpoint_enabled: data.endpoint_enabled,
+      has_secret: !!parsed.data.endpoint_secret,
+    },
+  });
+});
+
+/**
+ * GET /v1/agents/:id/endpoint — Get current endpoint configuration
+ */
+agents.get('/:id/endpoint', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID');
+
+  const supabase = createClient();
+
+  const { data: agent, error } = await supabase
+    .from('agents')
+    .select('id, endpoint_url, endpoint_type, endpoint_enabled, endpoint_secret')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (error || !agent) throw new NotFoundError('Agent');
+
+  return c.json({
+    data: {
+      id: agent.id,
+      endpoint_url: agent.endpoint_url,
+      endpoint_type: agent.endpoint_type || 'none',
+      endpoint_enabled: agent.endpoint_enabled || false,
+      has_secret: !!agent.endpoint_secret,
+    },
+  });
+});
+
+/**
+ * DELETE /v1/agents/:id/endpoint — Disable and clear endpoint
+ */
+agents.delete('/:id/endpoint', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID');
+
+  const supabase = createClient();
+
+  // Verify agent belongs to tenant
+  const { data: agent } = await supabase
+    .from('agents')
+    .select('id')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (!agent) throw new NotFoundError('Agent');
+
+  const { error } = await supabase
+    .from('agents')
+    .update({
+      endpoint_url: null,
+      endpoint_type: 'none',
+      endpoint_secret: null,
+      endpoint_enabled: false,
+    })
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId);
+
+  if (error) throw new Error(error.message);
+
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'agent',
+    entityId: id,
+    action: 'endpoint_removed',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+  });
+
+  return c.json({ data: { id, endpoint_enabled: false } });
 });
 
 export default agents;

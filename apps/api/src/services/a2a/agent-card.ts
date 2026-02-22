@@ -253,105 +253,26 @@ function hasPerm(perms: Record<string, any>, category: string, perm: string): bo
 }
 
 /**
- * Build A2A skills from DB rows (preferred) or agent permissions (fallback).
+ * Build A2A skills from DB rows only.
+ * Agents must explicitly register skills — no permission-based fallback.
+ * If the agent has no registered skills, the card shows an empty skill list.
  */
-function buildSkills(agent: AgentRecord, dbSkills?: DbSkill[]): A2ASkill[] {
-  // If DB skills exist, use them directly
-  if (dbSkills?.length) {
-    return dbSkills.map((s) => ({
-      id: s.skill_id,
-      name: s.name,
-      description: s.description
-        ? `${s.description}${Number(s.base_price) > 0 ? ` Fee: ${s.base_price} ${s.currency}.` : ''}`
-        : undefined,
-      inputModes: s.input_modes || ['text'],
-      outputModes: s.output_modes || ['text', 'data'],
-      tags: s.tags || [],
-      inputSchema: s.input_schema || undefined,
-    }));
+function buildSkills(_agent: AgentRecord, dbSkills?: DbSkill[]): A2ASkill[] {
+  if (!dbSkills?.length) {
+    return [];
   }
 
-  // Fallback: derive from permissions
-  const skills: A2ASkill[] = [];
-  const perms = agent.permissions || {};
-
-  // Transaction skills
-  if (hasPerm(perms, 'transactions', 'initiate')) {
-    skills.push({
-      id: 'make_payment',
-      name: 'Make Payment',
-      description: 'Initiate a payment transfer',
-      inputModes: ['text', 'data'],
-      outputModes: ['text', 'data'],
-      inputSchema: {
-        type: 'object',
-        properties: {
-          amount: { type: 'number', description: 'Payment amount' },
-          currency: { type: 'string', description: 'Currency code (USDC, USD, BRL, MXN)' },
-          destination: { type: 'string', description: 'Destination account or address' },
-          description: { type: 'string', description: 'Payment description' },
-        },
-        required: ['amount', 'currency', 'destination'],
-      },
-      tags: ['payments'],
-    });
-  }
-
-  if (hasPerm(perms, 'transactions', 'view')) {
-    skills.push({
-      id: 'check_balance',
-      name: 'Check Balance',
-      description: 'Check wallet or account balance',
-      inputModes: ['text'],
-      outputModes: ['text', 'data'],
-      tags: ['wallets', 'balance'],
-    });
-  }
-
-  // Stream skills
-  if (hasPerm(perms, 'streams', 'create') || hasPerm(perms, 'streams', 'initiate')) {
-    skills.push({
-      id: 'create_stream',
-      name: 'Create Payment Stream',
-      description: 'Create a real-time per-second payment stream',
-      inputModes: ['text', 'data'],
-      outputModes: ['text', 'data'],
-      inputSchema: {
-        type: 'object',
-        properties: {
-          recipient: { type: 'string', description: 'Stream recipient' },
-          flowRate: { type: 'number', description: 'Flow rate per second in USDC' },
-          duration: { type: 'number', description: 'Duration in seconds' },
-        },
-        required: ['recipient', 'flowRate'],
-      },
-      tags: ['streams', 'payments'],
-    });
-  }
-
-  // Account skills
-  if (hasPerm(perms, 'accounts', 'view')) {
-    skills.push({
-      id: 'lookup_account',
-      name: 'Lookup Account',
-      description: 'Look up account details and verification status',
-      inputModes: ['text'],
-      outputModes: ['text', 'data'],
-      tags: ['accounts'],
-    });
-  }
-
-  // Always include a basic info skill
-  skills.push({
-    id: 'agent_info',
-    name: 'Agent Info',
-    description: 'Get this agent\'s capabilities and status',
-    inputModes: ['text'],
-    outputModes: ['text'],
-    tags: ['info'],
-  });
-
-  return skills;
+  return dbSkills.map((s) => ({
+    id: s.skill_id,
+    name: s.name,
+    description: s.description
+      ? `${s.description}${Number(s.base_price) > 0 ? ` Fee: ${s.base_price} ${s.currency}.` : ''}`
+      : undefined,
+    inputModes: s.input_modes || ['text'],
+    outputModes: s.output_modes || ['text', 'data'],
+    tags: s.tags || [],
+    inputSchema: s.input_schema || undefined,
+  }));
 }
 
 /**

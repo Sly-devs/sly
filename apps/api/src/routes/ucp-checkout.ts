@@ -231,10 +231,18 @@ router.get('/stats', async (c) => {
     for (const row of data || []) {
       if (row.status === 'completed') completedCheckouts++;
 
-      const totalEntry = (row.totals as any[])?.find((t: any) => t.type === 'total');
-      if (!totalEntry) continue;
+      // totals can be an array [{type,amount}] or an object {total,subtotal}
+      const totals = row.totals as any;
+      let amountMinor: number | undefined;
+      if (Array.isArray(totals)) {
+        const entry = totals.find((t: any) => t.type === 'total');
+        amountMinor = entry?.amount;
+      } else if (totals && typeof totals === 'object') {
+        amountMinor = totals.total;
+      }
+      if (amountMinor == null) continue;
 
-      const majorUnits = totalEntry.amount / 100;
+      const majorUnits = amountMinor / 100;
       const currency = (row.currency || 'USD').toUpperCase();
       try {
         totalVolumeUsd += fxService.toUSD(majorUnits, currency);

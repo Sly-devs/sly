@@ -153,11 +153,36 @@ export class A2ATaskProcessor {
     const intent = this.parseIntent(text);
     console.log(`[A2A Processor] Intent: ${intent.action} (amount: ${intent.amount} ${intent.currency})`);
 
-    // --- Skill-based routing: check if a registered skill should handle this ---
-    const matchedSkill = await this.matchSkill(agentCtx.agentId, intent.action, text);
+    // --- Routing: Sly-native vs agent forwarding ---
+    const msgMetadata = lastUserMsg.metadata;
+    const explicitSkillId = msgMetadata?.skillId as string | undefined;
 
-    if (matchedSkill && matchedSkill.handler_type === 'agent_provided') {
-      return await this.forwardToAgent(taskId, text, matchedSkill, agentCtx);
+    // Check if this intent maps to a Sly-native skill the agent registered
+    const slySkillId = A2ATaskProcessor.INTENT_TO_SKILL[intent.action];
+    let hasSlyNativeSkill = false;
+
+    if (slySkillId) {
+      const { data: nativeSkill } = await this.supabase
+        .from('agent_skills')
+        .select('skill_id, handler_type')
+        .eq('agent_id', agentCtx.agentId)
+        .eq('tenant_id', this.tenantId)
+        .eq('skill_id', slySkillId)
+        .eq('handler_type', 'sly_native')
+        .eq('status', 'active')
+        .maybeSingle();
+
+      hasSlyNativeSkill = !!nativeSkill;
+    }
+
+    // No Sly-native match — check if agent has an active endpoint to forward to
+    if (!hasSlyNativeSkill) {
+      const hasEndpoint = await this.agentHasEndpoint(agentCtx.agentId);
+      if (hasEndpoint) {
+        return await this.forwardToAgent(taskId, text,
+          { skill_id: explicitSkillId || 'default', handler_type: 'agent_provided', base_price: 0, currency: 'USDC' },
+          agentCtx, msgMetadata);
+      }
     }
 
     try {
@@ -324,40 +349,17 @@ export class A2ATaskProcessor {
   };
 
   /**
-   * Match parsed intent to a registered skill.
-   * First tries exact skill_id match, then falls back to tag matching.
+   * Check if an agent has an active endpoint configured for forwarding.
    */
-  private async matchSkill(
-    agentId: string,
-    intentAction: string,
-    _text: string,
-  ): Promise<{ skill_id: string; handler_type: string; base_price: number; currency: string } | null> {
-    // Map intent to potential skill_id
-    const skillId = A2ATaskProcessor.INTENT_TO_SKILL[intentAction];
-
-    // Fetch all active skills for this agent
-    const { data: skills } = await this.supabase
-      .from('agent_skills')
-      .select('skill_id, handler_type, base_price, currency, tags')
-      .eq('agent_id', agentId)
+  private async agentHasEndpoint(agentId: string): Promise<boolean> {
+    const { data } = await this.supabase
+      .from('agents')
+      .select('endpoint_enabled')
+      .eq('id', agentId)
       .eq('tenant_id', this.tenantId)
-      .eq('status', 'active');
-
-    if (!skills?.length) return null;
-
-    // Exact match by skill_id
-    if (skillId) {
-      const exact = skills.find((s: any) => s.skill_id === skillId);
-      if (exact) return exact;
-    }
-
-    // Tag-based matching: check if any skill's tags match the intent action
-    const tagMatch = skills.find((s: any) =>
-      s.tags?.includes(intentAction) || s.tags?.includes(intentAction.replace('_', '-')),
-    );
-    if (tagMatch) return tagMatch;
-
-    return null;
+      .eq('endpoint_enabled', true)
+      .maybeSingle();
+    return !!data;
   }
 
   /**
@@ -369,6 +371,7 @@ export class A2ATaskProcessor {
     messageText: string,
     skill: { skill_id: string; handler_type: string; base_price: number; currency: string },
     agentCtx: AgentContext,
+    callerMetadata?: Record<string, unknown>,
   ): Promise<A2ATask | null> {
     // Look up agent's endpoint configuration
     const { data: agent } = await this.supabase
@@ -398,7 +401,7 @@ export class A2ATaskProcessor {
     console.log(`[A2A Processor] Forwarding task ${taskId.slice(0, 8)} to agent endpoint (${agent.endpoint_type}: ${agent.endpoint_url})`);
 
     if (agent.endpoint_type === 'a2a') {
-      return await this.forwardViaA2A(taskId, messageText, agent, skill);
+      return await this.forwardViaA2A(taskId, messageText, agent, skill, callerMetadata);
     } else if (agent.endpoint_type === 'webhook') {
       return await this.forwardViaWebhook(taskId, messageText, agent, skill);
     }
@@ -416,13 +419,14 @@ export class A2ATaskProcessor {
     messageText: string,
     agent: { id: string; endpoint_url: string; endpoint_secret?: string | null },
     skill: { skill_id: string },
+    callerMetadata?: Record<string, unknown>,
   ): Promise<A2ATask | null> {
     const client = new A2AClient();
 
     try {
       const response = await client.sendMessage(
         agent.endpoint_url,
-        { parts: [{ text: messageText }], metadata: { skillId: skill.skill_id, slyTaskId: taskId } },
+        { parts: [{ text: messageText }], metadata: { ...callerMetadata, skillId: skill.skill_id, slyTaskId: taskId } },
         taskId, // Use Sly task ID as context ID for correlation
         agent.endpoint_secret || undefined,
       );

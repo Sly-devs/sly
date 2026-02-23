@@ -892,16 +892,37 @@ The processor uses the `a2a_send_task` tool handler, which creates a child task 
 
 ## 8. Phase 6 — Agent Forwarding (Your Bot AS the Agent)
 
-This is the key feature for the OpenClaw integration. Instead of just calling Sly agents, your bot **becomes** a Sly agent. You register an endpoint and custom skills, and Sly forwards tasks to your bot for execution. Sly handles discovery, payment/settlement, and the A2A protocol — your bot just processes the work.
+This is the key feature for the OpenClaw integration. Instead of just calling Sly agents, your bot **becomes** a Sly agent. You register an endpoint, and Sly forwards **any unmatched message** to your bot for execution. Your bot is the expert on its own capabilities — Sly is the payment/routing layer.
+
+### Routing Model (Agent-Driven)
+
+Sly uses **agent-level routing**, not skill-level matching. The routing logic:
+
+1. Parse intent from the user's message (e.g. "balance", "payment", "generic")
+2. Check if the intent maps to a **Sly-native skill** the agent explicitly registered (e.g. `check_balance` with `handler_type: "sly_native"`) → **process locally**
+3. If no Sly-native match AND agent has an **active endpoint** → **forward raw message to agent**
+4. If no Sly-native match AND no endpoint → fall through to generic help text
+
+This means your bot does **not** need to register individual skills for every capability. Just having an active endpoint is enough — any message Sly can't handle natively gets forwarded to your bot. Registering `agent_provided` skills is still useful for **discovery** (they appear on the Agent Card) and **pricing** (fee metadata), but they are not required for forwarding to work.
+
+**Explicit `metadata.skillId`** from the caller is passed through in the forwarded message, so if a caller knows the exact skill ID, your bot receives it.
 
 ### Concepts
 
-**Two skill types:**
+**Two skill types (for discovery/pricing, not routing):**
 
 | `handler_type` | Who processes it | Example |
 |---|---|---|
-| `sly_native` | Sly processes locally | `check_balance`, `make_payment`, `get_quote` |
-| `agent_provided` | Forwarded to your endpoint | `generate_invoice`, `analyze_portfolio`, any custom skill |
+| `sly_native` | Sly processes locally (only if registered) | `check_balance`, `make_payment`, `get_quote` |
+| `agent_provided` | Listed on Agent Card for discovery | `generate_invoice`, `analyze_portfolio`, any custom skill |
+
+**Routing decision tree:**
+
+| Agent has `sly_native` skill for intent? | Agent has endpoint? | Result |
+|---|---|---|
+| Yes | Any | Sly processes locally |
+| No | Yes | Forward to agent endpoint |
+| No | No | Generic help text |
 
 **Two endpoint types:**
 
@@ -984,12 +1005,16 @@ curl -s "${BASE_URL}/v1/agents/${AGENT_ID}/endpoint" \
 }
 ```
 
-### 8c. Register Custom Skills
+### 8c. Register Skills (Optional for Forwarding, Useful for Discovery)
 
-Register your bot's custom skills with `handler_type: "agent_provided"`:
+Registering skills is **not required** for forwarding to work — any message that doesn't match a Sly-native skill is automatically forwarded to the agent's endpoint. However, registering `agent_provided` skills is recommended because:
+
+- They appear on the **Agent Card** (so callers can discover your bot's capabilities)
+- They can include **pricing metadata** (fee info shown in skill descriptions)
+- Callers can pass an explicit `metadata.skillId` that gets forwarded to your bot
 
 ```bash
-# Custom skill — Sly forwards this to your endpoint
+# Optional: register a skill for discovery/pricing (NOT required for forwarding)
 curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${API_KEY}" \
@@ -1004,10 +1029,10 @@ curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
   }' | jq .
 ```
 
-You can also register Sly-native skills (processed by Sly, not forwarded):
+Register **Sly-native skills** to tell Sly to handle specific intents locally (instead of forwarding):
 
 ```bash
-# Sly-native skill — processed locally by Sly
+# Sly-native skill — Sly processes this locally, does NOT forward to your endpoint
 curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${API_KEY}" \
@@ -1022,6 +1047,8 @@ curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
 ```
 
 **Valid `sly_native` skill IDs:** `agent_info`, `check_balance`, `transaction_history`, `get_quote`, `lookup_account`, `make_payment`, `create_checkout`, `access_api`, `create_mandate`, `research`.
+
+**Important:** If you do NOT register `check_balance` as `sly_native`, then "Check my balance" will also be forwarded to your endpoint (because Sly has no native match). Only register Sly-native skills for intents you want Sly to handle.
 
 ### 8d. Verify Agent Card Shows Only Registered Skills
 
@@ -1054,6 +1081,8 @@ Your A2A endpoint must accept JSON-RPC 2.0 `message/send` requests and return a 
 
 **What your endpoint receives:**
 
+Any message that Sly can't handle natively is forwarded with the caller's original metadata:
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -1062,12 +1091,16 @@ Your A2A endpoint must accept JSON-RPC 2.0 `message/send` requests and return a 
   "params": {
     "message": {
       "parts": [{ "text": "Generate an invoice for order #1234" }],
-      "metadata": { "skillId": "generate_invoice", "slyTaskId": "<sly-task-uuid>" }
+      "metadata": { "skillId": "default", "slyTaskId": "<sly-task-uuid>" }
     },
     "contextId": "<sly-task-uuid>"
   }
 }
 ```
+
+**Note on `metadata.skillId`:**
+- If the caller provided an explicit `metadata.skillId`, it's passed through (e.g. `"generate_invoice"`)
+- If no explicit skillId was provided, it defaults to `"default"` — your bot should handle the message based on its content, not the skillId
 
 **What your endpoint should return (synchronous completion):**
 
@@ -1096,7 +1129,7 @@ Sly will relay the agent's response back to the original caller.
 **Test it end-to-end:**
 
 ```bash
-# Another caller sends a task targeting your agent's custom skill
+# Any message the agent can't handle natively gets forwarded
 curl -s -X POST "${BASE_URL}/a2a/${AGENT_ID}" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${API_KEY}" \
@@ -1114,12 +1147,34 @@ curl -s -X POST "${BASE_URL}/a2a/${AGENT_ID}" \
 ```
 
 **Expected flow:**
-1. Sly receives the task
-2. Sly matches intent to `generate_invoice` skill (`handler_type: agent_provided`)
-3. Sly charges the 0.25 USDC service fee from the caller's wallet
-4. Sly forwards the task to your A2A endpoint via JSON-RPC
-5. Your bot processes and returns the result
+1. Sly receives the task, parses intent → `generic` (no Sly-native keyword match)
+2. Sly checks: does this agent have a `sly_native` skill for `generic`? → No
+3. Sly checks: does this agent have an active endpoint? → Yes
+4. Sly forwards the raw message to your A2A endpoint (no upfront fee)
+5. Your bot processes the message and returns the result
 6. Sly relays the result back to the original caller
+
+**Test with explicit skillId (caller knows the exact skill):**
+
+```bash
+curl -s -X POST "${BASE_URL}/a2a/${AGENT_ID}" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "message/send",
+    "id": "fwd-test-2",
+    "params": {
+      "message": {
+        "role": "user",
+        "parts": [{ "text": "Generate an invoice for order #1234" }],
+        "metadata": { "skillId": "generate_invoice" }
+      }
+    }
+  }' | jq .
+```
+
+Your endpoint receives `metadata.skillId: "generate_invoice"` — you can use this to route internally.
 
 ### 8f. Test Webhook Forwarding (endpoint_type: "webhook")
 
@@ -1207,35 +1262,53 @@ curl -s -X POST "${BASE_URL}/a2a/${AGENT_ID}/callback" \
   -d '{ "taskId": "...", "state": "completed", "result": "Invoice generated." }'
 ```
 
-### 8g. Test Mixed Skills (Native + Agent-Provided)
+### 8g. Test Mixed Routing (Native + Forwarded)
 
-Register both skill types on the same agent:
+The routing model is simple: **Sly-native skills are processed locally, everything else is forwarded.**
+
+Register a Sly-native skill to keep balance checks local:
 
 ```bash
-# Your custom skill
-curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
-  -H "Authorization: Bearer ${API_KEY}" -H "Content-Type: application/json" \
-  -d '{ "skill_id": "generate_invoice", "name": "Generate Invoice", "handler_type": "agent_provided", "base_price": 0.25 }'
-
-# Sly-native skill
+# Sly-native: Sly handles this locally
 curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
   -H "Authorization: Bearer ${API_KEY}" -H "Content-Type: application/json" \
   -d '{ "skill_id": "check_balance", "name": "Check Balance", "handler_type": "sly_native", "base_price": 0 }'
+
+# Optional: register for discovery only (not required for forwarding)
+curl -s -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/skills" \
+  -H "Authorization: Bearer ${API_KEY}" -H "Content-Type: application/json" \
+  -d '{ "skill_id": "generate_invoice", "name": "Generate Invoice", "handler_type": "agent_provided", "base_price": 0.25 }'
 ```
 
-Now test both:
+Now test the routing:
 
 ```bash
-# This should be forwarded to your endpoint
+# This is forwarded to your endpoint (no sly_native match for "generic" intent)
 send_task "Generate an invoice for order #5678"
 
-# This should be processed locally by Sly (NOT forwarded)
+# This is processed locally by Sly (check_balance registered as sly_native)
 send_task "Check my wallet balance"
+
+# This is ALSO forwarded — "What's the weather?" has no sly_native match
+send_task "What's the weather in São Paulo?"
 ```
 
 **Assert:**
-- `generate_invoice` → your endpoint received the task
-- `check_balance` → processed by Sly locally, your endpoint was NOT called
+- `"Generate an invoice"` → your endpoint received the task (intent=generic, no native match)
+- `"Check my wallet balance"` → processed by Sly locally (intent=balance, native `check_balance` registered)
+- `"What's the weather"` → your endpoint received the task (intent=generic, no native match)
+- Your bot decides what to do with each forwarded message — it's the expert on its own capabilities
+
+**Routing examples for this agent:**
+
+| Message | Parsed Intent | Sly-native registered? | Result |
+|---|---|---|---|
+| "Check my balance" | `balance` | `check_balance` (sly_native) | Processed locally by Sly |
+| "Generate an invoice" | `generic` | No match | Forwarded to agent |
+| "Send 500 USDC" | `payment` | No `make_payment` registered | Forwarded to agent |
+| "Analyze my portfolio" | `generic` | No match | Forwarded to agent |
+
+If you also registered `make_payment` as `sly_native`, then "Send 500 USDC" would be processed locally instead of forwarded.
 
 ### 8h. Disable Endpoint
 
@@ -1244,7 +1317,7 @@ curl -s -X DELETE "${BASE_URL}/v1/agents/${AGENT_ID}/endpoint" \
   -H "Authorization: Bearer ${API_KEY}" | jq .
 ```
 
-After disabling, agent-provided skills will fail with "Agent has no endpoint configured".
+After disabling, unmatched messages fall through to `handleGeneric()` (help text) instead of being forwarded. Messages that match Sly-native skills still work normally.
 
 ---
 
@@ -1774,13 +1847,13 @@ npx tsx openclaw-sly-test-bot.ts
 | 19 | Task cancellation | Advanced | `tasks/cancel` method | canceled | 0 | Terminal state |
 | 20 | Webhook callback | Advanced | `configuration.callbackUrl` | completed | 0 | Callback received |
 | 21 | Register endpoint | Forwarding | PUT `/v1/agents/:id/endpoint` | N/A | - | `endpoint_enabled: true` |
-| 22 | Register agent skill | Forwarding | POST skill with `handler_type: agent_provided` | N/A | - | Skill stored, shown on card |
-| 23 | A2A forwarding | Forwarding | Task matches agent_provided skill | completed | 0.25 | Task forwarded to agent A2A endpoint |
-| 24 | Webhook forwarding | Forwarding | Task matches agent_provided skill (webhook) | completed | 0.25 | Task POSTed to webhook, callback works |
-| 25 | Mixed skills | Forwarding | sly_native + agent_provided on same agent | completed | varies | Native local, provided forwarded |
-| 26 | Agent card (no fallback) | Forwarding | Agent with no skills registered | N/A | - | Empty skills array |
-| 27 | No endpoint configured | Forwarding | agent_provided skill, no endpoint | failed | - | Clear error message |
-| 28 | Disable endpoint | Forwarding | DELETE `/v1/agents/:id/endpoint` | N/A | - | `endpoint_enabled: false` |
+| 22 | Register agent skill | Forwarding | POST skill with `handler_type: agent_provided` | N/A | - | Skill stored, shown on card (optional for forwarding) |
+| 23 | A2A forwarding (unmatched) | Forwarding | Any message with no sly_native match + endpoint | completed | 0 | Task forwarded to agent A2A endpoint |
+| 24 | Webhook forwarding | Forwarding | Any message with no sly_native match (webhook) | completed | 0 | Task POSTed to webhook, callback works |
+| 25 | Mixed routing | Forwarding | sly_native registered + unmatched messages | completed | varies | Native local, unmatched forwarded |
+| 26 | Explicit skillId | Forwarding | Caller sends `metadata.skillId` | completed | 0 | skillId passed through in forwarded metadata |
+| 27 | No endpoint, unmatched | Forwarding | No sly_native match, no endpoint | completed | - | Generic help text (not failed) |
+| 28 | Disable endpoint | Forwarding | DELETE `/v1/agents/:id/endpoint` | N/A | - | Unmatched → help text instead of forward |
 | 29 | Insufficient funds | Error | Paid skill with empty wallet | failed | - | Clear error with amounts |
 | 30 | Invalid agent | Error | Non-existent agent UUID | N/A | - | `-32002` error code |
 | 31 | Malformed JSON-RPC | Error | Missing `id` field | N/A | - | `-32600` error code |

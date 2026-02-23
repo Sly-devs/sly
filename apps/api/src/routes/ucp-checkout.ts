@@ -229,14 +229,19 @@ router.get('/stats', async (c) => {
     let completedCheckouts = 0;
 
     for (const row of data || []) {
+      if (row.status === 'completed') completedCheckouts++;
+
       const totalEntry = (row.totals as any[])?.find((t: any) => t.type === 'total');
       if (!totalEntry) continue;
 
       const majorUnits = totalEntry.amount / 100;
       const currency = (row.currency || 'USD').toUpperCase();
-      totalVolumeUsd += fxService.toUSD(majorUnits, currency);
-
-      if (row.status === 'completed') completedCheckouts++;
+      try {
+        totalVolumeUsd += fxService.toUSD(majorUnits, currency);
+      } catch {
+        // Unknown currency — skip FX conversion, use raw amount
+        totalVolumeUsd += majorUnits;
+      }
     }
 
     return c.json({

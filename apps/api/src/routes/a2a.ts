@@ -313,6 +313,24 @@ a2aPublicRouter.post('/:agentId', async (c) => {
     }, 400);
   }
 
+  // Resolve callerAgentId from message metadata when using API key auth
+  if (!callerAgentId && (rpcRequest.method === 'message/send' || rpcRequest.method === 'message/stream')) {
+    const msgMeta = (rpcRequest.params as any)?.message?.metadata;
+    const metaAgentId = msgMeta?.callerAgentId as string | undefined;
+    if (metaAgentId && UUID_RE.test(metaAgentId)) {
+      const supabaseCheck = createClient();
+      const { data: callerAgent } = await supabaseCheck
+        .from('agents')
+        .select('id, tenant_id')
+        .eq('id', metaAgentId)
+        .eq('tenant_id', tenantId)
+        .single();
+      if (callerAgent) {
+        callerAgentId = callerAgent.id;
+      }
+    }
+  }
+
   // ---- SSE streaming for message/stream ----
   if (rpcRequest.method === 'message/stream') {
     return handleMessageStream(c, rpcRequest, agentId, tenantId);

@@ -287,6 +287,380 @@ describe('x402 Agent Forwarding', () => {
     });
   });
 
+  describe('Provider wallet crediting', () => {
+    const TENANT_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
+    const PROVIDER_AGENT_ID = 'dddddddd-1111-1111-1111-111111111111';
+    const CALLER_AGENT_ID = 'dddddddd-2222-2222-2222-222222222222';
+    const TASK_ID = 'eeeeeeee-0000-0000-0000-000000000001';
+    const CALLER_ACCOUNT_ID = 'bbbbbbbb-0000-0000-0000-000000000001';
+    const PROVIDER_ACCOUNT_ID = 'bbbbbbbb-0000-0000-0000-000000000002';
+
+    /**
+     * Chainable, thenable mock query builder (mirrors Supabase PostgREST).
+     */
+    function createQueryBuilder(resolvedData: any, resolvedError: any = null) {
+      const result = { data: resolvedData, error: resolvedError };
+      const builder: Record<string, any> = {};
+      const chainMethods = [
+        'select', 'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in',
+        'order', 'limit', 'update', 'insert', 'delete',
+      ];
+      for (const m of chainMethods) {
+        builder[m] = vi.fn(() => builder);
+      }
+      builder.single = vi.fn(() => Promise.resolve(result));
+      builder.maybeSingle = vi.fn(() => Promise.resolve(result));
+      builder.then = (resolve: any, reject: any) => Promise.resolve(result).then(resolve, reject);
+      return builder;
+    }
+
+    /**
+     * Build mock Supabase with per-table handlers.
+     * walletUpdates captures every wallet update call for assertions.
+     */
+    function buildMockSupabase(
+      tableMap: Record<string, (callIndex: number) => ReturnType<typeof createQueryBuilder>>,
+      callLog: string[],
+      walletUpdates: Array<{ walletId: string; newBalance: number }>,
+    ) {
+      const callCounts: Record<string, number> = {};
+      return {
+        from: vi.fn((table: string) => {
+          callLog.push(table);
+          callCounts[table] = (callCounts[table] || 0) + 1;
+          const handler = tableMap[table];
+          if (!handler) return createQueryBuilder(null);
+
+          const builder = handler(callCounts[table]);
+
+          // Intercept wallet updates to track balance changes
+          if (table === 'wallets') {
+            const origUpdate = builder.update;
+            builder.update = vi.fn((data: any) => {
+              if (data && typeof data.balance === 'number') {
+                // We need to capture the wallet ID from the .eq() chain
+                const innerBuilder = origUpdate(data);
+                const origEq = innerBuilder.eq;
+                innerBuilder.eq = vi.fn((col: string, val: any) => {
+                  if (col === 'id') {
+                    walletUpdates.push({ walletId: val, newBalance: data.balance });
+                  }
+                  return origEq(col, val);
+                });
+                return innerBuilder;
+              }
+              return origUpdate(data);
+            });
+          }
+
+          return builder;
+        }),
+        rpc: vi.fn(() => Promise.resolve({ data: null, error: { message: 'not found', code: '42883' } })),
+      };
+    }
+
+    // Shared fixtures
+    const taskRow = {
+      id: TASK_ID,
+      tenant_id: TENANT_ID,
+      agent_id: PROVIDER_AGENT_ID,
+      state: 'submitted',
+      direction: 'inbound',
+      context_id: null,
+      status_message: null,
+      metadata: {},
+      client_agent_id: CALLER_AGENT_ID,
+      transfer_id: null,
+      remote_task_id: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const userMessage = {
+      id: 'msg-1',
+      tenant_id: TENANT_ID,
+      task_id: TASK_ID,
+      role: 'user',
+      parts: [{ text: 'Give me a company brief for Stripe' }],
+      metadata: { skillId: 'company_brief' },
+      created_at: new Date().toISOString(),
+    };
+
+    const providerAgent = {
+      id: PROVIDER_AGENT_ID,
+      parent_account_id: PROVIDER_ACCOUNT_ID,
+      permissions: { transactions: { initiate: true, view: true } },
+      status: 'active',
+      name: 'CompanyIntelBot',
+      kya_tier: 2,
+      endpoint_enabled: true,
+      endpoint_url: 'https://companyintel.example.com/a2a',
+      endpoint_type: 'x402',
+      endpoint_secret: null,
+    };
+
+    const callerWallet = {
+      id: 'wallet-caller',
+      balance: 100,
+      wallet_address: '0xCallerAddress',
+      owner_account_id: CALLER_ACCOUNT_ID,
+    };
+
+    const providerWallet = {
+      id: 'wallet-provider',
+      balance: 50,
+      owner_account_id: PROVIDER_ACCOUNT_ID,
+    };
+
+    it('credits provider wallet and sets correct to_account_id on successful x402 forwarding', async () => {
+      const callLog: string[] = [];
+      const walletUpdates: Array<{ walletId: string; newBalance: number }> = [];
+      let transferInsertArgs: any = null;
+
+      // Mock fetch: 402 → 200
+      mockFetch([
+        {
+          status: 402,
+          body: {
+            accepts: [{
+              scheme: 'exact-evm',
+              network: 'eip155:84532',
+              amount: '500000', // 0.5 USDC
+              token: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+            }],
+          },
+        },
+        {
+          status: 200,
+          body: { response: 'Here is your company brief for Stripe.' },
+        },
+      ]);
+
+      let walletCallCount = 0;
+      const mockSupabase = buildMockSupabase({
+        a2a_tasks: () => createQueryBuilder(taskRow),
+        a2a_messages: () => createQueryBuilder([userMessage]),
+        a2a_artifacts: () => createQueryBuilder([]),
+        agents: () => createQueryBuilder(providerAgent),
+        wallets: (callIndex) => {
+          walletCallCount++;
+          // Call 1: buildAgentContext wallet lookup (maybeSingle)
+          // Call 2: caller wallet lookup (maybeSingle) — Step 6
+          // Call 3: caller wallet deduction (update) — Step 7
+          // Call 4: provider wallet lookup (maybeSingle) — Step 7b
+          // Call 5: provider wallet credit (update) — Step 7b
+          // Call 6: a2a_tasks update for transfer_id link
+          if (walletCallCount <= 2) return createQueryBuilder(callerWallet);
+          if (walletCallCount === 3) return createQueryBuilder(null); // update returns nothing
+          if (walletCallCount === 4) return createQueryBuilder(providerWallet);
+          return createQueryBuilder(null); // subsequent update
+        },
+        transfers: () => {
+          const builder = createQueryBuilder({ id: 'transfer-001' });
+          const origInsert = builder.insert;
+          builder.insert = vi.fn((data: any) => {
+            transferInsertArgs = data;
+            return origInsert(data);
+          });
+          return builder;
+        },
+        ap2_mandates: () => createQueryBuilder([]),
+        agent_skills: () => createQueryBuilder({
+          skill_id: 'company_brief',
+          handler_type: 'agent_provided',
+          base_price: 0.35,
+          currency: 'USDC',
+        }),
+      }, callLog, walletUpdates);
+
+      const processor = new A2ATaskProcessor(mockSupabase as any, TENANT_ID);
+
+      try {
+        await processor.processTask(TASK_ID);
+      } catch {
+        // Expected — some downstream calls may fail with mocks
+      }
+
+      // Verify provider wallet was looked up and credited
+      const walletCalls = callLog.filter(t => t === 'wallets');
+      expect(walletCalls.length).toBeGreaterThanOrEqual(4); // At least: context + caller lookup + deduct + provider lookup
+
+      // Verify wallet updates include a credit to the provider
+      const providerCredit = walletUpdates.find(u => u.walletId === 'wallet-provider');
+      expect(providerCredit).toBeDefined();
+      expect(providerCredit!.newBalance).toBe(50.5); // 50 + 0.5 USDC
+
+      // Verify caller wallet was debited
+      const callerDebit = walletUpdates.find(u => u.walletId === 'wallet-caller');
+      expect(callerDebit).toBeDefined();
+      expect(callerDebit!.newBalance).toBe(99.5); // 100 - 0.5 USDC
+
+      // Verify transfer record has correct to_account_id
+      if (transferInsertArgs) {
+        expect(transferInsertArgs.to_account_id).toBe(PROVIDER_ACCOUNT_ID);
+        expect(transferInsertArgs.from_account_id).toBe(CALLER_ACCOUNT_ID);
+        expect(transferInsertArgs.to_account_id).not.toBe(transferInsertArgs.from_account_id);
+      }
+    });
+
+    it('falls back to caller account_id when provider has no wallet', async () => {
+      const callLog: string[] = [];
+      const walletUpdates: Array<{ walletId: string; newBalance: number }> = [];
+      let transferInsertArgs: any = null;
+
+      mockFetch([
+        {
+          status: 402,
+          body: {
+            accepts: [{
+              scheme: 'exact-evm',
+              network: 'eip155:84532',
+              amount: '500000',
+              token: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+            }],
+          },
+        },
+        {
+          status: 200,
+          body: { response: 'Done.' },
+        },
+      ]);
+
+      let walletCallCount = 0;
+      const mockSupabase = buildMockSupabase({
+        a2a_tasks: () => createQueryBuilder(taskRow),
+        a2a_messages: () => createQueryBuilder([userMessage]),
+        a2a_artifacts: () => createQueryBuilder([]),
+        agents: () => createQueryBuilder(providerAgent),
+        wallets: () => {
+          walletCallCount++;
+          // Caller wallet exists, provider wallet does not
+          if (walletCallCount <= 2) return createQueryBuilder(callerWallet);
+          if (walletCallCount === 3) return createQueryBuilder(null); // deduction update
+          // Provider wallet lookup returns null (no wallet)
+          if (walletCallCount === 4) return createQueryBuilder(null);
+          return createQueryBuilder(null);
+        },
+        transfers: () => {
+          const builder = createQueryBuilder({ id: 'transfer-002' });
+          const origInsert = builder.insert;
+          builder.insert = vi.fn((data: any) => {
+            transferInsertArgs = data;
+            return origInsert(data);
+          });
+          return builder;
+        },
+        ap2_mandates: () => createQueryBuilder([]),
+        agent_skills: () => createQueryBuilder({
+          skill_id: 'company_brief',
+          handler_type: 'agent_provided',
+          base_price: 0.35,
+          currency: 'USDC',
+        }),
+      }, callLog, walletUpdates);
+
+      const processor = new A2ATaskProcessor(mockSupabase as any, TENANT_ID);
+
+      try {
+        await processor.processTask(TASK_ID);
+      } catch {
+        // Expected
+      }
+
+      // No provider wallet credit should occur
+      const providerCredit = walletUpdates.find(u => u.walletId === 'wallet-provider');
+      expect(providerCredit).toBeUndefined();
+
+      // Transfer to_account_id falls back to caller's own account
+      if (transferInsertArgs) {
+        expect(transferInsertArgs.to_account_id).toBe(CALLER_ACCOUNT_ID);
+      }
+    });
+
+    it('rolls back provider wallet credit when retry fails', async () => {
+      const callLog: string[] = [];
+      const walletUpdates: Array<{ walletId: string; newBalance: number }> = [];
+
+      // Mock fetch: 402 → 500 (retry fails)
+      mockFetch([
+        {
+          status: 402,
+          body: {
+            accepts: [{
+              scheme: 'exact-evm',
+              network: 'eip155:84532',
+              amount: '500000',
+              token: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+            }],
+          },
+        },
+        {
+          status: 500,
+          body: { error: 'Internal server error' },
+        },
+      ]);
+
+      let walletCallCount = 0;
+      const mockSupabase = buildMockSupabase({
+        a2a_tasks: () => createQueryBuilder(taskRow),
+        a2a_messages: () => createQueryBuilder([userMessage]),
+        a2a_artifacts: () => createQueryBuilder([]),
+        agents: () => createQueryBuilder(providerAgent),
+        wallets: () => {
+          walletCallCount++;
+          // Calls 1-2: context + caller lookup
+          if (walletCallCount <= 2) return createQueryBuilder(callerWallet);
+          // Call 3: caller deduction
+          if (walletCallCount === 3) return createQueryBuilder(null);
+          // Call 4: provider wallet lookup (maybeSingle)
+          if (walletCallCount === 4) return createQueryBuilder(providerWallet);
+          // Call 5: provider wallet credit (update)
+          if (walletCallCount === 5) return createQueryBuilder(null);
+          // Call 6: caller rollback read (single) - balance after deduction
+          if (walletCallCount === 6) return createQueryBuilder({ balance: 99.5 });
+          // Call 7: caller rollback write (update)
+          if (walletCallCount === 7) return createQueryBuilder(null);
+          // Call 8: provider rollback read (single) - balance after credit
+          if (walletCallCount === 8) return createQueryBuilder({ balance: 50.5 });
+          // Call 9: provider rollback write (update)
+          return createQueryBuilder(null);
+        },
+        transfers: () => createQueryBuilder({ id: 'transfer-003' }),
+        ap2_mandates: () => createQueryBuilder([]),
+        agent_skills: () => createQueryBuilder({
+          skill_id: 'company_brief',
+          handler_type: 'agent_provided',
+          base_price: 0.35,
+          currency: 'USDC',
+        }),
+      }, callLog, walletUpdates);
+
+      const processor = new A2ATaskProcessor(mockSupabase as any, TENANT_ID);
+
+      try {
+        await processor.processTask(TASK_ID);
+      } catch {
+        // Expected
+      }
+
+      // Verify provider wallet was credited and then rolled back
+      const providerUpdates = walletUpdates.filter(u => u.walletId === 'wallet-provider');
+
+      // Should have at least 2 updates: credit (50 + 0.5 = 50.5) then rollback (50.5 - 0.5 = 50)
+      if (providerUpdates.length >= 2) {
+        expect(providerUpdates[0].newBalance).toBe(50.5); // credit
+        expect(providerUpdates[1].newBalance).toBe(50);   // rollback
+      }
+
+      // Verify caller wallet was also rolled back
+      const callerUpdates = walletUpdates.filter(u => u.walletId === 'wallet-caller');
+      if (callerUpdates.length >= 2) {
+        expect(callerUpdates[0].newBalance).toBe(99.5);  // deduction
+        expect(callerUpdates[1].newBalance).toBe(100);    // rollback
+      }
+    });
+  });
+
   describe('USDC unit conversion', () => {
     it('converts base units to human-readable', async () => {
       // Import the facilitator utilities

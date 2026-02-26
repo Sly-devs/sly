@@ -52,8 +52,10 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Redirect authenticated users from auth routes (except reset-password, which needs the recovery session)
-  if (isAuthRoute && user && !request.nextUrl.pathname.startsWith('/auth/reset-password')) {
+  // Redirect authenticated users from auth routes (except pages that need the session)
+  const authExceptions = ['/auth/reset-password', '/auth/setup', '/auth/callback'];
+  const isAuthException = authExceptions.some(path => request.nextUrl.pathname.startsWith(path));
+  if (isAuthRoute && user && !isAuthException) {
     const redirect = request.nextUrl.searchParams.get('redirect') || '/dashboard';
     const url = request.nextUrl.clone();
     url.pathname = redirect;

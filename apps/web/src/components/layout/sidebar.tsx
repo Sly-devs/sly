@@ -110,6 +110,7 @@ const configurationNav = [
 
 const settingsNav = [
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
+  { href: '/dashboard/settings/team', label: 'Team', icon: Users },
 ];
 
 interface NavItemProps {

@@ -32,19 +32,24 @@ interface TierLimits {
 
 /**
  * Compute effective limits = min(agent KYA tier limits, parent account tier limits)
+ * Story 59.15: When parentVerificationTier is null (standalone agent), use KYA tier only
  */
 async function computeEffectiveLimits(
   supabase: ReturnType<typeof createClient>,
   kyaTier: number,
-  parentVerificationTier: number,
+  parentVerificationTier: number | null,
 ): Promise<{ limits: TierLimits; capped: boolean }> {
-  // Fetch both tier limit tables in parallel
-  const [kyaResult, accountResult] = await Promise.all([
-    supabase.from('kya_tier_limits').select('per_transaction, daily, monthly').eq('tier', kyaTier).single(),
-    supabase.from('verification_tier_limits').select('per_transaction, daily, monthly').eq('tier', parentVerificationTier).single(),
-  ]);
-
+  // Fetch KYA tier limits
+  const kyaResult = await supabase.from('kya_tier_limits').select('per_transaction, daily, monthly').eq('tier', kyaTier).single();
   const kyaLimits: TierLimits = kyaResult.data || { per_transaction: 0, daily: 0, monthly: 0 };
+
+  // If no parent (standalone agent), use KYA limits only — no cap
+  if (parentVerificationTier === null) {
+    return { limits: kyaLimits, capped: false };
+  }
+
+  // Fetch parent account tier limits
+  const accountResult = await supabase.from('verification_tier_limits').select('per_transaction, daily, monthly').eq('tier', parentVerificationTier).single();
   const accountLimits: TierLimits = accountResult.data || { per_transaction: 0, daily: 0, monthly: 0 };
 
   const effective: TierLimits = {
@@ -90,6 +95,7 @@ const permissionsSchema = z.object({
 
 // Story 51.1: Accept both accountId (new) and parentAccountId (deprecated)
 // Story 51.6: Add auto_create_wallet option
+// Story 59.15: accountId is optional — standalone agents have no parent
 const createAgentSchema = z.object({
   accountId: z.string().uuid().optional(),
   parentAccountId: z.string().uuid().optional(), // Deprecated, use accountId
@@ -98,10 +104,7 @@ const createAgentSchema = z.object({
   permissions: permissionsSchema,
   wallet_id: z.string().uuid().optional(), // Existing wallet to assign
   auto_create_wallet: z.boolean().optional().default(true), // Story 51.6: Auto-create wallet if not specified
-}).refine(
-  (data) => data.accountId || data.parentAccountId,
-  { message: 'accountId is required', path: ['accountId'] }
-);
+});
 
 const updateAgentSchema = z.object({
   name: z.string().min(1).max(255).optional(),
@@ -226,34 +229,39 @@ agents.post('/', async (c) => {
   // Get the account ID (prefer new name, fall back to old)
   const accountId = parsed.data.accountId || parsed.data.parentAccountId;
 
-  // Verify parent account exists and belongs to tenant
-  const { data: parentAccount, error: parentError } = await supabase
-    .from('accounts')
-    .select('id, type, name, verification_tier')
-    .eq('id', accountId)
-    .eq('tenant_id', ctx.tenantId)
-    .single();
+  // Story 59.15: Parent account is optional — validate if provided
+  let parentAccount: any = null;
+  if (accountId) {
+    // Verify parent account exists and belongs to tenant
+    const { data: pa, error: parentError } = await supabase
+      .from('accounts')
+      .select('id, type, name, verification_tier')
+      .eq('id', accountId)
+      .eq('tenant_id', ctx.tenantId)
+      .single();
 
-  if (parentError || !parentAccount) {
-    throw new NotFoundError('Parent account', accountId!);
+    if (parentError || !pa) {
+      throw new NotFoundError('Parent account', accountId!);
+    }
+
+    // Only business accounts can have agents
+    if (pa.type !== 'business') {
+      const error: any = new ValidationError('Only business accounts can have agents');
+      error.details = {
+        account_id: accountId,
+        account_type: pa.type,
+        required_type: 'business',
+      };
+      throw error;
+    }
+    parentAccount = pa;
   }
 
-  // Only business accounts can have agents
-  if (parentAccount.type !== 'business') {
-    const error: any = new ValidationError('Only business accounts can have agents');
-    error.details = {
-      account_id: accountId,
-      account_type: parentAccount.type,
-      required_type: 'business',
-    };
-    throw error;
-  }
-  
   // Generate auth credentials (plaintext token - only returned once!)
   const authToken = generateAgentToken();
   const authTokenHash = hashApiKey(authToken);
   const authTokenPrefix = getKeyPrefix(authToken);
-  
+
   // Merge permissions with defaults
   const mergedPermissions = {
     ...DEFAULT_PERMISSIONS,
@@ -263,13 +271,14 @@ agents.post('/', async (c) => {
     accounts: { ...DEFAULT_PERMISSIONS.accounts, ...permissions?.accounts },
     treasury: { ...DEFAULT_PERMISSIONS.treasury, ...permissions?.treasury },
   };
-  
+
   // Create agent - store ONLY the hash, never the plaintext token
+  // Story 59.15: parent_account_id is nullable for standalone agents
   const { data, error } = await supabase
     .from('agents')
     .insert({
       tenant_id: ctx.tenantId,
-      parent_account_id: accountId,
+      parent_account_id: accountId || null,
       name,
       description: description || null,
       status: 'active',
@@ -281,12 +290,7 @@ agents.post('/', async (c) => {
       auth_token_prefix: authTokenPrefix, // Indexed for lookup
       permissions: mergedPermissions,
     })
-    .select(`
-      *,
-      accounts!agents_parent_account_id_fkey (
-        id, type, name, verification_tier
-      )
-    `)
+    .select('*')
     .single();
   
   if (error) {
@@ -320,8 +324,8 @@ agents.post('/', async (c) => {
       .eq('tenant_id', ctx.tenantId);
 
     assignedWalletId = wallet_id;
-  } else if (auto_create_wallet !== false) {
-    // Story 51.6: Auto-create a wallet for the agent
+  } else if (auto_create_wallet !== false && accountId) {
+    // Story 51.6: Auto-create a wallet for the agent (requires parent account as owner)
     const walletAddress = `internal://payos/${ctx.tenantId}/${accountId}/agent/${data.id}`;
 
     const { data: wallet, error: walletError } = await supabase
@@ -362,19 +366,21 @@ agents.post('/', async (c) => {
     actorName: ctx.actorName,
     metadata: {
       name,
-      parentAccount: parentAccount.name,
+      parentAccount: parentAccount?.name || null,
       wallet_id: assignedWalletId,
-      auto_created_wallet: !wallet_id && auto_create_wallet !== false,
+      auto_created_wallet: !wallet_id && auto_create_wallet !== false && !!accountId,
     },
   });
 
   const agent = mapAgentFromDb(data);
-  agent.parentAccount = {
-    id: parentAccount.id,
-    type: parentAccount.type,
-    name: parentAccount.name,
-    verificationTier: parentAccount.verification_tier,
-  };
+  if (parentAccount) {
+    agent.parentAccount = {
+      id: parentAccount.id,
+      type: parentAccount.type,
+      name: parentAccount.name,
+      verificationTier: parentAccount.verification_tier,
+    };
+  }
 
   // Fire workflow auto-triggers (fire-and-forget)
   triggerWorkflows(supabase, ctx.tenantId, 'agent', 'insert', {
@@ -501,21 +507,24 @@ agents.patch('/:id', async (c) => {
     parsed.data.perTransactionLimit !== undefined;
 
   if (hasLimitUpdate) {
-    // Fetch parent account tier to cap limits
-    const { data: parentAccount } = await supabase
-      .from('accounts')
-      .select('verification_tier')
-      .eq('id', existing.parent_account_id)
-      .single();
+    // Story 59.15: Only fetch parent limits if agent has a parent account
+    let parentLimits = { per_transaction: Infinity, daily: Infinity, monthly: Infinity };
+    if (existing.parent_account_id) {
+      const { data: parentAccount } = await supabase
+        .from('accounts')
+        .select('verification_tier')
+        .eq('id', existing.parent_account_id)
+        .single();
 
-    const parentTier = parentAccount?.verification_tier ?? 0;
-    const { data: accountTierLimits } = await supabase
-      .from('verification_tier_limits')
-      .select('per_transaction, daily, monthly')
-      .eq('tier', parentTier)
-      .single();
+      const parentTier = parentAccount?.verification_tier ?? 0;
+      const { data: accountTierLimits } = await supabase
+        .from('verification_tier_limits')
+        .select('per_transaction, daily, monthly')
+        .eq('tier', parentTier)
+        .single();
 
-    const parentLimits = accountTierLimits || { per_transaction: 0, daily: 0, monthly: 0 };
+      parentLimits = accountTierLimits || { per_transaction: 0, daily: 0, monthly: 0 };
+    }
 
     if (parsed.data.perTransactionLimit !== undefined) {
       updates.limit_per_transaction = parsed.data.perTransactionLimit;

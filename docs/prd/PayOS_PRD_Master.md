@@ -364,6 +364,7 @@ Sly is now the **only settlement infrastructure** supporting all three agentic p
 | **53** | **Card Network Agentic Commerce 💳** | **4** | **P1** | **📋 Next** | **62** | **0/11** | **[View](./epics/epic-53-card-network-agentic-commerce.md)** |
 | **57** | **Google A2A Protocol Integration 🤝** | **5.2** | **P0** | **✅ Complete** | **89** | **14/14** | **[View](./epics/epic-57-google-a2a-protocol.md)** |
 | **58** | **A2A Task Processor Worker 🧠** | **5.2** | **P0** | **📋 Planned** | **119** | **0/18** | **[View](./epics/epic-58-a2a-task-processor.md)** |
+| **59** | **User Onboarding, SSO & Agent Self-Registration 🔐** | **3.5** | **P0** | **📋 Planned** | **69** | **0/16** | **[View](./epics/epic-59-user-onboarding-sso-agent-signup.md)** |
 
 **Summary:**
 - **Foundation Complete:** Epics 1-16 (Phase 1-2) fully implemented

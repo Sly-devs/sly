@@ -9,6 +9,7 @@ import { Label } from '@sly/ui';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@sly/ui';
 import { Loader2, Zap } from 'lucide-react';
 import Link from 'next/link';
+import { OAuthButtons } from '@/components/auth/oauth-buttons';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -90,6 +91,18 @@ export default function LoginPage() {
               Sign In
             </Button>
           </form>
+
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-card px-2 text-muted-foreground">or</span>
+            </div>
+          </div>
+
+          <OAuthButtons mode="login" />
+
           <div className="mt-4 text-center text-sm text-muted-foreground">
             Don't have an account?{' '}
             <Link href="/auth/signup" className="text-primary hover:underline">

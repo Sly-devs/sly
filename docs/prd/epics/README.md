@@ -65,6 +65,7 @@ Every story must meet these criteria before completion:
 ### Security & Onboarding
 - [Epic 24: Enhanced API Key Security](./epic-24-api-key-security.md) 🔐 - Agent-specific API keys
 - ~~[Epic 25: User Onboarding](./epic-25-user-onboarding.md)~~ → **Absorbed into Epic 51**
+- [Epic 59: User Onboarding, SSO & Agent Self-Registration](./epic-59-user-onboarding-sso-agent-signup.md) 🔐 - Fix signup, team invites, Google/GitHub SSO, autonomous agent registration
 
 ### AI-Native Architecture
 - [Epic 28: Simulation API](./epic-28-simulation.md) 🔮 ✅ - Transaction simulation
@@ -158,6 +159,7 @@ Strategic explorations before committing to implementation:
 
 | Epic | Priority | Points | Notes |
 |------|----------|--------|-------|
+| Epic 59: User Onboarding & SSO | P0 | 69 | Fix signup, team invites, SSO, agent self-registration |
 | Epic 58: A2A Task Processor | P0 | 119 | Background worker, LLM handlers, payment gating |
 | Epic 55: Demo Readiness | P0 | 89 | Seed data + demo UI for 8 scenarios |
 | Epic 29: Workflow Engine | P0 | 52 | Multi-step workflows |
@@ -206,6 +208,14 @@ Strategic explorations before committing to implementation:
 ---
 
 ## Recent Changes
+
+### February 26, 2026
+- **Epic 59: User Onboarding, SSO & Agent Self-Registration** — NEW (69 points, P0)
+  - Fix broken web signup (Supabase auth user created but no tenant provisioned)
+  - Team invite UI (accept invite page + team management dashboard)
+  - Google + GitHub SSO via Supabase OAuth
+  - Agent self-registration endpoint (`POST /v1/auth/agent-signup`)
+  - 16 stories across 4 incremental phases
 
 ### February 21, 2026
 - **Epic 57: Google A2A Protocol** — COMPLETE ✅ (89 points)

@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { getUser } from '@/lib/supabase/server';
+import { getUser, createSupabaseServerClient } from '@/lib/supabase/server';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { SidebarProvider } from '@/components/layout/sidebar-context';
@@ -15,9 +15,30 @@ export default async function DashboardLayout({
 }) {
   const user = await getUser();
 
-  // Middleware handles auth redirection, so we don't need to double-check here
-  // which can cause race conditions if the session cookie is being updated
-  await getUser();
+  if (!user) {
+    redirect('/auth/login');
+  }
+
+  // Tenant guard: check if user has a tenant provisioned
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || 'http://localhost:4000';
+      const meResponse = await fetch(`${apiUrl}/v1/auth/me`, {
+        headers: { 'Authorization': `Bearer ${session.access_token}` },
+        cache: 'no-store',
+      });
+      if (meResponse.ok) {
+        const meData = await meResponse.json();
+        if (!meData.tenant) {
+          redirect('/auth/setup');
+        }
+      }
+    }
+  } catch {
+    // If API is unreachable, allow dashboard access — middleware handles auth
+  }
 
   return (
     <LocaleProvider>

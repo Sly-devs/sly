@@ -9,12 +9,14 @@ import { Label } from '@sly/ui';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@sly/ui';
 import { Loader2, Zap } from 'lucide-react';
 import Link from 'next/link';
+import { OAuthButtons } from '@/components/auth/oauth-buttons';
 
 export default function SignUpPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [organizationName, setOrganizationName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -30,8 +32,14 @@ export default function SignUpPage() {
       return;
     }
 
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters');
+    if (password.length < 12) {
+      setError('Password must be at least 12 characters');
+      setLoading(false);
+      return;
+    }
+
+    if (!organizationName.trim()) {
+      setError('Organization name is required');
       setLoading(false);
       return;
     }
@@ -41,7 +49,11 @@ export default function SignUpPage() {
       email,
       password,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${window.location.origin}/auth/callback?next=/auth/setup`,
+        data: {
+          organization_name: organizationName.trim(),
+          name: email.split('@')[0],
+        },
       },
     });
 
@@ -102,6 +114,17 @@ export default function SignUpPage() {
               </div>
             )}
             <div className="space-y-2">
+              <Label htmlFor="organizationName">Organization Name</Label>
+              <Input
+                id="organizationName"
+                type="text"
+                placeholder="Acme Inc."
+                value={organizationName}
+                onChange={(e) => setOrganizationName(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
@@ -137,6 +160,18 @@ export default function SignUpPage() {
               Create Account
             </Button>
           </form>
+
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-card px-2 text-muted-foreground">or</span>
+            </div>
+          </div>
+
+          <OAuthButtons mode="signup" />
+
           <div className="mt-4 text-center text-sm text-muted-foreground">
             Already have an account?{' '}
             <Link href="/auth/login" className="text-primary hover:underline">

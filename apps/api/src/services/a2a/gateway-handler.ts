@@ -178,6 +178,7 @@ function extractIntent(parts: A2APart[]): Intent {
 
 /**
  * Query discoverable agents, optionally filtered by search query and tags.
+ * Searches agent name, description, permission-derived tags, AND registered skills.
  */
 async function queryAgents(
   supabase: SupabaseClient,
@@ -208,27 +209,66 @@ async function queryAgents(
 
   let results = agents as DiscoverableAgent[];
 
-  // Filter by text query (search name, description, and skill tags)
+  // Fetch registered skills for all agents to enable skill-based search
+  const agentIds = results.map((a) => a.id);
+  const { data: allSkills } = await supabase
+    .from('agent_skills')
+    .select('agent_id, skill_id, name, tags')
+    .in('agent_id', agentIds)
+    .eq('status', 'active');
+
+  // Build a map of agent_id → skill info for searching
+  const skillsByAgent = new Map<string, Array<{ skill_id: string; name: string; tags: string[] }>>();
+  if (allSkills?.length) {
+    for (const s of allSkills) {
+      const list = skillsByAgent.get(s.agent_id) || [];
+      list.push({ skill_id: s.skill_id, name: s.name, tags: s.tags || [] });
+      skillsByAgent.set(s.agent_id, list);
+    }
+  }
+
+  // Filter by text query (search name, description, permission tags, AND registered skills)
   if (query) {
     const q = query.toLowerCase();
     results = results.filter((agent) => {
       const nameMatch = agent.name?.toLowerCase().includes(q);
       const descMatch = agent.description?.toLowerCase().includes(q);
-      const skillTags = extractSkillTags(agent);
-      const tagMatch = skillTags.some((t) => t.toLowerCase().includes(q));
-      return nameMatch || descMatch || tagMatch;
+      const permTags = extractSkillTags(agent);
+      const permTagMatch = permTags.some((t) => t.toLowerCase().includes(q));
+
+      // Search registered skills by skill_id, name, and tags
+      const agentSkills = skillsByAgent.get(agent.id) || [];
+      const skillMatch = agentSkills.some((s) =>
+        s.skill_id.toLowerCase().includes(q) ||
+        s.name.toLowerCase().includes(q) ||
+        s.tags.some((t) => t.toLowerCase().includes(q)),
+      );
+
+      return nameMatch || descMatch || permTagMatch || skillMatch;
     });
   }
 
   // Filter by explicit tags
   if (tags?.length) {
     results = results.filter((agent) => {
-      const skillTags = extractSkillTags(agent);
-      return tags.some((t) => skillTags.includes(t.toLowerCase()));
+      const permTags = extractSkillTags(agent);
+      const agentSkills = skillsByAgent.get(agent.id) || [];
+      const registeredTags = agentSkills.flatMap((s) => s.tags.map((t) => t.toLowerCase()));
+      const allTags = [...permTags, ...registeredTags];
+      return tags.some((t) => allTags.includes(t.toLowerCase()));
     });
   }
 
-  return results.map((agent) => agentToSummary(agent, baseUrl));
+  // Build summaries including registered skill IDs
+  return results.map((agent) => {
+    const summary = agentToSummary(agent, baseUrl);
+    const agentSkills = skillsByAgent.get(agent.id) || [];
+    if (agentSkills.length) {
+      // Replace permission-inferred skills with actual registered skills
+      summary.skills = agentSkills.map((s) => s.skill_id);
+    }
+    return summary;
+  });
 }
 
 /**

@@ -248,14 +248,16 @@ export async function handleRegisterAgent(
     }
   }
 
-  // Set endpoint if provided
+  // Store endpoint in agent metadata if provided
   const endpoint = payload.endpoint as Record<string, unknown> | undefined;
   if (endpoint?.url) {
     await supabase
       .from('agents')
       .update({
-        a2a_endpoint: String(endpoint.url),
-        a2a_endpoint_auth: endpoint.auth ? JSON.stringify(endpoint.auth) : null,
+        metadata: {
+          a2a_endpoint: String(endpoint.url),
+          a2a_endpoint_auth: endpoint.auth || null,
+        },
       })
       .eq('id', agent.id)
       .eq('tenant_id', tenantId);
@@ -328,17 +330,15 @@ export async function handleUpdateAgent(
     updates.description = payload.description || null;
   }
 
-  // Update endpoint if provided
+  // Store endpoint in metadata if provided
   const endpoint = payload.endpoint as Record<string, unknown> | undefined;
+  let endpointUrl: string | undefined;
   if (endpoint?.url) {
-    updates.a2a_endpoint = String(endpoint.url);
-    if (endpoint.auth) {
-      updates.a2a_endpoint_auth = JSON.stringify(endpoint.auth);
-    }
+    endpointUrl = String(endpoint.url);
   }
 
   // Apply updates if any
-  if (Object.keys(updates).length > 0) {
+  if (Object.keys(updates).length > 0 || endpointUrl) {
     updates.updated_at = new Date().toISOString();
     const { error } = await supabase
       .from('agents')
@@ -348,6 +348,20 @@ export async function handleUpdateAgent(
 
     if (error) {
       return buildErrorResponse(requestId, JSON_RPC_ERRORS.INTERNAL_ERROR, 'Failed to update agent');
+    }
+
+    // Store endpoint in metadata separately (a2a_endpoint column doesn't exist)
+    if (endpointUrl) {
+      await supabase
+        .from('agents')
+        .update({
+          metadata: {
+            a2a_endpoint: endpointUrl,
+            a2a_endpoint_auth: endpoint!.auth || null,
+          },
+        })
+        .eq('id', agentId)
+        .eq('tenant_id', tenantId);
     }
   }
 
@@ -389,14 +403,14 @@ export async function handleUpdateAgent(
   }
 
   // Fetch updated state
-  const { data: agent } = await supabase
+  const { data: agent, error: fetchError } = await supabase
     .from('agents')
-    .select('id, name, description, status, kya_tier, kya_status, a2a_endpoint')
+    .select('id, name, description, status, kya_tier, kya_status, metadata')
     .eq('id', agentId)
     .eq('tenant_id', tenantId)
     .single();
 
-  if (!agent) {
+  if (fetchError || !agent) {
     return buildErrorResponse(requestId, JSON_RPC_ERRORS.INTERNAL_ERROR, 'Failed to fetch updated agent');
   }
 
@@ -407,6 +421,8 @@ export async function handleUpdateAgent(
     .eq('tenant_id', tenantId)
     .order('created_at');
 
+  const agentMetadata = (agent.metadata || {}) as Record<string, any>;
+
   return buildSuccessResponse(requestId, 'update_agent_result', {
     agent: {
       id: agent.id,
@@ -415,7 +431,7 @@ export async function handleUpdateAgent(
       status: agent.status,
       kyaTier: agent.kya_tier,
       kyaStatus: agent.kya_status,
-      a2aEndpoint: agent.a2a_endpoint || `${baseUrl}/a2a/${agent.id}`,
+      a2aEndpoint: agentMetadata.a2a_endpoint || `${baseUrl}/a2a/${agent.id}`,
       cardUrl: `${baseUrl}/a2a/${agent.id}/.well-known/agent.json`,
     },
     skills: (skills || []).map((s: any) => ({
@@ -460,7 +476,7 @@ export async function handleGetMyStatus(
   const [agentResult, walletsResult, skillsResult] = await Promise.all([
     supabase
       .from('agents')
-      .select('id, name, description, status, kya_tier, kya_status, parent_account_id, a2a_endpoint, permissions, created_at')
+      .select('id, name, description, status, kya_tier, kya_status, parent_account_id, metadata, permissions, created_at')
       .eq('id', agentId)
       .eq('tenant_id', tenantId)
       .single(),
@@ -514,6 +530,8 @@ export async function handleGetMyStatus(
     status: s.status,
   }));
 
+  const agentMetadata = (agent.metadata || {}) as Record<string, any>;
+
   return buildSuccessResponse(requestId, 'get_my_status_result', {
     agent: {
       id: agent.id,
@@ -523,7 +541,7 @@ export async function handleGetMyStatus(
       kyaTier: agent.kya_tier,
       kyaStatus: agent.kya_status,
       parentAccountId: agent.parent_account_id,
-      a2aEndpoint: agent.a2a_endpoint || `${baseUrl}/a2a/${agent.id}`,
+      a2aEndpoint: agentMetadata.a2a_endpoint || `${baseUrl}/a2a/${agent.id}`,
       cardUrl: `${baseUrl}/a2a/${agent.id}/.well-known/agent.json`,
       createdAt: agent.created_at,
     },

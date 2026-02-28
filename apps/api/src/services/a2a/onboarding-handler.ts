@@ -1,8 +1,8 @@
 /**
  * A2A Agent Onboarding Handler
  *
- * Handles register_agent, update_agent, and get_my_status skills
- * at the platform gateway level (POST /a2a).
+ * Handles register_agent, update_agent, get_my_status, manage_wallet,
+ * and check_task skills at the platform gateway level (POST /a2a).
  *
  * @see Epic 60: A2A Agent Onboarding Skills
  */
@@ -552,5 +552,272 @@ export async function handleGetMyStatus(
       capped,
       tier: agent.kya_tier,
     },
+  });
+}
+
+// ============================================================================
+// manage_wallet
+// ============================================================================
+
+/**
+ * Manage the calling agent's wallet (check_balance or fund).
+ * Requires agent token auth (Bearer agent_*).
+ */
+export async function handleManageWallet(
+  requestId: string | number,
+  payload: Record<string, unknown>,
+  supabase: SupabaseClient,
+  _baseUrl: string,
+  authContext?: GatewayAuthContext,
+): Promise<A2AJsonRpcResponse> {
+  // Require agent token auth
+  if (!authContext || authContext.authType !== 'agent' || !authContext.agentId) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.UNAUTHORIZED,
+      'manage_wallet requires agent token authentication (Bearer agent_*)',
+    );
+  }
+
+  const agentId = authContext.agentId;
+  const tenantId = authContext.tenantId;
+  const action = (payload.action as string) || 'check_balance';
+
+  switch (action) {
+    case 'check_balance':
+      return handleWalletCheckBalance(requestId, agentId, tenantId, supabase);
+    case 'fund':
+      return handleWalletFund(requestId, payload, agentId, tenantId, supabase);
+    default:
+      return buildErrorResponse(
+        requestId,
+        JSON_RPC_ERRORS.INVALID_PARAMS,
+        `Unknown manage_wallet action: ${action}. Supported: check_balance, fund`,
+      );
+  }
+}
+
+async function handleWalletCheckBalance(
+  requestId: string | number,
+  agentId: string,
+  tenantId: string,
+  supabase: SupabaseClient,
+): Promise<A2AJsonRpcResponse> {
+  const { data: wallets, error } = await supabase
+    .from('wallets')
+    .select('id, balance, currency, status')
+    .eq('managed_by_agent_id', agentId)
+    .eq('tenant_id', tenantId);
+
+  if (error) {
+    return buildErrorResponse(requestId, JSON_RPC_ERRORS.INTERNAL_ERROR, 'Failed to query wallets');
+  }
+
+  return buildSuccessResponse(requestId, 'manage_wallet_result', {
+    action: 'check_balance',
+    wallets: (wallets || []).map((w: any) => ({
+      id: w.id,
+      balance: Number(w.balance),
+      currency: w.currency,
+      status: w.status,
+    })),
+  });
+}
+
+async function handleWalletFund(
+  requestId: string | number,
+  payload: Record<string, unknown>,
+  agentId: string,
+  tenantId: string,
+  supabase: SupabaseClient,
+): Promise<A2AJsonRpcResponse> {
+  // Environment gate: block in production
+  const isProduction = process.env.NODE_ENV === 'production' &&
+    !process.env.SANDBOX_MODE;
+
+  if (isProduction) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INVALID_PARAMS,
+      'Test funding is only available in sandbox/development mode',
+    );
+  }
+
+  const amount = Number(payload.amount);
+  if (!amount || amount <= 0 || amount > 100_000) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INVALID_PARAMS,
+      'amount is required and must be between 0 and 100,000',
+    );
+  }
+
+  const currency = (payload.currency as string) || 'USDC';
+
+  // Find agent's wallet
+  const { data: wallet, error: walletError } = await supabase
+    .from('wallets')
+    .select('id, balance, currency, status')
+    .eq('managed_by_agent_id', agentId)
+    .eq('tenant_id', tenantId)
+    .limit(1)
+    .single();
+
+  if (walletError || !wallet) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INVALID_PARAMS,
+      'No wallet found for this agent. Register with a parent account first.',
+    );
+  }
+
+  const previousBalance = Number(wallet.balance);
+  const newBalance = previousBalance + amount;
+
+  // Update balance
+  const { error: updateError } = await supabase
+    .from('wallets')
+    .update({
+      balance: newBalance,
+      status: 'active',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', wallet.id)
+    .eq('tenant_id', tenantId);
+
+  if (updateError) {
+    return buildErrorResponse(requestId, JSON_RPC_ERRORS.INTERNAL_ERROR, 'Failed to update wallet balance');
+  }
+
+  // Create audit log entry
+  await supabase.from('audit_log').insert({
+    tenant_id: tenantId,
+    entity_type: 'wallet',
+    entity_id: wallet.id,
+    action: 'test_fund',
+    actor_type: 'agent',
+    actor_id: agentId,
+    actor_name: `agent:${agentId}`,
+    changes: {
+      previous_balance: previousBalance,
+      funded_amount: amount,
+      new_balance: newBalance,
+      currency,
+    },
+    metadata: {
+      environment: 'sandbox',
+      source: 'a2a_manage_wallet',
+    },
+  });
+
+  return buildSuccessResponse(requestId, 'manage_wallet_result', {
+    action: 'fund',
+    wallet_id: wallet.id,
+    previous_balance: previousBalance,
+    funded_amount: amount,
+    new_balance: newBalance,
+    currency,
+  });
+}
+
+// ============================================================================
+// check_task
+// ============================================================================
+
+/**
+ * Check the status of an A2A task by ID.
+ * Requires agent token auth (Bearer agent_*).
+ * Agent can view tasks it owns (agent_id) or initiated (client_agent_id).
+ */
+export async function handleCheckTask(
+  requestId: string | number,
+  payload: Record<string, unknown>,
+  supabase: SupabaseClient,
+  _baseUrl: string,
+  authContext?: GatewayAuthContext,
+): Promise<A2AJsonRpcResponse> {
+  // Require agent token auth
+  if (!authContext || authContext.authType !== 'agent' || !authContext.agentId) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.UNAUTHORIZED,
+      'check_task requires agent token authentication (Bearer agent_*)',
+    );
+  }
+
+  const taskId = payload.task_id as string | undefined;
+  if (!taskId || !UUID_RE.test(taskId)) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INVALID_PARAMS,
+      'task_id is required and must be a valid UUID',
+    );
+  }
+
+  const agentId = authContext.agentId;
+  const tenantId = authContext.tenantId;
+
+  // Query task — must belong to tenant
+  const { data: task, error: taskError } = await supabase
+    .from('a2a_tasks')
+    .select('id, state, status_message, direction, agent_id, client_agent_id, created_at, updated_at, processing_duration_ms')
+    .eq('id', taskId)
+    .eq('tenant_id', tenantId)
+    .single();
+
+  if (taskError || !task) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.TASK_NOT_FOUND,
+      `Task ${taskId} not found`,
+    );
+  }
+
+  // Scope check: agent must own or have initiated the task
+  if (task.agent_id !== agentId && task.client_agent_id !== agentId) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.TASK_NOT_FOUND,
+      `Task ${taskId} not found`,
+    );
+  }
+
+  // Fetch message history and artifacts in parallel
+  const [messagesResult, artifactsResult] = await Promise.all([
+    supabase
+      .from('a2a_messages')
+      .select('role, parts, created_at')
+      .eq('task_id', taskId)
+      .eq('tenant_id', tenantId)
+      .order('created_at')
+      .limit(20),
+    supabase
+      .from('a2a_artifacts')
+      .select('label, mime_type, parts')
+      .eq('task_id', taskId)
+      .eq('tenant_id', tenantId)
+      .order('created_at'),
+  ]);
+
+  return buildSuccessResponse(requestId, 'check_task_result', {
+    task: {
+      id: task.id,
+      state: task.state,
+      status_message: task.status_message,
+      direction: task.direction,
+      created_at: task.created_at,
+      updated_at: task.updated_at,
+      processing_duration_ms: task.processing_duration_ms,
+    },
+    history: (messagesResult.data || []).map((m: any) => ({
+      role: m.role,
+      parts: m.parts,
+      created_at: m.created_at,
+    })),
+    artifacts: (artifactsResult.data || []).map((a: any) => ({
+      label: a.label,
+      mime_type: a.mime_type,
+      parts: a.parts,
+    })),
   });
 }

@@ -508,6 +508,265 @@ describe('discovery backward compatibility', () => {
 });
 
 // ---------------------------------------------------------------------------
+// manage_wallet
+// ---------------------------------------------------------------------------
+
+describe('manage_wallet', () => {
+  it('rejects without agent auth', async () => {
+    const supabase = createMockSupabase();
+    const request = buildMessage({ skill: 'manage_wallet', action: 'check_balance' });
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL);
+
+    expect(response.error).toBeDefined();
+    expect(response.error!.code).toBe(-32004);
+    expect(response.error!.message).toContain('agent token');
+  });
+
+  it('rejects API key auth (requires agent token)', async () => {
+    const supabase = createMockSupabase();
+    const request = buildMessage({ skill: 'manage_wallet', action: 'check_balance' });
+    const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'api_key', apiKeyId: 'key-1' };
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+
+    expect(response.error).toBeDefined();
+    expect(response.error!.code).toBe(-32004);
+  });
+
+  it('check_balance returns wallet list for authenticated agent', async () => {
+    const agentId = 'aaaaaaaa-7777-7777-7777-777777777777';
+    const walletId = 'wwwwwwww-7777-7777-7777-777777777777';
+
+    const supabase = createMockSupabase({
+      wallets: {
+        data: [
+          { id: walletId, balance: 50.0, currency: 'USDC', status: 'active' },
+        ],
+        error: null,
+      },
+    });
+
+    const request = buildMessage({ skill: 'manage_wallet', action: 'check_balance' });
+    const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'agent', agentId };
+
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+    expect(response.error).toBeUndefined();
+    const data = getResultData(response);
+    expect(data!.action).toBe('check_balance');
+    expect(data!.wallets).toHaveLength(1);
+    expect(data!.wallets[0].id).toBe(walletId);
+    expect(data!.wallets[0].balance).toBe(50.0);
+  });
+
+  it('defaults to check_balance when no action specified', async () => {
+    const agentId = 'aaaaaaaa-7777-7777-7777-777777777777';
+
+    const supabase = createMockSupabase({
+      wallets: {
+        data: [],
+        error: null,
+      },
+    });
+
+    const request = buildMessage({ skill: 'manage_wallet' });
+    const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'agent', agentId };
+
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+    expect(response.error).toBeUndefined();
+    const data = getResultData(response);
+    expect(data!.action).toBe('check_balance');
+  });
+
+  it('fund increments balance and returns previous/new amounts', async () => {
+    const agentId = 'aaaaaaaa-8888-8888-8888-888888888888';
+    const walletId = 'wwwwwwww-8888-8888-8888-888888888888';
+
+    const supabase = createMockSupabase({
+      wallets: {
+        data: { id: walletId, balance: 25.0, currency: 'USDC', status: 'active' },
+        error: null,
+      },
+      audit_log: {
+        data: null,
+        error: null,
+      },
+    });
+
+    const request = buildMessage({ skill: 'manage_wallet', action: 'fund', amount: 100 });
+    const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'agent', agentId };
+
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+    expect(response.error).toBeUndefined();
+    const data = getResultData(response);
+    expect(data!.action).toBe('fund');
+    expect(data!.wallet_id).toBe(walletId);
+    expect(data!.previous_balance).toBe(25.0);
+    expect(data!.funded_amount).toBe(100);
+    expect(data!.new_balance).toBe(125.0);
+    expect(data!.currency).toBe('USDC');
+  });
+
+  it('fund rejects invalid amount', async () => {
+    const agentId = 'aaaaaaaa-8888-8888-8888-888888888888';
+    const supabase = createMockSupabase();
+
+    const request = buildMessage({ skill: 'manage_wallet', action: 'fund', amount: -10 });
+    const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'agent', agentId };
+
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+    expect(response.error).toBeDefined();
+    expect(response.error!.code).toBe(-32602);
+    expect(response.error!.message).toContain('amount');
+  });
+
+  it('fund rejects amount over 100,000', async () => {
+    const agentId = 'aaaaaaaa-8888-8888-8888-888888888888';
+    const supabase = createMockSupabase();
+
+    const request = buildMessage({ skill: 'manage_wallet', action: 'fund', amount: 200_000 });
+    const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'agent', agentId };
+
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+    expect(response.error).toBeDefined();
+    expect(response.error!.code).toBe(-32602);
+  });
+
+  it('fund rejects in production mode', async () => {
+    const agentId = 'aaaaaaaa-8888-8888-8888-888888888888';
+    const supabase = createMockSupabase();
+
+    // Simulate production
+    const origEnv = process.env.NODE_ENV;
+    const origSandbox = process.env.SANDBOX_MODE;
+    process.env.NODE_ENV = 'production';
+    delete process.env.SANDBOX_MODE;
+
+    try {
+      const request = buildMessage({ skill: 'manage_wallet', action: 'fund', amount: 50 });
+      const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'agent', agentId };
+
+      const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+      expect(response.error).toBeDefined();
+      expect(response.error!.message).toContain('sandbox');
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      if (origSandbox !== undefined) {
+        process.env.SANDBOX_MODE = origSandbox;
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// check_task
+// ---------------------------------------------------------------------------
+
+describe('check_task', () => {
+  it('rejects without agent auth', async () => {
+    const supabase = createMockSupabase();
+    const request = buildMessage({ skill: 'check_task', task_id: 'aaaaaaaa-0000-0000-0000-000000000001' });
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL);
+
+    expect(response.error).toBeDefined();
+    expect(response.error!.code).toBe(-32004);
+    expect(response.error!.message).toContain('agent token');
+  });
+
+  it('rejects missing task_id', async () => {
+    const agentId = 'aaaaaaaa-9999-9999-9999-999999999999';
+    const supabase = createMockSupabase();
+    const request = buildMessage({ skill: 'check_task' });
+    const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'agent', agentId };
+
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+    expect(response.error).toBeDefined();
+    expect(response.error!.code).toBe(-32602);
+    expect(response.error!.message).toContain('task_id');
+  });
+
+  it('rejects invalid task_id format', async () => {
+    const agentId = 'aaaaaaaa-9999-9999-9999-999999999999';
+    const supabase = createMockSupabase();
+    const request = buildMessage({ skill: 'check_task', task_id: 'not-a-uuid' });
+    const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'agent', agentId };
+
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+    expect(response.error).toBeDefined();
+    expect(response.error!.code).toBe(-32602);
+  });
+
+  it('returns not found for nonexistent task', async () => {
+    const agentId = 'aaaaaaaa-9999-9999-9999-999999999999';
+    const taskId = 'dddddddd-0000-0000-0000-000000000001';
+
+    const supabase = createMockSupabase({
+      a2a_tasks: {
+        data: null,
+        error: { message: 'not found' },
+      },
+    });
+
+    const request = buildMessage({ skill: 'check_task', task_id: taskId });
+    const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'agent', agentId };
+
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+    expect(response.error).toBeDefined();
+    expect(response.error!.code).toBe(-32001);
+    expect(response.error!.message).toContain(taskId);
+  });
+
+  it('returns task with history and artifacts', async () => {
+    const agentId = 'aaaaaaaa-9999-9999-9999-999999999999';
+    const taskId = 'dddddddd-1111-1111-1111-111111111111';
+
+    const supabase = createMockSupabase({
+      a2a_tasks: {
+        data: {
+          id: taskId,
+          state: 'completed',
+          status_message: 'Done',
+          direction: 'outbound',
+          agent_id: 'other-agent',
+          client_agent_id: agentId,
+          created_at: '2026-02-28T00:00:00Z',
+          updated_at: '2026-02-28T00:01:00Z',
+          processing_duration_ms: 1200,
+        },
+        error: null,
+      },
+      a2a_messages: {
+        data: [
+          { role: 'user', parts: [{ text: 'Hello' }], created_at: '2026-02-28T00:00:00Z' },
+          { role: 'agent', parts: [{ text: 'Hi there' }], created_at: '2026-02-28T00:00:01Z' },
+        ],
+        error: null,
+      },
+      a2a_artifacts: {
+        data: [
+          { label: 'result', mime_type: 'application/json', parts: [{ data: { answer: 42 } }] },
+        ],
+        error: null,
+      },
+    });
+
+    const request = buildMessage({ skill: 'check_task', task_id: taskId });
+    const auth: GatewayAuthContext = { tenantId: 'tenant-1', authType: 'agent', agentId };
+
+    const response = await handleGatewayJsonRpc(request, supabase, BASE_URL, auth);
+    expect(response.error).toBeUndefined();
+    const data = getResultData(response);
+    expect(data!.task.id).toBe(taskId);
+    expect(data!.task.state).toBe('completed');
+    expect(data!.task.status_message).toBe('Done');
+    expect(data!.task.direction).toBe('outbound');
+    expect(data!.task.processing_duration_ms).toBe(1200);
+    expect(data!.history).toHaveLength(2);
+    expect(data!.history[0].role).toBe('user');
+    expect(data!.artifacts).toHaveLength(1);
+    expect(data!.artifacts[0].label).toBe('result');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Platform capabilities includes new skills
 // ---------------------------------------------------------------------------
 
@@ -533,6 +792,8 @@ describe('gateway capabilities', () => {
     expect(skillIds).toContain('register_agent');
     expect(skillIds).toContain('update_agent');
     expect(skillIds).toContain('get_my_status');
+    expect(skillIds).toContain('manage_wallet');
+    expect(skillIds).toContain('check_task');
     expect(skillIds).toContain('find_agent');
     expect(skillIds).toContain('list_agents');
   });

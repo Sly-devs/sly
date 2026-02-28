@@ -184,10 +184,20 @@ export function generatePlatformCard(baseUrl?: string): A2AAgentCard {
       {
         id: 'manage_wallet',
         name: 'Manage Wallet',
-        description: 'Deposit, withdraw, and check balances on stablecoin wallets',
-        inputModes: ['text'],
-        outputModes: ['text', 'data'],
-        tags: ['wallets', 'stablecoin'],
+        description: 'Check balance or fund your agent wallet. Requires agent token auth.',
+        inputModes: ['data'],
+        outputModes: ['data'],
+        inputSchema: {
+          type: 'object',
+          required: ['skill'],
+          properties: {
+            skill: { const: 'manage_wallet' },
+            action: { type: 'string', enum: ['check_balance', 'fund'], description: 'Action to perform (default: check_balance)' },
+            amount: { type: 'number', description: 'Amount to fund (required for fund action, max 100000)' },
+            currency: { type: 'string', enum: ['USDC', 'EURC'], description: 'Currency (default: USDC)' },
+          },
+        },
+        tags: ['wallets', 'stablecoin', 'onboarding'],
       },
       {
         id: 'register_agent',
@@ -267,6 +277,22 @@ export function generatePlatformCard(baseUrl?: string): A2AAgentCard {
         inputModes: ['data'],
         outputModes: ['data'],
         tags: ['onboarding', 'agents'],
+      },
+      {
+        id: 'check_task',
+        name: 'Check Task',
+        description: 'Poll the status of an A2A task by ID. Returns task state, message history, and artifacts. Requires agent token auth.',
+        inputModes: ['data'],
+        outputModes: ['data'],
+        inputSchema: {
+          type: 'object',
+          required: ['skill', 'task_id'],
+          properties: {
+            skill: { const: 'check_task' },
+            task_id: { type: 'string', format: 'uuid', description: 'The task ID to check' },
+          },
+        },
+        tags: ['tasks', 'polling', 'agents'],
       },
     ],
     supportedInterfaces: [

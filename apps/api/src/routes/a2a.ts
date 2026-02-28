@@ -15,7 +15,7 @@ import { createClient } from '../db/client.js';
 import { generateAgentCard, getBaseUrlFromRequest } from '../services/a2a/agent-card.js';
 import { A2ATaskService } from '../services/a2a/task-service.js';
 import { handleJsonRpc } from '../services/a2a/jsonrpc-handler.js';
-import { handleGatewayJsonRpc } from '../services/a2a/gateway-handler.js';
+import { handleGatewayJsonRpc, type GatewayAuthContext } from '../services/a2a/gateway-handler.js';
 import { A2AWebhookHandler } from '../services/a2a/webhook-handler.js';
 import { taskEventBus } from '../services/a2a/task-event-bus.js';
 import type { A2AJsonRpcRequest, A2APart, A2ATaskState, A2AConfiguration } from '../services/a2a/types.js';
@@ -157,7 +157,7 @@ a2aPublicRouter.options('/:agentId/.well-known/agent.json', () => corsPreflightG
  * POST /a2a
  * Platform gateway JSON-RPC endpoint (Layer 1).
  * Handles agent discovery via find_agent / list_agents skills.
- * No auth required — public front door for the directory.
+ * Auth is optional — discovery skills remain public, onboarding skills require auth.
  */
 a2aPublicRouter.post('/', async (c) => {
   const jsonRpc = (body: Record<string, unknown>, status = 200) =>
@@ -189,8 +189,36 @@ a2aPublicRouter.post('/', async (c) => {
     }, 400);
   }
 
+  // Optional auth extraction — onboarding skills need it, discovery skills don't
+  let authContext: GatewayAuthContext | undefined;
+  const authHeader = c.req.header('Authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    const supabaseAuth = createClient();
+
+    if (token.startsWith('pk_')) {
+      const prefix = token.slice(0, 12);
+      const { data: apiKey } = await (supabaseAuth.from('api_keys') as any)
+        .select('id, tenant_id, key_hash')
+        .eq('key_prefix', prefix)
+        .single();
+      if (apiKey && apiKey.key_hash && verifyApiKey(token, apiKey.key_hash)) {
+        authContext = { tenantId: apiKey.tenant_id, authType: 'api_key', apiKeyId: apiKey.id };
+      }
+    } else if (token.startsWith('agent_')) {
+      const prefix = token.slice(0, 12);
+      const { data: agentRow } = await (supabaseAuth.from('agents') as any)
+        .select('id, tenant_id, auth_token_hash')
+        .eq('auth_token_prefix', prefix)
+        .single();
+      if (agentRow && agentRow.auth_token_hash && verifyApiKey(token, agentRow.auth_token_hash)) {
+        authContext = { tenantId: agentRow.tenant_id, authType: 'agent', agentId: agentRow.id };
+      }
+    }
+  }
+
   const supabase = createClient();
-  const rpcResponse = await handleGatewayJsonRpc(rpcRequest, supabase, getBaseUrl(c));
+  const rpcResponse = await handleGatewayJsonRpc(rpcRequest, supabase, getBaseUrl(c), authContext);
   return jsonRpc(rpcResponse as Record<string, unknown>);
 });
 

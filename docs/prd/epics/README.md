@@ -104,6 +104,7 @@ Every story must meet these criteria before completion:
 ### Agent Interoperability ⭐ NEW
 - [Epic 57: Google A2A Protocol](./epic-57-google-a2a-protocol.md) 🤝 ✅ - Google A2A protocol for agent discovery, communication, and paid task execution
 - [Epic 58: A2A Task Processor Worker](./epic-58-a2a-task-processor.md) ⚙️ - Background worker for processing A2A tasks with LLM handlers, tool registry, and payment gating
+- [Epic 60: A2A Agent Onboarding Skills](./epic-60-a2a-agent-onboarding-skills.md) 🎫 ✅ - Register, update, and inspect agents via A2A message/send
 
 ### Future Considerations (P2/P3)
 - [Epic 37: Facilitator-as-a-Service](./epic-37-facilitator-as-a-service.md) 🏭 - x402 facilitator for LATAM ecosystem
@@ -208,6 +209,17 @@ Strategic explorations before committing to implementation:
 ---
 
 ## Recent Changes
+
+### February 28, 2026
+- **Epic 60: A2A Agent Onboarding Skills** — COMPLETE ✅ (28 points)
+  - Three new platform-level A2A skills: `register_agent`, `update_agent`, `get_my_status`
+  - Full agent lifecycle (register → configure → inspect) via standard A2A `message/send`
+  - Optional auth extraction on `POST /a2a` gateway (API key for registration, agent token for self-service)
+  - Auto-creates wallet, upserts skills, verifies KYA tier 1 in one shot
+  - Self-sovereign updates: agents modify their own profiles via their auth token
+  - Platform Agent Card updated with onboarding skill definitions + inputSchemas
+  - 15 unit tests covering all handlers + backward compatibility
+  - 8 stories across gateway auth, intent routing, handlers, card, and tests
 
 ### February 26, 2026
 - **Epic 59: User Onboarding, SSO & Agent Self-Registration** — NEW (69 points, P0)

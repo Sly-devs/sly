@@ -24,7 +24,7 @@ const agents = new Hono();
 // EFFECTIVE LIMITS CALCULATION
 // ============================================
 
-interface TierLimits {
+export interface TierLimits {
   per_transaction: number;
   daily: number;
   monthly: number;
@@ -34,7 +34,7 @@ interface TierLimits {
  * Compute effective limits = min(agent KYA tier limits, parent account tier limits)
  * Story 59.15: When parentVerificationTier is null (standalone agent), use KYA tier only
  */
-async function computeEffectiveLimits(
+export async function computeEffectiveLimits(
   supabase: ReturnType<typeof createClient>,
   kyaTier: number,
   parentVerificationTier: number | null,
@@ -116,7 +116,7 @@ const updateAgentSchema = z.object({
 });
 
 // Default permissions for new agents
-const DEFAULT_PERMISSIONS = {
+export const DEFAULT_PERMISSIONS = {
   transactions: { initiate: true, approve: false, view: true },
   streams: { initiate: true, modify: true, pause: true, terminate: true, view: true },
   accounts: { view: true, create: false },

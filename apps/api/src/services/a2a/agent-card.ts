@@ -189,6 +189,85 @@ export function generatePlatformCard(baseUrl?: string): A2AAgentCard {
         outputModes: ['text', 'data'],
         tags: ['wallets', 'stablecoin'],
       },
+      {
+        id: 'register_agent',
+        name: 'Register Agent',
+        description: 'Register a new agent with wallet, skills, and endpoint in one shot. Requires API key auth.',
+        inputModes: ['data'],
+        outputModes: ['data'],
+        inputSchema: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name: { type: 'string', description: 'Agent name' },
+            description: { type: 'string', description: 'Agent description' },
+            accountId: { type: 'string', format: 'uuid', description: 'Parent business account ID (auto-selects first if omitted)' },
+            skills: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  description: { type: 'string' },
+                  base_price: { type: 'number' },
+                  currency: { type: 'string' },
+                },
+              },
+              description: 'Skills to register',
+            },
+            endpoint: {
+              type: 'object',
+              properties: {
+                url: { type: 'string', format: 'uri' },
+                auth: { type: 'object' },
+              },
+              description: 'A2A endpoint configuration',
+            },
+          },
+        },
+        tags: ['onboarding', 'agents'],
+      },
+      {
+        id: 'update_agent',
+        name: 'Update Agent',
+        description: 'Update your agent profile, skills, and endpoint. Requires agent token auth (self-sovereign).',
+        inputModes: ['data'],
+        outputModes: ['data'],
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Updated agent name' },
+            description: { type: 'string', description: 'Updated description' },
+            endpoint: {
+              type: 'object',
+              properties: {
+                url: { type: 'string', format: 'uri' },
+                auth: { type: 'object' },
+              },
+            },
+            add_skills: {
+              type: 'array',
+              items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } } },
+              description: 'Skills to add or update',
+            },
+            remove_skills: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Skill IDs to remove',
+            },
+          },
+        },
+        tags: ['onboarding', 'agents'],
+      },
+      {
+        id: 'get_my_status',
+        name: 'Get My Status',
+        description: 'Get your agent registration status, wallet balance, skills, and effective limits. Requires agent token auth.',
+        inputModes: ['data'],
+        outputModes: ['data'],
+        tags: ['onboarding', 'agents'],
+      },
     ],
     supportedInterfaces: [
       {

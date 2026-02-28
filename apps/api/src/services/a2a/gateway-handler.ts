@@ -2,17 +2,30 @@
  * A2A Gateway JSON-RPC Handler
  *
  * Handles JSON-RPC requests at the platform gateway level (POST /a2a).
- * Provides agent discovery via `find_agent` and `list_agents` skills.
- * Not tenant-scoped — shows all discoverable agents across tenants.
+ * Provides agent discovery via `find_agent` and `list_agents` skills,
+ * and agent onboarding via `register_agent`, `update_agent`, `get_my_status`.
  *
  * @see Epic 57: Google A2A Protocol Integration
+ * @see Epic 60: A2A Agent Onboarding Skills
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { A2AJsonRpcRequest, A2AJsonRpcResponse, A2APart } from './types.js';
 import { JSON_RPC_ERRORS } from './types.js';
+import {
+  handleRegisterAgent,
+  handleUpdateAgent,
+  handleGetMyStatus,
+} from './onboarding-handler.js';
 
 const DEFAULT_BASE_URL = process.env.API_BASE_URL || 'http://localhost:4000';
+
+export interface GatewayAuthContext {
+  tenantId: string;
+  authType: 'api_key' | 'agent';
+  agentId?: string;
+  apiKeyId?: string;
+}
 
 interface DiscoverableAgent {
   id: string;
@@ -39,12 +52,13 @@ export async function handleGatewayJsonRpc(
   request: A2AJsonRpcRequest,
   supabase: SupabaseClient,
   baseUrl?: string,
+  authContext?: GatewayAuthContext,
 ): Promise<A2AJsonRpcResponse> {
   const BASE_URL = baseUrl || DEFAULT_BASE_URL;
   try {
     switch (request.method) {
       case 'message/send':
-        return await handleGatewayMessage(request, supabase, BASE_URL);
+        return await handleGatewayMessage(request, supabase, BASE_URL, authContext);
       default:
         return {
           jsonrpc: '2.0',
@@ -69,12 +83,13 @@ export async function handleGatewayJsonRpc(
 
 /**
  * Handle message/send at the gateway level.
- * Interprets the caller's intent and routes to discovery logic.
+ * Interprets the caller's intent and routes to discovery or onboarding logic.
  */
 async function handleGatewayMessage(
   request: A2AJsonRpcRequest,
   supabase: SupabaseClient,
   BASE_URL: string,
+  authContext?: GatewayAuthContext,
 ): Promise<A2AJsonRpcResponse> {
   const params = request.params || {};
   const message = params.message as { parts?: A2APart[] } | undefined;
@@ -93,28 +108,35 @@ async function handleGatewayMessage(
   // Extract intent from parts
   const intent = extractIntent(message.parts);
 
-  let agents: AgentSummary[];
-
   switch (intent.skill) {
-    case 'list_agents':
-      agents = await queryAgents(supabase);
-      break;
-    case 'find_agent':
-      agents = await queryAgents(supabase, intent.query, intent.tags);
-      break;
+    case 'list_agents': {
+      const agents = await queryAgents(supabase, BASE_URL);
+      return buildDiscoveryResponse(request.id, intent.skill, agents);
+    }
+    case 'find_agent': {
+      const agents = await queryAgents(supabase, BASE_URL, intent.query, intent.tags);
+      return buildDiscoveryResponse(request.id, intent.skill, agents);
+    }
+    case 'register_agent':
+      return handleRegisterAgent(request.id, intent.payload || {}, supabase, BASE_URL, authContext);
+    case 'update_agent':
+      return handleUpdateAgent(request.id, intent.payload || {}, supabase, BASE_URL, authContext);
+    case 'get_my_status':
+      return handleGetMyStatus(request.id, supabase, BASE_URL, authContext);
     default:
       // Fallback: return platform capabilities
-      return buildCapabilitiesResponse(request.id);
+      return buildCapabilitiesResponse(request.id, BASE_URL);
   }
-
-  return buildDiscoveryResponse(request.id, intent.skill, agents);
 }
 
 interface Intent {
-  skill: 'find_agent' | 'list_agents' | 'unknown';
+  skill: 'find_agent' | 'list_agents' | 'register_agent' | 'update_agent' | 'get_my_status' | 'unknown';
   query?: string;
   tags?: string[];
+  payload?: Record<string, unknown>;
 }
+
+const ONBOARDING_SKILLS = new Set(['register_agent', 'update_agent', 'get_my_status']);
 
 /**
  * Extract the caller's intent from message parts.
@@ -132,6 +154,12 @@ function extractIntent(parts: A2APart[]): Intent {
           skill: 'find_agent',
           query: data.query as string | undefined,
           tags: data.tags as string[] | undefined,
+        };
+      }
+      if (ONBOARDING_SKILLS.has(data.skill)) {
+        return {
+          skill: data.skill as Intent['skill'],
+          payload: data,
         };
       }
     }
@@ -153,6 +181,7 @@ function extractIntent(parts: A2APart[]): Intent {
  */
 async function queryAgents(
   supabase: SupabaseClient,
+  baseUrl: string,
   query?: string,
   tags?: string[],
 ): Promise<AgentSummary[]> {
@@ -199,7 +228,7 @@ async function queryAgents(
     });
   }
 
-  return results.map(agentToSummary);
+  return results.map((agent) => agentToSummary(agent, baseUrl));
 }
 
 /**
@@ -220,7 +249,7 @@ function extractSkillTags(agent: DiscoverableAgent): string[] {
 /**
  * Convert an agent record to a summary for discovery responses.
  */
-function agentToSummary(agent: DiscoverableAgent): AgentSummary {
+function agentToSummary(agent: DiscoverableAgent, baseUrl: string): AgentSummary {
   const skillIds: string[] = [];
   const perms = agent.permissions || {};
 
@@ -234,7 +263,7 @@ function agentToSummary(agent: DiscoverableAgent): AgentSummary {
     id: agent.id,
     name: agent.name,
     description: agent.description,
-    cardUrl: `${BASE_URL}/a2a/${agent.id}/.well-known/agent.json`,
+    cardUrl: `${baseUrl}/a2a/${agent.id}/.well-known/agent.json`,
     skills: skillIds,
   };
 }
@@ -282,7 +311,9 @@ function buildDiscoveryResponse(
  */
 function buildCapabilitiesResponse(
   requestId: string | number,
+  BASE_URL?: string,
 ): A2AJsonRpcResponse {
+  const url = BASE_URL || DEFAULT_BASE_URL;
   return {
     jsonrpc: '2.0',
     result: {
@@ -299,7 +330,7 @@ function buildCapabilitiesResponse(
           parts: [
             {
               data: {
-                message: 'This is the Sly platform gateway. Use the skills below to discover agents.',
+                message: 'This is the Sly platform gateway. Use the skills below to interact.',
                 availableSkills: [
                   {
                     id: 'find_agent',
@@ -311,8 +342,23 @@ function buildCapabilitiesResponse(
                     description: 'List all publicly discoverable agents',
                     usage: { data: { skill: 'list_agents' } },
                   },
+                  {
+                    id: 'register_agent',
+                    description: 'Register a new agent (requires API key auth)',
+                    usage: { data: { skill: 'register_agent', name: 'My Agent', skills: [{ id: 'my_skill', name: 'My Skill' }] } },
+                  },
+                  {
+                    id: 'update_agent',
+                    description: 'Update your agent profile (requires agent token auth)',
+                    usage: { data: { skill: 'update_agent', name: 'Updated Name' } },
+                  },
+                  {
+                    id: 'get_my_status',
+                    description: 'Get your agent status, wallet, and limits (requires agent token auth)',
+                    usage: { data: { skill: 'get_my_status' } },
+                  },
                 ],
-                platformCardUrl: `${BASE_URL}/.well-known/agent.json`,
+                platformCardUrl: `${url}/.well-known/agent.json`,
               },
             },
           ],

@@ -17,6 +17,7 @@ import type {
   A2ATaskRow,
   A2AMessageRow,
   A2AArtifactRow,
+  InputRequiredContext,
 } from './types.js';
 import { normalizeParts } from './types.js';
 import { taskEventBus } from './task-event-bus.js';
@@ -145,7 +146,17 @@ export class A2ATaskService {
   ): Promise<A2ATask | null> {
     const updateData: Record<string, unknown> = { state };
     if (statusMessage !== undefined) updateData.status_message = statusMessage;
-    if (metadata) updateData.metadata = metadata;
+
+    // Read-merge-write metadata so existing keys aren't lost
+    if (metadata) {
+      const { data: existing } = await this.supabase
+        .from('a2a_tasks')
+        .select('metadata')
+        .eq('id', taskId)
+        .eq('tenant_id', this.tenantId)
+        .single();
+      updateData.metadata = { ...(existing?.metadata || {}), ...metadata };
+    }
 
     // When re-submitting a task, clear processor claim so worker can re-acquire it
     if (state === 'submitted') {
@@ -257,6 +268,20 @@ export class A2ATaskService {
    */
   async cancelTask(taskId: string): Promise<A2ATask | null> {
     return this.updateTaskState(taskId, 'canceled', 'Task canceled by user');
+  }
+
+  /**
+   * Set a task to input-required with structured context.
+   * Provides machine-readable guidance so callers know how to resolve.
+   */
+  async setInputRequired(
+    taskId: string,
+    statusMessage: string,
+    context: InputRequiredContext,
+  ): Promise<A2ATask | null> {
+    return this.updateTaskState(taskId, 'input-required', statusMessage, {
+      input_required_context: context,
+    });
   }
 
   /**

@@ -12,6 +12,7 @@ const actionIcons: Record<AgentActionType, string> = {
   limit_check: '✓',
   compliance_flag: '🚩',
   rebalance: '⚖️',
+  a2a_task: '🤖',
 };
 
 const actionLabels: Record<AgentActionType, string> = {
@@ -22,6 +23,7 @@ const actionLabels: Record<AgentActionType, string> = {
   limit_check: 'Limit Check',
   compliance_flag: 'Compliance Flag',
   rebalance: 'Rebalance',
+  a2a_task: 'A2A Task',
 };
 
 interface AgentActivityFeedProps {

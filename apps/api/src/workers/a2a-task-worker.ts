@@ -486,11 +486,15 @@ export class A2ATaskWorker {
       { text: 'Task queued for manual processing. A human operator will review this shortly.' },
     ]);
 
-    // Set to input-required so it shows up in the dashboard pending queue
-    await taskService.updateTaskState(
+    // Set to input-required with structured context so callers know what to do
+    await taskService.setInputRequired(
       task.id,
-      'input-required',
       'Awaiting manual processing',
+      {
+        reason_code: 'manual_processing',
+        next_action: 'human_respond',
+        required_auth: 'none',
+      },
     );
   }
 

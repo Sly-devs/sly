@@ -320,6 +320,23 @@ export function generatePlatformCard(baseUrl?: string): A2AAgentCard {
         },
         tags: ['tasks', 'polling', 'agents'],
       },
+      {
+        id: 'verify_agent',
+        name: 'Verify Agent',
+        description: 'Upgrade agent KYA verification tier. Agent token auth = self-sovereign verification. API key auth = admin verification of any agent.',
+        inputModes: ['data'],
+        outputModes: ['data'],
+        inputSchema: {
+          type: 'object',
+          required: ['skill'],
+          properties: {
+            skill: { const: 'verify_agent' },
+            tier: { type: 'integer', minimum: 0, maximum: 3, description: 'Target KYA tier (default: 1)' },
+            agent_id: { type: 'string', format: 'uuid', description: 'Agent to verify (required for API key auth, ignored for agent token)' },
+          },
+        },
+        tags: ['onboarding', 'kya', 'verification', 'agents'],
+      },
     ],
     supportedInterfaces: [
       {

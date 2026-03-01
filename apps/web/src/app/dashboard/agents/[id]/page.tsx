@@ -1582,12 +1582,16 @@ function ActivityTab({ agentId }: { agentId: string }) {
   });
 
   // Map unified transactions to AgentAction format
+  const mapType = (tx: any): AgentAction['type'] => {
+    if (tx.type === 'a2a_task') return 'a2a_task';
+    return 'transfer';
+  };
   const activities: AgentAction[] = (txData || []).map((tx: any) => ({
     id: tx.id,
     timestamp: tx.created_at,
-    type: 'transfer' as const,
-    status: tx.status === 'completed' ? 'success' as const : tx.status === 'failed' ? 'failed' as const : 'pending' as const,
-    description: tx.description || `${tx.type} transfer`,
+    type: mapType(tx),
+    status: tx.status === 'completed' || tx.status === 'success' ? 'success' as const : tx.status === 'failed' || tx.status === 'canceled' ? 'failed' as const : 'pending' as const,
+    description: tx.description || `${tx.type} ${tx.type === 'a2a_task' ? 'task' : 'transfer'}`,
     details: {
       amount: tx.amount ?? 0,
       currency: tx.currency || 'USDC',
@@ -1605,7 +1609,7 @@ function ActivityTab({ agentId }: { agentId: string }) {
           <div>
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Agent Activity Log</h3>
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              All actions performed by this agent — transfers, checkouts, and mandate executions.
+              All actions performed by this agent — transfers, checkouts, A2A tasks, and mandate executions.
             </p>
           </div>
         </div>

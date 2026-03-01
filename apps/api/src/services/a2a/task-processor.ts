@@ -23,6 +23,7 @@ import { A2AWebhookHandler } from './webhook-handler.js';
 import { createPaymentProofJWT } from '../../routes/x402-payments.js';
 import { getCurrentNetwork, toUsdcUnits, fromUsdcUnits } from '../x402/facilitator.js';
 import { getChainConfig } from '../../config/blockchain.js';
+import { LimitService } from '../limits.js';
 
 interface ProcessorConfig {
   /** Poll interval in ms (default: 5000) */
@@ -162,6 +163,27 @@ export class A2ATaskProcessor {
 
     const intent = this.parseIntent(text);
     console.log(`[A2A Processor] Intent: ${intent.action} (amount: ${intent.amount} ${intent.currency})`);
+
+    // --- A2A Limit Enforcement (W3: security fix) ---
+    // Check agent limits for operations involving money before any payment/forwarding
+    if (intent.amount > 0) {
+      const limitService = new LimitService(this.supabase);
+      const limitCheck = await limitService.checkTransactionLimit(agentCtx.agentId, intent.amount);
+      if (!limitCheck.allowed) {
+        const isKya = limitCheck.reason === 'kya_verification_required';
+        await this.taskService.addMessage(taskId, 'agent', [
+          { text: `Limit check failed: ${limitCheck.reason}. ${isKya ? 'Agent must be KYA verified to transact.' : `Limit: ${limitCheck.limit}, used: ${limitCheck.used || 0}, requested: ${limitCheck.requested || intent.amount}.`}` },
+        ]);
+        await this.taskService.setInputRequired(taskId, `Limit check failed: ${limitCheck.reason}`, {
+          reason_code: isKya ? 'kya_required' : 'insufficient_funds',
+          next_action: isKya ? 'verify_agent' : 'fund_wallet',
+          resolve_endpoint: isKya ? 'POST /a2a with skill: verify_agent' : undefined,
+          required_auth: 'agent_token',
+          details: { reason: limitCheck.reason, ...limitCheck },
+        });
+        return this.taskService.getTask(taskId);
+      }
+    }
 
     // --- Routing: Sly-native vs agent forwarding ---
     const msgMetadata = lastUserMsg.metadata;
@@ -627,6 +649,31 @@ export class A2ATaskProcessor {
     const callerAgentId = taskRow?.client_agent_id;
     let settlementMandateId: string | undefined;
 
+    // Limit check on caller agent before settlement
+    if (callerAgentId && Number(skill.base_price) > 0) {
+      try {
+        const limitService = new LimitService(this.supabase);
+        const limitCheck = await limitService.checkTransactionLimit(callerAgentId, Number(skill.base_price));
+        if (!limitCheck.allowed) {
+          const isKya = limitCheck.reason === 'kya_verification_required';
+          await this.taskService.addMessage(taskId, 'agent', [
+            { text: `Caller agent limit check failed: ${limitCheck.reason}.` },
+          ]);
+          await this.taskService.setInputRequired(taskId, `Caller limit check failed: ${limitCheck.reason}`, {
+            reason_code: isKya ? 'kya_required' : 'insufficient_funds',
+            next_action: isKya ? 'verify_agent' : 'fund_wallet',
+            resolve_endpoint: isKya ? 'POST /a2a with skill: verify_agent' : undefined,
+            required_auth: 'agent_token',
+            details: { reason: limitCheck.reason, caller_agent_id: callerAgentId, ...limitCheck },
+          });
+          return this.taskService.getTask(taskId);
+        }
+      } catch (err: any) {
+        console.warn(`[A2A Processor] Limit check warning for caller ${callerAgentId}: ${err.message}`);
+        // Non-fatal — continue if limit service is unavailable
+      }
+    }
+
     if (callerAgentId && Number(skill.base_price) > 0 && agent.endpoint_type !== 'x402') {
       const mandateResult = await this.createSettlementMandate(
         taskId,
@@ -636,7 +683,8 @@ export class A2ATaskProcessor {
         skill.currency,
       );
       if (!mandateResult || 'error' in mandateResult) {
-        if (mandateResult && mandateResult.error === 'kya_required') {
+        const isKya = mandateResult && mandateResult.error === 'kya_required';
+        if (isKya) {
           await this.taskService.addMessage(taskId, 'agent', [
             { text: `Caller agent must be KYA verified (tier >= 1) to pay for skills. Use verify_agent to upgrade.` },
           ]);
@@ -645,7 +693,17 @@ export class A2ATaskProcessor {
             { text: `This skill costs ${skill.base_price} ${skill.currency}. Insufficient funds in caller wallet.` },
           ]);
         }
-        await this.taskService.updateTaskState(taskId, 'input-required', 'Payment required');
+        await this.taskService.setInputRequired(taskId, 'Payment required', {
+          reason_code: isKya ? 'kya_required' : 'insufficient_funds',
+          next_action: isKya ? 'verify_agent' : 'fund_wallet',
+          resolve_endpoint: isKya ? 'POST /a2a with skill: verify_agent' : undefined,
+          required_auth: 'agent_token',
+          details: {
+            skill_price: skill.base_price,
+            currency: skill.currency,
+            error: mandateResult && 'error' in mandateResult ? mandateResult.error : 'unknown',
+          },
+        });
         return this.taskService.getTask(taskId);
       }
       settlementMandateId = mandateResult.mandateId;
@@ -971,13 +1029,16 @@ export class A2ATaskProcessor {
       if (!callerAgentId) {
         await this.taskService.addMessage(taskId, 'agent', [
           { text: `x402 payment required (${humanAmount} USDC) but no caller agent found on this task. Authenticate with an agent token (agent_*) instead of an API key to associate a caller agent.` },
-        ], {
-          error_code: 'no_caller_agent',
-          required_amount: humanAmount,
-          currency: 'USDC',
-          resolution: 'authenticate_as_agent',
+        ]);
+        await this.taskService.setInputRequired(taskId, 'Caller agent required for x402 payment', {
+          reason_code: 'needs_agent_auth',
+          next_action: 'authenticate_as_agent',
+          required_auth: 'agent_token',
+          details: {
+            required_amount: humanAmount,
+            currency: 'USDC',
+          },
         });
-        await this.taskService.updateTaskState(taskId, 'input-required', 'Caller agent required for x402 payment');
         return this.taskService.getTask(taskId);
       }
 
@@ -991,14 +1052,18 @@ export class A2ATaskProcessor {
       if (!callerWallet) {
         await this.taskService.addMessage(taskId, 'agent', [
           { text: `x402 payment required (${humanAmount} USDC) but caller agent has no wallet. Create a wallet for agent ${callerAgentId} via POST /v1/wallets with managedByAgentId, then re-submit this task.` },
-        ], {
-          error_code: 'no_wallet',
-          required_amount: humanAmount,
-          agent_id: callerAgentId,
-          currency: 'USDC',
-          resolution: 'create_wallet',
+        ]);
+        await this.taskService.setInputRequired(taskId, 'Caller wallet required', {
+          reason_code: 'missing_wallet',
+          next_action: 'create_wallet',
+          resolve_endpoint: 'POST /v1/wallets',
+          required_auth: 'api_key',
+          details: {
+            required_amount: humanAmount,
+            agent_id: callerAgentId,
+            currency: 'USDC',
+          },
         });
-        await this.taskService.updateTaskState(taskId, 'input-required', 'Caller wallet required');
         return this.taskService.getTask(taskId);
       }
 
@@ -1006,16 +1071,20 @@ export class A2ATaskProcessor {
         const deficit = humanAmount - Number(callerWallet.balance);
         await this.taskService.addMessage(taskId, 'agent', [
           { text: `x402 payment required: ${humanAmount} USDC. Wallet balance: ${callerWallet.balance} USDC. Shortfall: ${deficit.toFixed(6)} USDC. Fund wallet ${callerWallet.id} with at least ${deficit.toFixed(6)} USDC via POST /v1/wallets/${callerWallet.id}/deposit, then re-submit this task.` },
-        ], {
-          error_code: 'insufficient_funds',
-          required_amount: humanAmount,
-          wallet_balance: Number(callerWallet.balance),
-          deficit,
-          wallet_id: callerWallet.id,
-          currency: 'USDC',
-          resolution: 'deposit_funds',
+        ]);
+        await this.taskService.setInputRequired(taskId, 'Insufficient funds for x402 payment', {
+          reason_code: 'insufficient_funds',
+          next_action: 'fund_wallet',
+          resolve_endpoint: `POST /a2a with skill: manage_wallet, action: fund`,
+          required_auth: 'agent_token',
+          details: {
+            required_amount: humanAmount,
+            wallet_balance: Number(callerWallet.balance),
+            deficit,
+            wallet_id: callerWallet.id,
+            currency: 'USDC',
+          },
         });
-        await this.taskService.updateTaskState(taskId, 'input-required', 'Insufficient funds for x402 payment');
         return this.taskService.getTask(taskId);
       }
 

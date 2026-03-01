@@ -1031,6 +1031,33 @@ agents.get('/:id/transactions', async (c) => {
     walletTransferTotal = Math.max(0, (wTotal || 0) - ((wTransfers || []).length - walletTransfers.length));
   }
 
+  // Fetch A2A tasks involving this agent (as provider or caller)
+  let a2aQuery = supabase
+    .from('a2a_tasks')
+    .select('id, state, status_message, direction, created_at, updated_at, transfer_id, client_agent_id, metadata', { count: 'exact' })
+    .eq('tenant_id', ctx.tenantId)
+    .or(`agent_id.eq.${id},client_agent_id.eq.${id}`)
+    .order('created_at', { ascending: false });
+
+  if (dateFrom) a2aQuery = a2aQuery.gte('created_at', dateFrom);
+  if (dateTo) a2aQuery = a2aQuery.lte('created_at', dateTo);
+
+  const { data: a2aTasks, count: a2aTotal } = await a2aQuery.range(offset, offset + limit - 1);
+
+  // Look up transfer amounts for A2A tasks that have linked transfers
+  const a2aTransferIds = (a2aTasks || []).map((t: any) => t.transfer_id).filter(Boolean) as string[];
+  const a2aTransferAmounts = new Map<string, { amount: number; currency: string }>();
+  if (a2aTransferIds.length > 0) {
+    const { data: a2aLinkedTransfers } = await supabase
+      .from('transfers')
+      .select('id, amount, currency')
+      .in('id', a2aTransferIds)
+      .eq('tenant_id', ctx.tenantId);
+    for (const t of a2aLinkedTransfers || []) {
+      a2aTransferAmounts.set(t.id, { amount: Number(t.amount) || 0, currency: t.currency });
+    }
+  }
+
   // Normalize into unified transaction format
   const transactions = [
     ...(ucpCheckouts || []).map((c: any) => {
@@ -1078,6 +1105,30 @@ agents.get('/:id/transactions', async (c) => {
       protocol: t.protocol_metadata?.protocol || t.type || null,
       fee_amount: parseFloat(t.fee_amount) || 0,
     })),
+    ...(a2aTasks || []).map((t: any) => {
+      const linkedTransfer = t.transfer_id ? a2aTransferAmounts.get(t.transfer_id) : undefined;
+      const isProvider = t.direction === 'inbound';
+      const stateToStatus: Record<string, string> = {
+        completed: 'completed', failed: 'failed', canceled: 'canceled',
+        submitted: 'pending', working: 'pending', 'input-required': 'pending',
+      };
+      return {
+        id: t.id,
+        type: 'a2a_task' as const,
+        status: stateToStatus[t.state] || t.state,
+        currency: linkedTransfer?.currency || 'USDC',
+        amount: linkedTransfer?.amount || 0,
+        order_id: null,
+        created_at: t.created_at,
+        description: t.status_message || `A2A task (${t.direction})`,
+        from_account_name: isProvider ? 'Caller agent' : null,
+        to_account_name: isProvider ? null : 'Provider agent',
+        protocol: 'a2a',
+        fee_amount: 0,
+        a2a_state: t.state,
+        a2a_direction: t.direction,
+      };
+    }),
   ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   return c.json({
@@ -1085,7 +1136,7 @@ agents.get('/:id/transactions', async (c) => {
     pagination: {
       limit,
       offset,
-      total: (ucpTotal || 0) + (acpTotal || 0) + (transferTotal || 0) + walletTransferTotal,
+      total: (ucpTotal || 0) + (acpTotal || 0) + (transferTotal || 0) + walletTransferTotal + (a2aTotal || 0),
     },
   });
 });

@@ -193,6 +193,8 @@ export const JSON_RPC_ERRORS = {
   AGENT_NOT_FOUND: -32002,
   PAYMENT_REQUIRED: -32003,
   UNAUTHORIZED: -32004,
+  SKILL_NOT_FOUND: -32005,
+  PRICE_MISMATCH: -32006,
 } as const;
 
 // =============================================================================
@@ -316,4 +318,28 @@ export function normalizeParts(parts: A2APart[]): A2APart[] {
     const { kind, ...rest } = part as any;
     return rest as A2APart;
   });
+}
+
+// =============================================================================
+// Input-Required Context (structured metadata for machine-readable guidance)
+// =============================================================================
+
+export interface InputRequiredContext {
+  reason_code:
+    | 'manual_processing'
+    | 'needs_payment'
+    | 'needs_agent_auth'
+    | 'insufficient_funds'
+    | 'missing_wallet'
+    | 'kya_required';
+  next_action:
+    | 'send_payment_proof'
+    | 'human_respond'
+    | 'authenticate_as_agent'
+    | 'fund_wallet'
+    | 'verify_agent'
+    | 'create_wallet';
+  resolve_endpoint?: string;
+  required_auth?: 'api_key' | 'agent_token' | 'none';
+  details?: Record<string, unknown>;
 }

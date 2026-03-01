@@ -1,14 +1,15 @@
 // Mock Agent Activity Data
 // Future: Replace with API call to /v1/agents/:id/activity
 
-export type AgentActionType = 
-  | 'transfer' 
-  | 'stream_create' 
-  | 'stream_topup' 
-  | 'stream_pause' 
-  | 'limit_check' 
-  | 'compliance_flag' 
-  | 'rebalance';
+export type AgentActionType =
+  | 'transfer'
+  | 'stream_create'
+  | 'stream_topup'
+  | 'stream_pause'
+  | 'limit_check'
+  | 'compliance_flag'
+  | 'rebalance'
+  | 'a2a_task';
 
 export type AgentActionStatus = 'success' | 'failed' | 'pending';
 

@@ -9,6 +9,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { A2ATaskService } from './task-service.js';
+import type { InputRequiredContext } from './types.js';
 
 interface PaymentRequirement {
   amount: number;
@@ -40,19 +41,23 @@ export class A2APaymentHandler {
     taskId: string,
     requirement: PaymentRequirement,
   ) {
-    const metadata = {
-      'x402.payment.required': true,
-      'x402.payment.amount': requirement.amount,
-      'x402.payment.currency': requirement.currency,
-      'x402.payment.endpoint': requirement.x402Endpoint,
-      'x402.payment.description': requirement.description,
+    const irc: InputRequiredContext = {
+      reason_code: 'needs_payment',
+      next_action: 'send_payment_proof',
+      required_auth: 'agent_token',
+      details: {
+        'x402.payment.required': true,
+        'x402.payment.amount': requirement.amount,
+        'x402.payment.currency': requirement.currency,
+        'x402.payment.endpoint': requirement.x402Endpoint,
+        'x402.payment.description': requirement.description,
+      },
     };
 
-    await this.taskService.updateTaskState(
+    await this.taskService.setInputRequired(
       taskId,
-      'input-required',
       `Payment of ${requirement.amount} ${requirement.currency} required`,
-      metadata,
+      irc,
     );
 
     // Add agent message explaining payment requirement

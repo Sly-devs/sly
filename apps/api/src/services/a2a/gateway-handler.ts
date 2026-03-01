@@ -18,6 +18,7 @@ import {
   handleGetMyStatus,
   handleManageWallet,
   handleCheckTask,
+  handleVerifyAgent,
 } from './onboarding-handler.js';
 
 const DEFAULT_BASE_URL = process.env.API_BASE_URL || 'http://localhost:4000';
@@ -129,6 +130,8 @@ async function handleGatewayMessage(
       return handleManageWallet(request.id, intent.payload || {}, supabase, BASE_URL, authContext);
     case 'check_task':
       return handleCheckTask(request.id, intent.payload || {}, supabase, BASE_URL, authContext);
+    case 'verify_agent':
+      return handleVerifyAgent(request.id, intent.payload || {}, supabase, BASE_URL, authContext);
     default:
       // Fallback: return platform capabilities
       return buildCapabilitiesResponse(request.id, BASE_URL);
@@ -136,13 +139,13 @@ async function handleGatewayMessage(
 }
 
 interface Intent {
-  skill: 'find_agent' | 'list_agents' | 'register_agent' | 'update_agent' | 'get_my_status' | 'manage_wallet' | 'check_task' | 'unknown';
+  skill: 'find_agent' | 'list_agents' | 'register_agent' | 'update_agent' | 'get_my_status' | 'manage_wallet' | 'check_task' | 'verify_agent' | 'unknown';
   query?: string;
   tags?: string[];
   payload?: Record<string, unknown>;
 }
 
-const ONBOARDING_SKILLS = new Set(['register_agent', 'update_agent', 'get_my_status', 'manage_wallet', 'check_task']);
+const ONBOARDING_SKILLS = new Set(['register_agent', 'update_agent', 'get_my_status', 'manage_wallet', 'check_task', 'verify_agent']);
 
 /**
  * Extract the caller's intent from message parts.
@@ -412,6 +415,11 @@ function buildCapabilitiesResponse(
                     id: 'check_task',
                     description: 'Check the status of an A2A task by ID (requires agent token auth)',
                     usage: { data: { skill: 'check_task', task_id: '<uuid>' } },
+                  },
+                  {
+                    id: 'verify_agent',
+                    description: 'Upgrade agent KYA verification tier (agent token = self, API key = admin)',
+                    usage: { data: { skill: 'verify_agent', tier: 1 } },
                   },
                 ],
                 platformCardUrl: `${url}/.well-known/agent.json`,

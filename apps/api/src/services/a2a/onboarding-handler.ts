@@ -736,6 +736,142 @@ async function handleWalletFund(
 }
 
 // ============================================================================
+// verify_agent
+// ============================================================================
+
+/**
+ * Verify an agent's KYA tier (self-sovereign or admin).
+ * Agent token auth: verifies self (agentId from auth context).
+ * API key auth: verifies specified agent_id.
+ */
+export async function handleVerifyAgent(
+  requestId: string | number,
+  payload: Record<string, unknown>,
+  supabase: SupabaseClient,
+  baseUrl: string,
+  authContext?: GatewayAuthContext,
+): Promise<A2AJsonRpcResponse> {
+  if (!authContext) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.UNAUTHORIZED,
+      'verify_agent requires authentication (Bearer agent_* or pk_*)',
+    );
+  }
+
+  let agentId: string;
+  const tenantId = authContext.tenantId;
+
+  if (authContext.authType === 'agent' && authContext.agentId) {
+    // Self-sovereign: verify the calling agent
+    agentId = authContext.agentId;
+  } else if (authContext.authType === 'api_key') {
+    // Admin: must provide agent_id in payload
+    const targetAgentId = payload.agent_id as string | undefined;
+    if (!targetAgentId || !UUID_RE.test(targetAgentId)) {
+      return buildErrorResponse(
+        requestId,
+        JSON_RPC_ERRORS.INVALID_PARAMS,
+        'agent_id is required (UUID) when using API key auth',
+      );
+    }
+    agentId = targetAgentId;
+  } else {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.UNAUTHORIZED,
+      'verify_agent requires agent token or API key authentication',
+    );
+  }
+
+  const requestedTier = Number(payload.tier ?? 1);
+  if (requestedTier < 0 || requestedTier > 3 || !Number.isInteger(requestedTier)) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INVALID_PARAMS,
+      'tier must be an integer between 0 and 3',
+    );
+  }
+
+  // Fetch the agent
+  const { data: agent, error: agentError } = await supabase
+    .from('agents')
+    .select('id, name, status, kya_tier, kya_status, parent_account_id')
+    .eq('id', agentId)
+    .eq('tenant_id', tenantId)
+    .single();
+
+  if (agentError || !agent) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INVALID_PARAMS,
+      `Agent ${agentId} not found`,
+    );
+  }
+
+  // Fetch parent account's verification_tier
+  let parentVerificationTier: number | null = null;
+  if (agent.parent_account_id) {
+    const { data: parentAccount } = await supabase
+      .from('accounts')
+      .select('verification_tier')
+      .eq('id', agent.parent_account_id)
+      .single();
+    parentVerificationTier = parentAccount?.verification_tier ?? null;
+  }
+
+  // Compute effective limits
+  const { limits, capped } = await computeEffectiveLimits(supabase, requestedTier, parentVerificationTier);
+
+  // Update agent KYA tier, status, and effective limits
+  const { error: updateError } = await supabase
+    .from('agents')
+    .update({
+      kya_tier: requestedTier,
+      kya_status: 'verified',
+      effective_limit_per_tx: limits.per_transaction,
+      effective_limit_daily: limits.daily,
+      effective_limit_monthly: limits.monthly,
+      effective_limits_capped: capped,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', agentId)
+    .eq('tenant_id', tenantId);
+
+  if (updateError) {
+    return buildErrorResponse(requestId, JSON_RPC_ERRORS.INTERNAL_ERROR, 'Failed to update agent KYA tier');
+  }
+
+  // Audit log
+  await supabase.from('audit_log').insert({
+    tenant_id: tenantId,
+    entity_type: 'agent',
+    entity_id: agentId,
+    action: 'kya_verification',
+    actor_type: authContext.authType === 'agent' ? 'agent' : 'api_key',
+    actor_id: authContext.authType === 'agent' ? agentId : authContext.apiKeyId || 'unknown',
+    actor_name: authContext.authType === 'agent' ? `agent:${agentId}` : 'api_key',
+    changes: {
+      previous_tier: agent.kya_tier,
+      new_tier: requestedTier,
+      kya_status: 'verified',
+    },
+    metadata: {
+      source: 'a2a_verify_agent',
+      self_sovereign: authContext.authType === 'agent',
+    },
+  });
+
+  return buildSuccessResponse(requestId, 'verify_agent_result', {
+    agent_id: agentId,
+    kya_tier: requestedTier,
+    kya_status: 'verified',
+    effective_limits: limits,
+    capped,
+  });
+}
+
+// ============================================================================
 // check_task
 // ============================================================================
 

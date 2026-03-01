@@ -216,11 +216,24 @@ async function handleMessageSend(
     resolvedContextId = await taskService.findRecentSession(agentId, callerAgentId) || undefined;
   }
 
+  // --- Skill validation at receive time (fail-fast before task creation) ---
+  const skillValidation = await validateSkillAtReceive(request, agentId, message.parts, supabase, tenantId);
+  if (skillValidation) {
+    return { ...skillValidation, id: request.id };
+  }
+
+  // Inject validated skillId into message metadata so downstream processor reads it
+  const enrichedMetadata = { ...message.metadata };
+  const extractedSkillId = extractSkillId(message.parts);
+  if (extractedSkillId) {
+    enrichedMetadata.skillId = extractedSkillId;
+  }
+
   const callbackUrl = configuration?.callbackUrl;
   const callbackSecret = configuration?.callbackSecret;
   const task = await taskService.createTask(
     agentId,
-    { role, parts: message.parts, metadata: message.metadata },
+    { role, parts: message.parts, metadata: enrichedMetadata },
     resolvedContextId,
     'inbound',
     undefined,
@@ -345,4 +358,101 @@ async function handleTasksList(
     result,
     id: request.id,
   };
+}
+
+// =============================================================================
+// Skill validation helpers (W2: fail-fast before task creation)
+// =============================================================================
+
+/**
+ * Extract skill_id from message parts (DataPart with skill field).
+ */
+function extractSkillId(parts: A2APart[]): string | undefined {
+  for (const part of parts) {
+    if ('data' in part && part.data) {
+      const data = (part as A2ADataPart).data;
+      if (data.skill_id) return data.skill_id as string;
+      if (data.skillId) return data.skillId as string;
+      if (data.skill) return data.skill as string;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extract quoted price/currency from message parts.
+ */
+function extractQuotedPrice(parts: A2APart[]): { quotedPrice?: number; currency?: string } {
+  for (const part of parts) {
+    if ('data' in part && part.data) {
+      const data = (part as A2ADataPart).data;
+      return {
+        quotedPrice: data.quoted_price as number | undefined,
+        currency: data.currency as string | undefined,
+      };
+    }
+  }
+  return {};
+}
+
+/**
+ * Validate skill_id and quoted_price at receive time.
+ * Returns an error response if validation fails, or null if OK.
+ */
+async function validateSkillAtReceive(
+  request: A2AJsonRpcRequest,
+  agentId: string,
+  parts: A2APart[],
+  supabase?: SupabaseClient,
+  tenantId?: string,
+): Promise<Omit<A2AJsonRpcResponse, 'id'> | null> {
+  if (!supabase || !tenantId) return null;
+
+  const skillId = extractSkillId(parts);
+  if (!skillId) return null; // No skill specified — skip validation
+
+  // Query agent_skills for the specified skill
+  const { data: skill } = await supabase
+    .from('agent_skills')
+    .select('skill_id, base_price, currency, status')
+    .eq('agent_id', agentId)
+    .eq('tenant_id', tenantId)
+    .eq('skill_id', skillId)
+    .maybeSingle();
+
+  if (!skill || skill.status !== 'active') {
+    return {
+      jsonrpc: '2.0',
+      error: {
+        code: JSON_RPC_ERRORS.SKILL_NOT_FOUND,
+        message: `Skill not found or inactive: ${skillId}`,
+        data: { skill_id: skillId, agent_id: agentId },
+      },
+    };
+  }
+
+  // Validate quoted price if provided
+  const { quotedPrice, currency } = extractQuotedPrice(parts);
+  const actualPrice = Number(skill.base_price) || 0;
+
+  if (quotedPrice !== undefined && actualPrice > 0) {
+    if (quotedPrice !== actualPrice || (currency && currency !== skill.currency)) {
+      return {
+        jsonrpc: '2.0',
+        error: {
+          code: JSON_RPC_ERRORS.PRICE_MISMATCH,
+          message: `Price mismatch for skill ${skillId}: quoted ${quotedPrice} ${currency || 'USDC'}, actual ${actualPrice} ${skill.currency}`,
+          data: {
+            skill_id: skillId,
+            quoted_price: quotedPrice,
+            quoted_currency: currency,
+            actual_price: actualPrice,
+            actual_currency: skill.currency,
+          },
+        },
+      };
+    }
+  }
+
+  return null; // Validation passed
 }

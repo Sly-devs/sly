@@ -70,7 +70,14 @@ const registerAgentSchema = z.object({
   spendingPolicy: spendingPolicySchema,
 
   // x402 Configuration
-  agentConfig: agentConfigSchema.optional()
+  agentConfig: agentConfigSchema.optional(),
+
+  // Optional A2A/webhook endpoint (enables auto-dispatch)
+  endpoint: z.object({
+    url: z.string().url().max(1024),
+    type: z.enum(['webhook', 'a2a', 'x402']).default('a2a'),
+    secret: z.string().max(255).optional(),
+  }).optional(),
 });
 
 const updateAgentConfigSchema = z.object({
@@ -199,6 +206,24 @@ app.post('/register', async (c) => {
     }
 
     // ============================================
+    // 2b. SET ENDPOINT (if provided — enables auto-dispatch)
+    // ============================================
+
+    if (validated.endpoint?.url) {
+      await supabase
+        .from('agents')
+        .update({
+          endpoint_url: validated.endpoint.url,
+          endpoint_type: validated.endpoint.type || 'a2a',
+          endpoint_secret: validated.endpoint.secret || null,
+          endpoint_enabled: true,
+          processing_mode: 'managed',
+        })
+        .eq('id', agent.id)
+        .eq('tenant_id', ctx.tenantId);
+    }
+
+    // ============================================
     // 3. CREATE WALLET (managed by agent)
     // ============================================
 
@@ -285,6 +310,12 @@ app.post('/register', async (c) => {
           type: agent.type,
           status: agent.status,
           parentAccountId: agent.parent_account_id,
+          ...(validated.endpoint?.url ? {
+            endpoint_url: validated.endpoint.url,
+            endpoint_type: validated.endpoint.type || 'a2a',
+            endpoint_enabled: true,
+            processing_mode: 'managed',
+          } : {}),
           createdAt: agent.created_at,
           updatedAt: agent.updated_at
         },

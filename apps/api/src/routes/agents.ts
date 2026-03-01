@@ -1923,6 +1923,7 @@ agents.put('/:id/endpoint', async (c) => {
       endpoint_type: parsed.data.endpoint_type,
       endpoint_secret: parsed.data.endpoint_secret || null,
       endpoint_enabled: true,
+      processing_mode: 'managed',
     })
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
@@ -2010,6 +2011,7 @@ agents.delete('/:id/endpoint', async (c) => {
       endpoint_type: 'none',
       endpoint_secret: null,
       endpoint_enabled: false,
+      processing_mode: 'manual',
     })
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId);

@@ -165,14 +165,26 @@ export class A2ATaskProcessor {
     console.log(`[A2A Processor] Intent: ${intent.action} (amount: ${intent.amount} ${intent.currency})`);
 
     // --- A2A Limit Enforcement (W3: security fix) ---
-    // Check agent limits for operations involving money before any payment/forwarding
-    if (intent.amount > 0) {
+    // Check agent limits for operations involving money before any payment/forwarding.
+    // Also extract amount from DataPart (e.g. quoted_price, amount) for skill-based tasks.
+    let effectiveAmount = intent.amount;
+    if (effectiveAmount <= 0) {
+      // Check DataParts for amount-like fields
+      for (const part of lastUserMsg.parts) {
+        if ('data' in part && (part as any).data) {
+          const d = (part as any).data;
+          if (d.amount > 0) { effectiveAmount = Number(d.amount); break; }
+          if (d.quoted_price > 0) { effectiveAmount = Number(d.quoted_price); break; }
+        }
+      }
+    }
+    if (effectiveAmount > 0) {
       const limitService = new LimitService(this.supabase);
-      const limitCheck = await limitService.checkTransactionLimit(agentCtx.agentId, intent.amount);
+      const limitCheck = await limitService.checkTransactionLimit(agentCtx.agentId, effectiveAmount);
       if (!limitCheck.allowed) {
         const isKya = limitCheck.reason === 'kya_verification_required';
         await this.taskService.addMessage(taskId, 'agent', [
-          { text: `Limit check failed: ${limitCheck.reason}. ${isKya ? 'Agent must be KYA verified to transact.' : `Limit: ${limitCheck.limit}, used: ${limitCheck.used || 0}, requested: ${limitCheck.requested || intent.amount}.`}` },
+          { text: `Limit check failed: ${limitCheck.reason}. ${isKya ? 'Agent must be KYA verified to transact.' : `Limit: ${limitCheck.limit}, used: ${limitCheck.used || 0}, requested: ${limitCheck.requested || effectiveAmount}.`}` },
         ]);
         await this.taskService.setInputRequired(taskId, `Limit check failed: ${limitCheck.reason}`, {
           reason_code: isKya ? 'kya_required' : 'insufficient_funds',

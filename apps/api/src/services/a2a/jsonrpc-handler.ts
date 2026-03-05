@@ -25,17 +25,30 @@ export async function handleJsonRpc(
   tenantId?: string,
   callerAgentId?: string,
 ): Promise<A2AJsonRpcResponse> {
+  const rpcLog = (level: 'info' | 'warn' | 'error', msg: string) => {
+    const prefix = `[A2A RPC agent=${agentId.slice(0, 8)} method=${request.method}]`;
+    console[level === 'info' ? 'log' : level](`${prefix} ${msg}`);
+  };
+
   try {
+    rpcLog('info', `Received${callerAgentId ? ` from caller=${callerAgentId.slice(0, 8)}` : ''}`);
+
+    let result: A2AJsonRpcResponse;
     switch (request.method) {
       case 'message/send':
-        return await handleMessageSend(request, agentId, taskService, supabase, tenantId, callerAgentId);
+        result = await handleMessageSend(request, agentId, taskService, supabase, tenantId, callerAgentId);
+        break;
       case 'tasks/get':
-        return await handleTasksGet(request, taskService);
+        result = await handleTasksGet(request, taskService);
+        break;
       case 'tasks/cancel':
-        return await handleTasksCancel(request, taskService);
+        result = await handleTasksCancel(request, taskService);
+        break;
       case 'tasks/list':
-        return await handleTasksList(request, agentId, taskService);
+        result = await handleTasksList(request, agentId, taskService);
+        break;
       default:
+        rpcLog('warn', `Unknown method: ${request.method}`);
         return {
           jsonrpc: '2.0',
           error: {
@@ -45,7 +58,13 @@ export async function handleJsonRpc(
           id: request.id,
         };
     }
+
+    if ((result as any).error) {
+      rpcLog('warn', `Error: ${(result as any).error.message}`);
+    }
+    return result;
   } catch (error: any) {
+    rpcLog('error', `Internal error: ${error.message}`);
     return {
       jsonrpc: '2.0',
       error: {

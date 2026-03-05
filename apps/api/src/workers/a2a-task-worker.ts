@@ -62,10 +62,18 @@ export class A2ATaskWorker {
   private activeTaskCount = 0;
   private activeTenantCounts = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
+  private sweepCounter = 0;
 
   constructor(config: Partial<WorkerConfig> = {}) {
     this.workerId = `worker-${hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
     this.config = { ...DEFAULT_CONFIG, ...config };
+  }
+
+  // --- R5: Structured correlation logging ---
+
+  private log(taskId: string, level: 'info' | 'warn' | 'error', msg: string) {
+    const prefix = `[A2A Worker w=${this.workerId.slice(0, 8)} task=${taskId.slice(0, 8)}]`;
+    console[level === 'info' ? 'log' : level](`${prefix} ${msg}`);
   }
 
   /**
@@ -122,6 +130,18 @@ export class A2ATaskWorker {
    */
   private async poll(): Promise<void> {
     if (!this.running) return;
+
+    // R2 + R3: Periodic sweeps for stuck tasks and orphan mandates
+    this.sweepCounter++;
+    if (this.sweepCounter % 10 === 0) {
+      await this.sweepStuckTasks().catch((err) =>
+        console.error(`[A2A Worker] Sweep stuck tasks error: ${err.message}`));
+    }
+    if (this.sweepCounter % 30 === 0) {
+      await this.sweepOrphanMandates().catch((err) =>
+        console.error(`[A2A Worker] Sweep orphan mandates error: ${err.message}`));
+    }
+
     if (this.activeTaskCount >= this.config.maxConcurrent) return;
 
     const task = await this.claimNextTask();
@@ -146,7 +166,7 @@ export class A2ATaskWorker {
     // Dispatch async — don't block the poll loop
     this.dispatchTask(task)
       .catch((err) => {
-        console.error(`[A2A Worker] Error dispatching task ${task.id.slice(0, 8)}:`, err.message);
+        this.log(task.id, 'error', `Error dispatching: ${err.message}`);
       })
       .finally(() => {
         this.activeTaskCount--;
@@ -169,12 +189,15 @@ export class A2ATaskWorker {
     // Use a two-step claim: find + update with optimistic locking
     // Supabase doesn't support FOR UPDATE SKIP LOCKED directly,
     // so we use an atomic update with a WHERE clause on processor_id IS NULL
+    // R1: Exclude tasks in retry backoff (retry_after > now)
+    const now = new Date().toISOString();
     const { data: candidates } = await supabase
       .from('a2a_tasks')
       .select('id, tenant_id, agent_id, context_id, state, mandate_id')
       .eq('state', 'submitted')
       .is('processor_id', null)
       .eq('direction', 'inbound')
+      .or(`retry_after.is.null,retry_after.lte.${now}`)
       .order('created_at', { ascending: true })
       .limit(5);
 
@@ -208,7 +231,7 @@ export class A2ATaskWorker {
         .single();
 
       if (!error && claimed) {
-        console.log(`[A2A Worker] Claimed task ${claimed.id.slice(0, 8)} (tenant: ${claimed.tenant_id.slice(0, 8)}, agent: ${claimed.agent_id.slice(0, 8)})`);
+        this.log(claimed.id, 'info', `Claimed (tenant: ${claimed.tenant_id.slice(0, 8)}, agent: ${claimed.agent_id.slice(0, 8)})`);
         taskEventBus.emitTask(claimed.id, {
           type: 'status',
           taskId: claimed.id,
@@ -247,7 +270,7 @@ export class A2ATaskWorker {
       const mode = (agent as any).processing_mode || 'manual';
       const config = (agent as any).processing_config || {};
 
-      console.log(`[A2A Worker] Dispatching task ${task.id.slice(0, 8)} via '${mode}' handler`);
+      this.log(task.id, 'info', `Dispatching via '${mode}' handler`);
 
       switch (mode) {
         case 'managed':
@@ -271,7 +294,7 @@ export class A2ATaskWorker {
           await this.failTask(supabase, task, `Unknown processing mode: ${mode}`);
       }
     } catch (err: any) {
-      console.error(`[A2A Worker] Task ${task.id.slice(0, 8)} failed:`, err.message);
+      this.log(task.id, 'error', `Task failed: ${err.message}`);
       const supabase2 = createClient();
       await this.failTask(supabase2, task, err.message);
     } finally {
@@ -542,6 +565,116 @@ export class A2ATaskWorker {
         processing_started_at: null,
       })
       .eq('id', taskId);
+  }
+
+  // --- R2: Timeout enforcement for stuck tasks ---
+
+  /**
+   * Sweep tasks stuck in 'working' state beyond the configured timeout.
+   * Cancels linked settlement mandates and fails the task.
+   */
+  private async sweepStuckTasks(): Promise<void> {
+    const supabase = createClient();
+    const cutoff = new Date(Date.now() - this.config.taskTimeoutMs).toISOString();
+
+    const { data: stuckTasks } = await supabase
+      .from('a2a_tasks')
+      .select('id, tenant_id, metadata')
+      .eq('state', 'working')
+      .lt('processing_started_at', cutoff)
+      .limit(10);
+
+    if (!stuckTasks?.length) return;
+
+    console.log(`[A2A Worker] Found ${stuckTasks.length} stuck tasks past timeout`);
+
+    for (const task of stuckTasks) {
+      this.log(task.id, 'warn', 'Task stuck past timeout, failing');
+
+      // Cancel linked settlement mandate if any
+      const mandateId = (task.metadata as any)?.settlementMandateId;
+      if (mandateId) {
+        await supabase
+          .from('ap2_mandates')
+          .update({
+            status: 'cancelled',
+            cancelled_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('mandate_id', mandateId)
+          .eq('status', 'active');
+        this.log(task.id, 'info', `Cancelled orphaned mandate ${mandateId}`);
+      }
+
+      const taskService = new A2ATaskService(supabase, task.tenant_id);
+      await taskService.addMessage(task.id, 'agent', [
+        { text: `Processing timeout — task exceeded ${this.config.taskTimeoutMs / 1000}s limit.` },
+      ]);
+      await taskService.updateTaskState(task.id, 'failed', 'Processing timeout');
+      await supabase
+        .from('a2a_tasks')
+        .update({ processor_id: null })
+        .eq('id', task.id);
+    }
+  }
+
+  // --- R3: Orphan mandate cleanup ---
+
+  /**
+   * Sweep settlement mandates that have been active for >1 hour without resolution.
+   * Cancels orphaned mandates and fails linked tasks if still non-terminal.
+   */
+  private async sweepOrphanMandates(): Promise<void> {
+    const supabase = createClient();
+    const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1 hour
+
+    const { data: orphanMandates } = await supabase
+      .from('ap2_mandates')
+      .select('id, mandate_id, a2a_session_id, tenant_id, agent_id')
+      .eq('status', 'active')
+      .not('a2a_session_id', 'is', null)
+      .lt('created_at', cutoff)
+      .limit(10);
+
+    if (!orphanMandates?.length) return;
+
+    console.log(`[A2A Worker] Found ${orphanMandates.length} orphan mandates (active >1h)`);
+
+    for (const mandate of orphanMandates) {
+      // Cancel the mandate
+      await supabase
+        .from('ap2_mandates')
+        .update({
+          status: 'cancelled',
+          cancelled_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', mandate.id)
+        .eq('status', 'active');
+
+      // Fail linked task if still non-terminal
+      if (mandate.a2a_session_id) {
+        const { data: linkedTask } = await supabase
+          .from('a2a_tasks')
+          .select('id, tenant_id, state')
+          .eq('id', mandate.a2a_session_id)
+          .single();
+
+        if (linkedTask && !['completed', 'failed', 'canceled', 'rejected'].includes(linkedTask.state)) {
+          const taskService = new A2ATaskService(supabase, linkedTask.tenant_id);
+          await taskService.addMessage(linkedTask.id, 'agent', [
+            { text: 'Settlement mandate expired after 1 hour. Task failed for safety.' },
+          ]);
+          await taskService.updateTaskState(linkedTask.id, 'failed', 'Settlement mandate expired');
+          await supabase
+            .from('a2a_tasks')
+            .update({ processor_id: null })
+            .eq('id', linkedTask.id);
+        }
+      }
+
+      console.log(`[A2A Worker] Cancelled orphan mandate ${mandate.mandate_id} (task: ${mandate.a2a_session_id?.slice(0, 8) || 'none'})`);
+    }
   }
 
   /**

@@ -24,6 +24,7 @@ import { createPaymentProofJWT } from '../../routes/x402-payments.js';
 import { getCurrentNetwork, toUsdcUnits, fromUsdcUnits } from '../x402/facilitator.js';
 import { getChainConfig } from '../../config/blockchain.js';
 import { LimitService } from '../limits.js';
+import { agentCircuitBreaker } from './circuit-breaker.js';
 
 interface ProcessorConfig {
   /** Poll interval in ms (default: 5000) */
@@ -55,6 +56,54 @@ export class A2ATaskProcessor {
       agentId: config.agentId ?? '',
       paymentThreshold: config.paymentThreshold ?? 500,
     };
+  }
+
+  // --- R5: Structured correlation logging ---
+
+  private log(taskId: string, level: 'info' | 'warn' | 'error', msg: string) {
+    const prefix = `[A2A task=${taskId.slice(0, 8)} tenant=${this.tenantId.slice(0, 8)}]`;
+    console[level === 'info' ? 'log' : level](`${prefix} ${msg}`);
+  }
+
+  // --- R1: Transient error detection ---
+
+  private isTransientError(err: any): boolean {
+    if (err.name === 'AbortError' || err.name === 'TimeoutError') return true;
+    if (err.code === 'ECONNREFUSED' || err.code === 'ECONNRESET' || err.code === 'ENOTFOUND') return true;
+    if (err.message?.includes('fetch failed')) return true;
+    return false;
+  }
+
+  /**
+   * Release a task back to the queue with a retry_after backoff.
+   * Returns the updated task.
+   */
+  private async releaseForRetry(
+    taskId: string,
+    reason: string,
+    currentRetryCount: number,
+  ): Promise<A2ATask | null> {
+    const backoffSeconds = [5, 15, 45];
+    const backoffSec = backoffSeconds[Math.min(currentRetryCount, backoffSeconds.length - 1)];
+    const retryAfter = new Date(Date.now() + backoffSec * 1000).toISOString();
+
+    await this.supabase
+      .from('a2a_tasks')
+      .update({
+        state: 'submitted',
+        processor_id: null,
+        retry_count: currentRetryCount + 1,
+        retry_after: retryAfter,
+      })
+      .eq('id', taskId)
+      .eq('tenant_id', this.tenantId);
+
+    await this.taskService.addMessage(taskId, 'agent', [
+      { text: `Forwarding attempt ${currentRetryCount + 1} failed: ${reason}. Retrying in ${backoffSec}s...` },
+    ]);
+
+    this.log(taskId, 'warn', `Released for retry ${currentRetryCount + 1}/3, backoff=${backoffSec}s: ${reason}`);
+    return this.taskService.getTask(taskId);
   }
 
   start() {
@@ -107,11 +156,11 @@ export class A2ATaskProcessor {
     // Don't reprocess tasks that are already in a terminal state
     const terminalStates = ['completed', 'failed', 'canceled', 'rejected'];
     if (terminalStates.includes(task.status.state)) {
-      console.log(`[A2A Processor] Skipping task ${taskId.slice(0, 8)} — already in '${task.status.state}' state`);
+      this.log(taskId, 'info', `Skipping — already in '${task.status.state}' state`);
       return task;
     }
 
-    console.log(`[A2A Processor] Processing task ${taskId.slice(0, 8)}... (${task.history.length} messages)`);
+    this.log(taskId, 'info', `Processing... (${task.history.length} messages)`);
 
     // Build agent context from DB
     const agentId = (task as any).agentId || task.id;
@@ -142,7 +191,7 @@ export class A2ATaskProcessor {
     // Task has original_intent (was payment-gated) but no transferId (no payment proof submitted).
     // A human responded, so bypass the payment gate and execute the original request directly.
     if (originalIntent && !(task as any).transferId && task.history.length > 1) {
-      console.log(`[A2A Processor] Human approval detected for task ${taskId.slice(0, 8)}, executing original intent`);
+      this.log(taskId, 'info', 'Human approval detected, executing original intent');
       return await this.handleHumanApproval(taskId, originalIntent, agentCtx);
     }
 
@@ -162,7 +211,7 @@ export class A2ATaskProcessor {
       .join(' ');
 
     const intent = this.parseIntent(text);
-    console.log(`[A2A Processor] Intent: ${intent.action} (amount: ${intent.amount} ${intent.currency})`);
+    this.log(taskId, 'info', `Intent: ${intent.action} (amount: ${intent.amount} ${intent.currency})`);
 
     // --- A2A Limit Enforcement (W3: security fix) ---
     // Check agent limits for operations involving money before any payment/forwarding.
@@ -276,7 +325,7 @@ export class A2ATaskProcessor {
           return await this.handleGeneric(taskId, text, agentCtx);
       }
     } catch (err: any) {
-      console.error(`[A2A Processor] Error processing ${taskId.slice(0, 8)}:`, err.message);
+      this.log(taskId, 'error', `Error processing: ${err.message}`);
       await this.taskService.updateTaskState(taskId, 'failed', err.message);
       await this.taskService.addMessage(taskId, 'agent', [
         { text: `Task failed: ${err.message}` },
@@ -575,6 +624,14 @@ export class A2ATaskProcessor {
         }
       }
 
+      // R4: Record usage after settlement for accurate daily/monthly limit tracking
+      try {
+        const limitService = new LimitService(this.supabase);
+        await limitService.recordUsage(mandate.agent_id, amount);
+      } catch (err: any) {
+        console.warn(`[A2A] Usage recording failed (non-fatal): ${err.message}`);
+      }
+
       // Mark mandate completed
       await this.supabase
         .from('ap2_mandates')
@@ -681,7 +738,7 @@ export class A2ATaskProcessor {
           return this.taskService.getTask(taskId);
         }
       } catch (err: any) {
-        console.warn(`[A2A Processor] Limit check warning for caller ${callerAgentId}: ${err.message}`);
+        this.log(taskId, 'warn', `Limit check warning for caller ${callerAgentId}: ${err.message}`);
         // Non-fatal — continue if limit service is unavailable
       }
     }
@@ -726,7 +783,7 @@ export class A2ATaskProcessor {
           metadata: { ...(taskRow as any)?.metadata, settlementMandateId: mandateResult.mandateId },
         })
         .eq('id', taskId);
-      console.log(`[A2A Processor] Settlement mandate created: ${mandateResult.mandateId} for task ${taskId.slice(0, 8)}`);
+      this.log(taskId, 'info', `Settlement mandate created: ${mandateResult.mandateId}`);
     }
 
     // Charge service fee if applicable (self-deduction for platform fees — separate from settlement)
@@ -738,7 +795,18 @@ export class A2ATaskProcessor {
       }
     }
 
-    console.log(`[A2A Processor] Forwarding task ${taskId.slice(0, 8)} to agent endpoint (${agent.endpoint_type}: ${agent.endpoint_url})`);
+    this.log(taskId, 'info', `Forwarding to agent endpoint (${agent.endpoint_type}: ${agent.endpoint_url})`);
+
+    // R6: Circuit breaker — block forwarding if agent is consistently failing
+    if (!agentCircuitBreaker.canCall(agentCtx.agentId)) {
+      this.log(taskId, 'warn', `Circuit breaker open for agent ${agentCtx.agentId.slice(0, 8)}, delaying task`);
+      const { data: taskRow2 } = await this.supabase
+        .from('a2a_tasks')
+        .select('retry_count')
+        .eq('id', taskId)
+        .single();
+      return this.releaseForRetry(taskId, 'Agent circuit breaker open', taskRow2?.retry_count ?? 0);
+    }
 
     if (agent.endpoint_type === 'a2a') {
       return await this.forwardViaA2A(taskId, messageText, agent, skill, callerMetadata);
@@ -841,6 +909,9 @@ export class A2ATaskProcessor {
             });
           }
 
+          // R6: Record success for circuit breaker
+          agentCircuitBreaker.recordSuccess(agent.id);
+
           await this.taskService.updateTaskState(taskId, 'completed', 'Forwarded task completed');
         } else if (remoteState === 'failed') {
           const errorMsg = result.status?.message || 'Remote agent failed';
@@ -882,12 +953,32 @@ export class A2ATaskProcessor {
         await this.taskService.updateTaskState(taskId, 'failed', rpcError.message || 'RPC error');
       }
     } catch (err: any) {
-      console.error(`[A2A Processor] A2A forward failed for task ${taskId.slice(0, 8)}:`, err.message);
+      this.log(taskId, 'error', `A2A forward failed: ${err.message}`);
+
+      // R6: Record failure for circuit breaker
+      agentCircuitBreaker.recordFailure(agent.id);
+
+      // R1: Retry transient errors before giving up
+      if (this.isTransientError(err)) {
+        const { data: taskRow3 } = await this.supabase
+          .from('a2a_tasks')
+          .select('retry_count, max_retries')
+          .eq('id', taskId)
+          .single();
+        const retryCount = taskRow3?.retry_count ?? 0;
+        const maxRetries = taskRow3?.max_retries ?? 3;
+
+        if (retryCount < maxRetries) {
+          // Do NOT cancel settlement mandate — keep it active for retry
+          return this.releaseForRetry(taskId, err.message, retryCount);
+        }
+      }
+
+      // Non-transient or retries exhausted — fail + cancel mandate
       await this.taskService.addMessage(taskId, 'agent', [
         { text: `Failed to reach agent endpoint: ${err.message}` },
       ]);
 
-      // Cancel settlement mandate on forwarding failure
       const settlementMandateId = await getSettlementMandateId();
       if (settlementMandateId) {
         await this.resolveSettlementMandate(taskId, settlementMandateId, 'failed');
@@ -940,11 +1031,30 @@ export class A2ATaskProcessor {
       // Mark as working — agent will call back via POST /a2a/:agentId/callback
       await this.taskService.updateTaskState(taskId, 'working', 'Dispatched to agent webhook');
     } else {
+      // R1: Retry transient webhook failures before giving up
+      const webhookError = result.error || 'Unknown error';
+      const isTransient = webhookError.includes('fetch failed') || webhookError.includes('ECONNREFUSED')
+        || webhookError.includes('ECONNRESET') || webhookError.includes('timeout');
+
+      if (isTransient) {
+        const { data: taskRetry } = await this.supabase
+          .from('a2a_tasks')
+          .select('retry_count, max_retries')
+          .eq('id', taskId)
+          .single();
+        const retryCount = taskRetry?.retry_count ?? 0;
+        const maxRetries = taskRetry?.max_retries ?? 3;
+
+        if (retryCount < maxRetries) {
+          return this.releaseForRetry(taskId, webhookError, retryCount);
+        }
+      }
+
       await webhookHandler.recordFailure(taskId, this.tenantId, result, 0);
       await this.taskService.addMessage(taskId, 'agent', [
-        { text: `Failed to dispatch to agent webhook: ${result.error || 'Unknown error'}` },
+        { text: `Failed to dispatch to agent webhook: ${webhookError}` },
       ]);
-      await this.taskService.updateTaskState(taskId, 'failed', `Webhook dispatch failed: ${result.error}`);
+      await this.taskService.updateTaskState(taskId, 'failed', `Webhook dispatch failed: ${webhookError}`);
     }
 
     return this.taskService.getTask(taskId);
@@ -1164,7 +1274,7 @@ export class A2ATaskProcessor {
         .single();
 
       if (transferError || !transfer) {
-        console.error(`[A2A Processor] x402 transfer creation failed:`, transferError?.message, transferError?.details, transferError?.code);
+        this.log(taskId, 'error', `x402 transfer creation failed: ${transferError?.message} (${transferError?.code})`);
         // Rollback wallet deduction
         const { data: currentWallet } = await this.supabase
           .from('wallets')
@@ -1236,7 +1346,7 @@ export class A2ATaskProcessor {
       });
 
       // Step 10: Retry POST with X-Payment header
-      console.log(`[A2A Processor] x402 retrying with X-Payment for task ${taskId.slice(0, 8)} (${humanAmount} USDC)`);
+      this.log(taskId, 'info', `x402 retrying with X-Payment (${humanAmount} USDC)`);
 
       const retryResponse = await fetch(agent.endpoint_url, {
         method: 'POST',
@@ -1260,7 +1370,7 @@ export class A2ATaskProcessor {
       }
 
       // Retry failed — rollback
-      console.error(`[A2A Processor] x402 retry failed: HTTP ${retryResponse.status}`);
+      this.log(taskId, 'error', `x402 retry failed: HTTP ${retryResponse.status}`);
       const retryErrorText = await retryResponse.text().catch(() => 'Unknown error');
 
       // Reverse wallet deduction
@@ -1307,7 +1417,7 @@ export class A2ATaskProcessor {
       return this.taskService.getTask(taskId);
 
     } catch (err: any) {
-      console.error(`[A2A Processor] x402 forward failed for task ${taskId.slice(0, 8)}:`, err.message);
+      this.log(taskId, 'error', `x402 forward failed: ${err.message}`);
       await this.taskService.addMessage(taskId, 'agent', [
         { text: `Failed to reach agent endpoint via x402: ${err.message}` },
       ]);

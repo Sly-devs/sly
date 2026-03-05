@@ -26,6 +26,8 @@ interface WorkerConfig {
   maxPerTenant: number;
   /** Task processing timeout in ms (default: 60000) */
   taskTimeoutMs: number;
+  /** Timeout for forwarded tasks (A2A/webhook/x402) in ms (default: 120000) */
+  forwardedTaskTimeoutMs: number;
   /** Graceful shutdown grace period in ms (default: 30000) */
   shutdownGracePeriodMs: number;
 }
@@ -35,6 +37,7 @@ const DEFAULT_CONFIG: WorkerConfig = {
   maxConcurrent: parseInt(process.env.A2A_WORKER_MAX_CONCURRENT || '5'),
   maxPerTenant: parseInt(process.env.A2A_WORKER_MAX_PER_TENANT || '3'),
   taskTimeoutMs: parseInt(process.env.A2A_WORKER_TASK_TIMEOUT || '60000'),
+  forwardedTaskTimeoutMs: parseInt(process.env.A2A_WORKER_FORWARDED_TIMEOUT || '120000'),
   shutdownGracePeriodMs: parseInt(process.env.A2A_WORKER_SHUTDOWN_GRACE || '30000'),
 };
 
@@ -571,25 +574,72 @@ export class A2ATaskWorker {
 
   /**
    * Sweep tasks stuck in 'working' state beyond the configured timeout.
-   * Cancels linked settlement mandates and fails the task.
+   * Uses atomic claim (UPDATE ... WHERE state='working') to prevent duplicate
+   * timeout messages from concurrent sweep cycles (TOCTOU fix).
+   * Forwarded tasks (remote_task_id IS NOT NULL) get a longer timeout budget.
    */
   private async sweepStuckTasks(): Promise<void> {
     const supabase = createClient();
-    const cutoff = new Date(Date.now() - this.config.taskTimeoutMs).toISOString();
+    const localCutoff = new Date(Date.now() - this.config.taskTimeoutMs).toISOString();
+    const forwardedCutoff = new Date(Date.now() - this.config.forwardedTaskTimeoutMs).toISOString();
 
+    // Find stuck tasks: local tasks past localCutoff, forwarded tasks past forwardedCutoff
     const { data: stuckTasks } = await supabase
       .from('a2a_tasks')
-      .select('id, tenant_id, metadata')
+      .select('id, tenant_id, metadata, remote_task_id')
       .eq('state', 'working')
-      .lt('processing_started_at', cutoff)
+      .lt('processing_started_at', localCutoff)
       .limit(10);
 
     if (!stuckTasks?.length) return;
 
-    console.log(`[A2A Worker] Found ${stuckTasks.length} stuck tasks past timeout`);
+    // Filter: forwarded tasks only count as stuck if past the longer cutoff
+    const actuallyStuck = stuckTasks.filter((task: any) => {
+      if (task.remote_task_id) {
+        // Forwarded task — check against longer cutoff
+        // We already filtered by localCutoff, so re-check against forwardedCutoff
+        // by comparing processing_started_at. Since we don't have it in select,
+        // the forwardedCutoff is stricter (older), so if task is past localCutoff
+        // but not forwardedCutoff, skip it.
+        return true; // Will be filtered by atomic claim below if needed
+      }
+      return true;
+    });
 
-    for (const task of stuckTasks) {
-      this.log(task.id, 'warn', 'Task stuck past timeout, failing');
+    // For forwarded tasks, we need a separate query with the longer cutoff
+    // to avoid timing out tasks that are within the forwarded budget
+    const { data: forwardedNotYetStuck } = await supabase
+      .from('a2a_tasks')
+      .select('id')
+      .eq('state', 'working')
+      .not('remote_task_id', 'is', null)
+      .gte('processing_started_at', forwardedCutoff)
+      .lt('processing_started_at', localCutoff);
+
+    const forwardedNotYetStuckIds = new Set((forwardedNotYetStuck || []).map((t: any) => t.id));
+
+    const tasksToFail = actuallyStuck.filter((t: any) => !forwardedNotYetStuckIds.has(t.id));
+
+    if (!tasksToFail.length) return;
+
+    console.log(`[A2A Worker] Found ${tasksToFail.length} stuck tasks past timeout`);
+
+    for (const task of tasksToFail) {
+      const isForwarded = !!(task as any).remote_task_id;
+      const timeoutMs = isForwarded ? this.config.forwardedTaskTimeoutMs : this.config.taskTimeoutMs;
+
+      // Atomic claim: only proceed if we successfully transition from 'working'
+      const { data: claimed, error } = await supabase
+        .from('a2a_tasks')
+        .update({ state: 'failed', processor_id: null })
+        .eq('id', task.id)
+        .eq('state', 'working')
+        .select('id')
+        .single();
+
+      if (error || !claimed) continue; // Another sweep or handler got it first
+
+      this.log(task.id, 'warn', `Task stuck past timeout (${timeoutMs / 1000}s${isForwarded ? ', forwarded' : ''}), failing`);
 
       // Cancel linked settlement mandate if any
       const mandateId = (task.metadata as any)?.settlementMandateId;
@@ -606,14 +656,15 @@ export class A2ATaskWorker {
         this.log(task.id, 'info', `Cancelled orphaned mandate ${mandateId}`);
       }
 
+      // Add single timeout message (state already set to 'failed' by atomic claim)
       const taskService = new A2ATaskService(supabase, task.tenant_id);
       await taskService.addMessage(task.id, 'agent', [
-        { text: `Processing timeout — task exceeded ${this.config.taskTimeoutMs / 1000}s limit.` },
+        { text: `Processing timeout — task exceeded ${timeoutMs / 1000}s limit.` },
       ]);
-      await taskService.updateTaskState(task.id, 'failed', 'Processing timeout');
+      // Update status_message only (state already 'failed' from atomic claim)
       await supabase
         .from('a2a_tasks')
-        .update({ processor_id: null })
+        .update({ status_message: 'Processing timeout' })
         .eq('id', task.id);
     }
   }
@@ -652,24 +703,22 @@ export class A2ATaskWorker {
         .eq('id', mandate.id)
         .eq('status', 'active');
 
-      // Fail linked task if still non-terminal
+      // Fail linked task if still non-terminal — use atomic claim to prevent duplicates
       if (mandate.a2a_session_id) {
-        const { data: linkedTask } = await supabase
+        const terminalStates = ['completed', 'failed', 'canceled', 'rejected'];
+        const { data: claimed, error: claimErr } = await supabase
           .from('a2a_tasks')
-          .select('id, tenant_id, state')
+          .update({ state: 'failed', processor_id: null, status_message: 'Settlement mandate expired' })
           .eq('id', mandate.a2a_session_id)
+          .not('state', 'in', `(${terminalStates.join(',')})`)
+          .select('id, tenant_id')
           .single();
 
-        if (linkedTask && !['completed', 'failed', 'canceled', 'rejected'].includes(linkedTask.state)) {
-          const taskService = new A2ATaskService(supabase, linkedTask.tenant_id);
-          await taskService.addMessage(linkedTask.id, 'agent', [
+        if (!claimErr && claimed) {
+          const taskService = new A2ATaskService(supabase, claimed.tenant_id);
+          await taskService.addMessage(claimed.id, 'agent', [
             { text: 'Settlement mandate expired after 1 hour. Task failed for safety.' },
           ]);
-          await taskService.updateTaskState(linkedTask.id, 'failed', 'Settlement mandate expired');
-          await supabase
-            .from('a2a_tasks')
-            .update({ processor_id: null })
-            .eq('id', linkedTask.id);
         }
       }
 

@@ -164,15 +164,22 @@ export class A2ATaskService {
       updateData.processing_started_at = null;
     }
 
-    const { data: taskRow, error } = await this.supabase
+    const terminalStates = ['completed', 'failed', 'canceled', 'rejected'];
+
+    let query = this.supabase
       .from('a2a_tasks')
       .update(updateData)
       .eq('id', taskId)
-      .eq('tenant_id', this.tenantId)
-      .select()
-      .single();
+      .eq('tenant_id', this.tenantId);
 
-    if (error || !taskRow) return null;
+    // If transitioning to a terminal state, guard against already-terminal
+    if (terminalStates.includes(state)) {
+      query = query.not('state', 'in', `(${terminalStates.join(',')})`);
+    }
+
+    const { data: taskRow, error } = await query.select().single();
+
+    if (error || !taskRow) return null; // Already terminal or not found — skip event emission
 
     taskEventBus.emitTask(taskId, {
       type: 'status',

@@ -8,7 +8,7 @@
  * Docs: https://developers.circle.com/w3s/docs
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID, publicEncrypt, constants as cryptoConstants } from 'crypto';
 import {
   CircleClientConfig,
   CircleWallet,
@@ -29,8 +29,11 @@ import {
 // Configuration
 // ============================================
 
-const CIRCLE_SANDBOX_URL = 'https://api-sandbox.circle.com';
-const CIRCLE_PRODUCTION_URL = 'https://api.circle.com';
+// W3S Programmable Wallets always uses api.circle.com (testnet vs mainnet
+// is determined by blockchain choice, not URL). The legacy Payments API
+// sandbox at api-sandbox.circle.com does NOT host W3S endpoints.
+const CIRCLE_W3S_URL = 'https://api.circle.com';
+const CIRCLE_PAYMENTS_SANDBOX_URL = 'https://api-sandbox.circle.com';
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 
 // ============================================
@@ -42,6 +45,7 @@ export class CircleClient {
   private entitySecret?: string;
   private baseUrl: string;
   private timeout: number;
+  private entityPublicKey?: string; // Cached RSA public key from Circle
 
   constructor(config: CircleClientConfig) {
     if (!config.apiKey) {
@@ -50,7 +54,7 @@ export class CircleClient {
 
     this.apiKey = config.apiKey;
     this.entitySecret = config.entitySecret;
-    this.baseUrl = config.baseUrl || CIRCLE_SANDBOX_URL;
+    this.baseUrl = config.baseUrl || CIRCLE_W3S_URL;
     this.timeout = config.timeout || DEFAULT_TIMEOUT;
   }
 
@@ -106,6 +110,65 @@ export class CircleClient {
   }
 
   // ============================================
+  // Entity Secret Ciphertext (RSA-OAEP encryption)
+  // ============================================
+
+  /**
+   * Fetch Circle's RSA public key for entity secret encryption.
+   * Cached after first fetch.
+   */
+  private async getEntityPublicKey(): Promise<string> {
+    if (this.entityPublicKey) return this.entityPublicKey;
+
+    const response = await this.request<CircleApiResponse<{ publicKey: string }>>(
+      'GET',
+      '/v1/w3s/config/entity/publicKey'
+    );
+    this.entityPublicKey = response.data.publicKey;
+    return this.entityPublicKey;
+  }
+
+  /**
+   * Generate a fresh entitySecretCiphertext for write operations.
+   * Encrypts the 32-byte entity secret with Circle's RSA public key using RSA-OAEP/SHA-256.
+   * Must be regenerated for every write request (replay protection).
+   */
+  async generateEntitySecretCiphertext(): Promise<string> {
+    if (!this.entitySecret) {
+      throw new Error(
+        'CIRCLE_ENTITY_SECRET is required for write operations. ' +
+        'Set it in your environment variables.'
+      );
+    }
+
+    const publicKeyPem = await this.getEntityPublicKey();
+    const entitySecretBytes = Buffer.from(this.entitySecret, 'hex');
+
+    if (entitySecretBytes.length !== 32) {
+      throw new Error(`Entity secret must be 32 bytes (64 hex chars), got ${entitySecretBytes.length} bytes`);
+    }
+
+    const encrypted = publicEncrypt(
+      {
+        key: publicKeyPem,
+        padding: cryptoConstants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha256',
+      },
+      entitySecretBytes,
+    );
+
+    return encrypted.toString('base64');
+  }
+
+  /**
+   * Helper: attach entitySecretCiphertext to a request body for write operations.
+   */
+  private async withCiphertext<T extends Record<string, unknown>>(body: T): Promise<T & { entitySecretCiphertext: string }> {
+    const ciphertext = await this.generateEntitySecretCiphertext();
+    return { ...body, entitySecretCiphertext: ciphertext };
+  }
+
+  // ============================================
   // Wallet Set Operations
   // ============================================
 
@@ -113,11 +176,11 @@ export class CircleClient {
    * Create a new wallet set
    */
   async createWalletSet(name?: string): Promise<CircleWalletSet> {
-    const request: CreateWalletSetRequest = {
+    const request = await this.withCiphertext({
       idempotencyKey: randomUUID(),
       name: name || 'PayOS Wallets',
       custodyType: 'DEVELOPER',
-    };
+    });
 
     const response = await this.request<CircleApiResponse<{ walletSet: CircleWalletSet }>>(
       'POST',
@@ -164,13 +227,13 @@ export class CircleClient {
     count: number = 1,
     metadata?: { name?: string; refId?: string }
   ): Promise<CircleWallet[]> {
-    const request: CreateWalletsRequest = {
+    const request = await this.withCiphertext({
       idempotencyKey: randomUUID(),
       walletSetId,
       blockchains,
       count,
       metadata: metadata ? [metadata] : undefined,
-    };
+    });
 
     const response = await this.request<CircleApiResponse<{ wallets: CircleWallet[] }>>(
       'POST',
@@ -292,14 +355,14 @@ export class CircleClient {
     amount: string,
     feeLevel: 'LOW' | 'MEDIUM' | 'HIGH' = 'MEDIUM'
   ): Promise<CircleTransaction> {
-    const request: TransferTokensRequest = {
+    const request = await this.withCiphertext({
       idempotencyKey: randomUUID(),
       walletId,
       tokenId,
       destinationAddress,
       amounts: [amount],
       feeLevel,
-    };
+    });
 
     const response = await this.request<CircleApiResponse<{ transaction: CircleTransaction }>>(
       'POST',
@@ -334,6 +397,55 @@ export class CircleClient {
       `/v1/w3s/transactions?walletIds=${walletId}&pageSize=${pageSize}`
     );
     return response.data.transactions;
+  }
+
+  // ============================================
+  // Faucet Operations (Testnet only)
+  // ============================================
+
+  /**
+   * Request testnet tokens from Circle faucet.
+   * Returns 204 with no body on success.
+   * Rate limit: 20 USDC per address per 2 hours.
+   */
+  async requestFaucetDrip(
+    address: string,
+    blockchain: CircleBlockchain = 'BASE-SEPOLIA',
+    options: { usdc?: boolean; native?: boolean; eurc?: boolean } = { usdc: true }
+  ): Promise<void> {
+    const url = `${this.baseUrl}/v1/faucet/drips`;
+
+    console.log(`[Circle] POST /v1/faucet/drips for ${address} on ${blockchain}`);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        address,
+        blockchain,
+        usdc: options.usdc ?? false,
+        native: options.native ?? false,
+        eurc: options.eurc ?? false,
+      }),
+      signal: AbortSignal.timeout(this.timeout),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let error: unknown;
+      try { error = JSON.parse(text); } catch { error = text; }
+      console.error(`[Circle] Faucet error ${response.status}:`, error);
+      throw new CircleApiClientError(
+        (error as any)?.message || `Circle faucet error: ${response.status}`,
+        response.status,
+        error as CircleApiError
+      );
+    }
+
+    console.log(`[Circle] Faucet drip successful for ${address}`);
   }
 
   // ============================================
@@ -405,13 +517,15 @@ export function getCircleClient(): CircleClient {
       );
     }
 
-    // Determine if we're in sandbox mode
-    const isSandbox = apiKey.startsWith('SAND') || apiKey.startsWith('TEST');
-    
+    // W3S Programmable Wallets keys (TEST_API_KEY:* or LIVE_API_KEY:*) always
+    // use api.circle.com. Only the legacy Payments sandbox key (SAND_API_KEY:*)
+    // uses api-sandbox.circle.com.
+    const isPaymentsSandbox = apiKey.startsWith('SAND');
+
     defaultClient = new CircleClient({
       apiKey,
       entitySecret: process.env.CIRCLE_ENTITY_SECRET,
-      baseUrl: isSandbox ? CIRCLE_SANDBOX_URL : CIRCLE_PRODUCTION_URL,
+      baseUrl: isPaymentsSandbox ? CIRCLE_PAYMENTS_SANDBOX_URL : CIRCLE_W3S_URL,
     });
   }
 

@@ -794,21 +794,60 @@ app.get('/:id/balance', async (c) => {
       }
     }
 
-    // Build on-chain data from sync_data
+    // Phase 2: Live balance fetch for Circle/external wallets when stale
+    let onChainBalance: string | null = null;
+    if (!isInternalWallet && syncStatus !== 'synced') {
+      try {
+        const walletRecord = wallet as any;
+        if (walletRecord.wallet_type === 'circle_custodial' && walletRecord.provider_wallet_id) {
+          // Circle wallet: use Circle API for balance
+          const { getCircleClient } = await import('../services/circle/client.js');
+          const circle = getCircleClient();
+          const balance = await circle.getUsdcBalance(walletRecord.provider_wallet_id);
+          onChainBalance = balance.formatted.toString();
+        } else if (wallet.wallet_address && !wallet.wallet_address.startsWith('internal://')) {
+          // External wallet: use viem for on-chain balance
+          const { getUsdcBalance: getOnChainUsdcBalance } = await import('../config/blockchain.js');
+          onChainBalance = await getOnChainUsdcBalance(wallet.wallet_address);
+        }
+
+        // Update sync_data in background
+        if (onChainBalance !== null) {
+          supabase
+            .from('wallets')
+            .update({
+              sync_data: {
+                ...(wallet.sync_data as Record<string, unknown> || {}),
+                on_chain_usdc: onChainBalance,
+                synced_at: new Date().toISOString(),
+              },
+              last_synced_at: new Date().toISOString(),
+            })
+            .eq('id', walletId)
+            .eq('tenant_id', ctx.tenantId)
+            .then(() => {});
+        }
+      } catch (syncErr) {
+        console.warn(`[Wallets] Live balance sync failed for ${walletId}:`, syncErr);
+      }
+    }
+
+    // Build on-chain data from sync_data or live fetch
     const syncData = wallet.sync_data as Record<string, unknown> | null;
-    const onChain = !isInternalWallet && syncData ? {
-      usdc: syncData.raw_balance
-        ? (parseFloat(syncData.raw_balance as string) / Math.pow(10, (syncData.decimals as number) || 6)).toString()
-        : wallet.balance.toString(),
-      native: (syncData.native_balance as string) || '0',
-      lastSyncedAt: wallet.last_synced_at,
+    const onChain = !isInternalWallet ? {
+      usdc: onChainBalance
+        || (syncData?.raw_balance
+          ? (parseFloat(syncData.raw_balance as string) / Math.pow(10, (syncData.decimals as number) || 6)).toString()
+          : wallet.balance.toString()),
+      native: (syncData?.native_balance as string) || '0',
+      lastSyncedAt: onChainBalance ? new Date().toISOString() : wallet.last_synced_at,
     } : null;
 
     return c.json({
       data: {
         balance: parseFloat(wallet.balance),
         currency: wallet.currency,
-        syncStatus,
+        syncStatus: onChainBalance ? 'synced' : syncStatus,
         onChain,
       },
     });
@@ -1491,6 +1530,173 @@ app.post('/:id/test-fund', async (c) => {
           details: error.errors,
         },
       }, 400);
+    }
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// ============================================
+// POST /v1/wallets/:id/fund - Real Circle Transfer Funding (Sandbox)
+// Phase 2: Transfer real testnet USDC from master wallet to agent wallet
+// ============================================
+
+const realFundSchema = z.object({
+  currency: z.enum(['USDC', 'EURC']).default('USDC'),
+  native: z.boolean().default(false), // also request native ETH for gas
+});
+
+app.post('/:id/fund', async (c) => {
+  try {
+    const ctx = c.get('ctx');
+    const id = c.req.param('id');
+    const supabase = createClient();
+
+    // Only available in sandbox with Circle configured
+    if (process.env.PAYOS_ENVIRONMENT !== 'sandbox' || !process.env.CIRCLE_API_KEY) {
+      return c.json({
+        error: 'Real funding requires PAYOS_ENVIRONMENT=sandbox and CIRCLE_API_KEY',
+        code: 'NOT_SANDBOX',
+      }, 403);
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const validated = realFundSchema.parse(body);
+
+    // Fetch wallet
+    const { data: wallet, error: walletError } = await supabase
+      .from('wallets')
+      .select('*')
+      .eq('id', id)
+      .eq('tenant_id', ctx.tenantId)
+      .single();
+
+    if (walletError || !wallet) {
+      return c.json({ error: 'Wallet not found' }, 404);
+    }
+
+    const walletType = (wallet as any).wallet_type;
+    const providerWalletId = (wallet as any).provider_wallet_id;
+
+    // Must have a real on-chain address
+    if (!wallet.wallet_address) {
+      return c.json({
+        error: 'Wallet has no on-chain address. Use POST /v1/wallets/:id/test-fund for internal wallets.',
+        code: 'NO_ADDRESS',
+      }, 400);
+    }
+
+    // Only circle_custodial and external wallets have real addresses
+    if (walletType !== 'circle_custodial' && walletType !== 'external') {
+      return c.json({
+        error: 'Real funding only available for Circle custodial or external wallets. Use POST /v1/wallets/:id/test-fund for internal wallets.',
+        code: 'INTERNAL_WALLET',
+      }, 400);
+    }
+
+    const { getCircleClient } = await import('../services/circle/client.js');
+    const circle = getCircleClient();
+
+    // Call Circle faucet API
+    await circle.requestFaucetDrip(
+      wallet.wallet_address,
+      'BASE-SEPOLIA',
+      {
+        usdc: validated.currency === 'USDC',
+        eurc: validated.currency === 'EURC',
+        native: validated.native,
+      },
+    );
+
+    // For Circle custodial wallets, poll on-chain balance and sync DB
+    const previousBalance = parseFloat(wallet.balance);
+    let newBalance = previousBalance;
+
+    if (walletType === 'circle_custodial' && providerWalletId) {
+      // Brief wait for faucet tx to settle, then check on-chain balance
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      const balances = await circle.getWalletBalances(providerWalletId);
+      const tokenSymbol = validated.currency;
+      const tokenBalance = balances.find(b => b.token.symbol === tokenSymbol);
+      if (tokenBalance) {
+        newBalance = parseFloat(tokenBalance.amount);
+      }
+
+      await supabase
+        .from('wallets')
+        .update({
+          balance: newBalance,
+          status: 'active',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .eq('tenant_id', ctx.tenantId);
+    }
+
+    // Audit log
+    await supabase.from('audit_log').insert({
+      tenant_id: ctx.tenantId,
+      entity_type: 'wallet',
+      entity_id: id,
+      action: 'faucet_fund',
+      actor_type: ctx.actorType || 'user',
+      actor_id: ctx.userId || ctx.actorId || 'system',
+      actor_name: ctx.userName || ctx.actorName || 'System',
+      changes: {
+        previous_balance: previousBalance,
+        new_balance: newBalance,
+        currency: validated.currency,
+        native_requested: validated.native,
+        source: 'circle_faucet',
+      },
+      metadata: { environment: 'sandbox', source: 'faucet_fund_endpoint' },
+    });
+
+    return c.json({
+      data: {
+        wallet_id: id,
+        wallet_address: wallet.wallet_address,
+        wallet_type: walletType,
+        previous_balance: previousBalance,
+        new_balance: newBalance,
+        currency: validated.currency,
+        native_requested: validated.native,
+        faucet: {
+          status: 'success',
+          note: `Circle faucet drip sent. ~20 ${validated.currency} per address per 2 hours.`,
+        },
+        message: walletType === 'circle_custodial'
+          ? 'Faucet drip sent and balance synced from on-chain.'
+          : 'Faucet drip sent. Call POST /v1/wallets/:id/sync to update balance after confirmation.',
+      },
+    });
+  } catch (error) {
+    console.error('Error in POST /v1/wallets/:id/fund:', error);
+    if (error instanceof z.ZodError) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', details: error.errors } }, 400);
+    }
+    // Surface Circle API errors clearly
+    const { CircleApiClientError } = await import('../services/circle/client.js');
+    if (error instanceof CircleApiClientError) {
+      if (error.statusCode === 403) {
+        return c.json({
+          error: 'Circle faucet API returned 403 Forbidden.',
+          code: 'FAUCET_FORBIDDEN',
+          note: 'The /v1/faucet/drips API requires a mainnet-upgraded Circle API key. ' +
+            'Upgrade at https://console.circle.com/ or use the web faucet at https://faucet.circle.com/',
+        }, 403);
+      }
+      if (error.statusCode === 429) {
+        return c.json({
+          error: error.message,
+          code: 'FAUCET_RATE_LIMITED',
+          note: 'The Circle faucet rate-limits to ~20 USDC per address per 2 hours.',
+        }, 429);
+      }
+      return c.json({
+        error: error.message,
+        code: 'CIRCLE_API_ERROR',
+      }, error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 502);
     }
     return c.json({ error: 'Internal server error' }, 500);
   }

@@ -793,34 +793,47 @@ app.post('/pay', async (c) => {
     // ============================================
     // Get the provider's wallet to credit the net amount
 
-    // Prefer non-agent-managed wallets first, then fall back to any active wallet.
-    // Use .limit(1) instead of .single() because the account may have multiple wallets.
-    const { data: providerWallets, error: providerWalletError } = await supabase
-      .from('wallets')
-      .select('id')
-      .eq('owner_account_id', endpoint.account_id)
-      .eq('tenant_id', ctx.tenantId)
-      .eq('currency', auth.currency)
-      .eq('status', 'active')
-      .is('managed_by_agent_id', null)
-      .order('created_at', { ascending: true })
-      .limit(1);
+    // Find the provider wallet. If the endpoint has a payment_address, match by
+    // wallet_address for precision (avoids picking the wrong wallet when the
+    // account has many wallets). Otherwise fall back to account-level lookup.
+    let providerWallet: { id: string; wallet_type?: string | null; wallet_address?: string | null } | null = null;
+    let providerWalletError: any = null;
 
-    let providerWallet = providerWallets?.[0] ?? null;
-
-    // Fallback: if no plain wallet found, pick any active wallet for this account/currency
-    if (!providerWallet) {
-      const { data: fallbackWallets } = await supabase
+    if (endpoint.payment_address) {
+      const { data, error } = await supabase
         .from('wallets')
-        .select('id')
+        .select('id, wallet_type, wallet_address')
+        .eq('wallet_address', endpoint.payment_address)
+        .eq('tenant_id', ctx.tenantId)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle();
+      providerWallet = data;
+      providerWalletError = error;
+    }
+
+    // Fallback: account-level lookup excluding consumer wallet
+    if (!providerWallet) {
+      const { data: providerWallets, error } = await supabase
+        .from('wallets')
+        .select('id, wallet_type, wallet_address')
         .eq('owner_account_id', endpoint.account_id)
         .eq('tenant_id', ctx.tenantId)
         .eq('currency', auth.currency)
         .eq('status', 'active')
-        .order('created_at', { ascending: true })
-        .limit(1);
+        .neq('id', wallet.id)
+        .order('created_at', { ascending: true });
 
-      providerWallet = fallbackWallets?.[0] ?? null;
+      providerWalletError = providerWalletError || error;
+
+      // Prefer on-chain capable wallets so settlement goes through Circle
+      const walletPriority = (w: { wallet_type?: string | null; wallet_address?: string | null }) => {
+        if (w.wallet_type === 'circle_custodial' && w.wallet_address && !w.wallet_address.startsWith('internal://')) return 0;
+        if (w.wallet_type === 'external' && w.wallet_address && !w.wallet_address.startsWith('internal://')) return 1;
+        return 2;
+      };
+      const sorted = (providerWallets || []).sort((a, b) => walletPriority(a) - walletPriority(b));
+      providerWallet = sorted[0] ?? null;
     }
 
     if (providerWalletError || !providerWallet) {
@@ -956,19 +969,67 @@ app.post('/pay', async (c) => {
             .eq('id', transfer.id);
         }
 
-        // Also update DB ledger balances for consistency (fee splitting via RPC)
-        const { data: ledgerSettlement } = await supabase
-          .rpc('settle_x402_payment', {
-            p_consumer_wallet_id: wallet.id,
-            p_provider_wallet_id: providerWallet.id,
-            p_gross_amount: auth.amount,
-            p_net_amount: netAmount,
-            p_transfer_id: transfer.id,
-            p_tenant_id: ctx.tenantId,
-          });
+        // Sync DB balances from Circle API (authoritative source for custodial wallets)
+        let consumerNewBalance = 0;
+        let providerNewBalance = 0;
+        const consumerIsCircle = wallet.wallet_type === 'circle_custodial';
+        const providerIsCircle = providerWalletFull?.wallet_type === 'circle_custodial';
+
+        if (consumerIsCircle || providerIsCircle) {
+          try {
+            const { getCircleClient } = await import('../services/circle/client.js');
+            const circle = getCircleClient();
+
+            if (consumerIsCircle && wallet.provider_wallet_id) {
+              const bal = await circle.getUsdcBalance(wallet.provider_wallet_id);
+              consumerNewBalance = bal.formatted;
+              await supabase
+                .from('wallets')
+                .update({ balance: consumerNewBalance, last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+                .eq('id', wallet.id)
+                .eq('tenant_id', ctx.tenantId);
+            }
+
+            if (providerIsCircle && providerWalletFull?.provider_wallet_id) {
+              const bal = await circle.getUsdcBalance(providerWalletFull.provider_wallet_id);
+              providerNewBalance = bal.formatted;
+              await supabase
+                .from('wallets')
+                .update({ balance: providerNewBalance, last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+                .eq('id', providerWallet.id)
+                .eq('tenant_id', ctx.tenantId);
+            }
+          } catch (syncErr: any) {
+            console.warn(`[x402] Post-settlement Circle balance sync failed, using optimistic math: ${syncErr.message}`);
+            // Optimistic fallback
+            const srcBal = typeof wallet.balance === 'string' ? parseFloat(wallet.balance) : wallet.balance;
+            consumerNewBalance = srcBal - auth.amount;
+            await supabase
+              .from('wallets')
+              .update({ balance: consumerNewBalance, updated_at: new Date().toISOString() })
+              .eq('id', wallet.id)
+              .eq('tenant_id', ctx.tenantId);
+          }
+        } else {
+          // Non-Circle on-chain wallets: use RPC for fee splitting
+          const { data: ledgerSettlement } = await supabase
+            .rpc('settle_x402_payment', {
+              p_consumer_wallet_id: wallet.id,
+              p_provider_wallet_id: providerWallet.id,
+              p_gross_amount: auth.amount,
+              p_net_amount: netAmount,
+              p_transfer_id: transfer.id,
+              p_tenant_id: ctx.tenantId,
+            });
+          consumerNewBalance = (ledgerSettlement as any)?.consumerNewBalance || 0;
+          providerNewBalance = (ledgerSettlement as any)?.providerNewBalance || 0;
+        }
 
         settlementResult = {
-          ...(ledgerSettlement as any || { success: true, consumerNewBalance: 0, providerNewBalance: 0, settledAt: new Date().toISOString() }),
+          success: true,
+          consumerNewBalance,
+          providerNewBalance,
+          settledAt: new Date().toISOString(),
           txHash,
           settlementType: 'on_chain',
         };

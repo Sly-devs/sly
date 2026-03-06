@@ -1754,150 +1754,50 @@ export class A2ATaskProcessor {
       return this.taskService.getTask(taskId);
     }
 
-    // Small amount -- execute real wallet withdrawal
-    if (!agentCtx.walletId) {
-      await this.taskService.addMessage(taskId, 'agent', [
-        { text: 'No wallet found for this agent. Cannot process payment.' },
-      ]);
-      await this.taskService.updateTaskState(taskId, 'failed', 'No wallet available');
-      return this.taskService.getTask(taskId);
-    }
-
-    // Check wallet balance
-    const balanceResult = await toolHandlers.get_wallet_balance(this.supabase, agentCtx, { walletId: agentCtx.walletId });
-    if (!balanceResult.success || !balanceResult.data) {
-      await this.taskService.addMessage(taskId, 'agent', [
-        { text: `Could not check wallet balance: ${balanceResult.error?.message || 'Unknown error'}` },
-      ]);
-      await this.taskService.updateTaskState(taskId, 'failed', 'Wallet balance check failed');
-      return this.taskService.getTask(taskId);
-    }
-
-    const wallet = balanceResult.data as { id: string; balance: number; currency: string; status: string; name: string };
-    const currentBalance = Number(wallet.balance);
-
-    if (currentBalance < intent.amount) {
-      await this.taskService.addMessage(taskId, 'agent', [
-        {
-          text: `Insufficient balance. Wallet has ${currentBalance} ${wallet.currency}, but ${intent.amount} ${intent.currency} is required.`,
-        },
-        {
-          data: {
-            type: 'insufficient_balance',
-            available: currentBalance,
-            required: intent.amount,
-            currency: wallet.currency,
-          },
-          metadata: { mimeType: 'application/json' },
-        },
-      ]);
-      await this.taskService.updateTaskState(taskId, 'failed', 'Insufficient balance');
-      return this.taskService.getTask(taskId);
-    }
-
-    // Atomically deduct balance — prevents double-spend via concurrent tasks
-    const { data: updatedWallet, error: updateError } = await this.supabase.rpc('atomic_wallet_deduct', {
-      p_wallet_id: agentCtx.walletId,
-      p_tenant_id: this.tenantId,
-      p_amount: intent.amount,
-    });
-
-    // Fallback: if RPC doesn't exist yet, use conditional UPDATE
-    if (updateError?.message?.includes('function') || updateError?.code === '42883') {
-      const { data: deducted, error: fallbackError } = await this.supabase
-        .from('wallets')
-        .update({ balance: currentBalance - intent.amount })
-        .eq('id', agentCtx.walletId)
-        .eq('tenant_id', this.tenantId)
-        .gte('balance', intent.amount)
-        .select('balance')
-        .single();
-
-      if (fallbackError || !deducted) {
-        await this.taskService.updateTaskState(taskId, 'failed', 'Wallet update failed — balance may have changed');
-        return this.taskService.getTask(taskId);
-      }
-    } else if (updateError) {
-      await this.taskService.updateTaskState(taskId, 'failed', 'Wallet update failed');
-      return this.taskService.getTask(taskId);
-    }
-
-    // Look up parent account for transfer record
-    const { data: parentAccount } = await this.supabase
-      .from('accounts')
-      .select('id, name')
-      .eq('id', agentCtx.accountId)
+    // Determine caller agent (the one sending the task / paying)
+    const { data: taskRow } = await this.supabase
+      .from('a2a_tasks')
+      .select('client_agent_id')
+      .eq('id', taskId)
       .eq('tenant_id', this.tenantId)
       .single();
 
-    const accountName = parentAccount?.name || 'Agent Account';
+    const callerAgentId = taskRow?.client_agent_id;
+    // agentCtx = the provider agent processing this task
+    // callerAgentId = the caller agent who sent the task (source of funds)
+    const fromAgentId = callerAgentId || agentCtx.agentId;
 
-    // Create transfer record
-    const { data: transfer, error: transferError } = await this.supabase
-      .from('transfers')
-      .insert({
-        tenant_id: this.tenantId,
-        type: 'internal',
-        status: 'completed',
-        amount: intent.amount,
-        currency: intent.currency,
-        destination_amount: intent.amount,
-        destination_currency: intent.currency,
-        fx_rate: 1,
-        fee_amount: 0,
-        description: intent.description || `A2A payment: ${intent.amount} ${intent.currency}`,
-        from_account_id: agentCtx.accountId,
-        from_account_name: accountName,
-        to_account_id: agentCtx.accountId,
-        to_account_name: accountName,
-        initiated_by_type: 'agent',
-        initiated_by_id: agentCtx.agentId,
-        initiated_by_name: accountName,
-        completed_at: new Date().toISOString(),
-      })
-      .select('id')
-      .single();
+    // Use settleRealWalletPayment for proper agent-to-agent on-chain settlement
+    const paymentResult = await this.paymentHandler.settleRealWalletPayment(
+      taskId,
+      fromAgentId,
+      agentCtx.agentId,
+      intent.amount,
+      intent.currency,
+    );
 
-    if (transferError || !transfer) {
-      console.error(`[A2A Processor] Transfer creation failed:`, transferError?.message, transferError?.details, transferError?.code);
-      // Rollback wallet balance on transfer creation failure (additive to avoid overwriting concurrent changes)
-      const { data: currentWallet } = await this.supabase
-        .from('wallets')
-        .select('balance')
-        .eq('id', agentCtx.walletId)
-        .eq('tenant_id', this.tenantId)
-        .single();
-      if (currentWallet) {
-        await this.supabase
-          .from('wallets')
-          .update({ balance: Number(currentWallet.balance) + intent.amount })
-          .eq('id', agentCtx.walletId)
-          .eq('tenant_id', this.tenantId);
-      }
-
-      await this.taskService.updateTaskState(taskId, 'failed', `Transfer creation failed: ${transferError?.message || 'unknown'}`);
+    if (!paymentResult.success) {
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `Payment failed: ${paymentResult.error}` },
+      ]);
+      await this.taskService.updateTaskState(taskId, 'failed', paymentResult.error || 'Payment failed');
       return this.taskService.getTask(taskId);
     }
 
-    // Link the transfer to the task
-    await this.taskService.linkPayment(taskId, transfer.id);
-
-    const rail = intent.currency === 'BRL' ? 'pix' : intent.currency === 'MXN' ? 'spei' : 'x402';
-    const settlement = intent.currency === 'USDC' ? 'instant' : '< 30 minutes';
+    const settlement = paymentResult.txHash ? 'on_chain' : 'ledger';
 
     await this.taskService.addMessage(taskId, 'agent', [
       {
-        text: `Payment of ${intent.amount} ${intent.currency} processed successfully. Transfer ID: ${transfer.id}. Rail: ${rail}. Settlement: ${settlement}.`,
+        text: `Payment of ${intent.amount} ${intent.currency} processed successfully. Transfer ID: ${paymentResult.transferId}. Settlement: ${settlement}.${paymentResult.txHash ? ` Tx: ${paymentResult.txHash}` : ''}`,
       },
       {
         data: {
           type: 'transfer_initiated',
-          transferId: transfer.id,
+          transferId: paymentResult.transferId,
           amount: intent.amount,
           currency: intent.currency,
-          rail,
-          estimatedSettlement: settlement,
-          walletBalance: currentBalance - intent.amount,
+          settlement,
+          txHash: paymentResult.txHash || null,
         },
         metadata: { mimeType: 'application/json' },
       },
@@ -1913,10 +1813,11 @@ export class A2ATaskProcessor {
         {
           data: {
             receipt: true,
-            transferId: transfer.id,
+            transferId: paymentResult.transferId,
             amount: intent.amount,
             currency: intent.currency,
-            rail,
+            settlement,
+            txHash: paymentResult.txHash || null,
             status: 'completed',
             processedAt: new Date().toISOString(),
           },

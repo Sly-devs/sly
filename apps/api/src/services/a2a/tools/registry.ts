@@ -180,10 +180,10 @@ export class AgentToolRegistry {
 
     if (!agent || agent.status !== 'active') return null;
 
-    // Load wallet managed by this agent
+    // Load wallet managed by this agent (include wallet details for context)
     const { data: wallet } = await this.supabase
       .from('wallets')
-      .select('id')
+      .select('id, wallet_address, wallet_type, balance')
       .eq('managed_by_agent_id', agentId)
       .eq('tenant_id', tenantId)
       .limit(1)
@@ -211,6 +211,9 @@ export class AgentToolRegistry {
       agentId,
       accountId: agent.parent_account_id,
       walletId: wallet?.id,
+      walletAddress: wallet?.wallet_address || undefined,
+      walletType: wallet?.wallet_type || undefined,
+      walletBalance: wallet?.balance ? parseFloat(wallet.balance) : undefined,
       mandateIds: (mandates || []).map((m: any) => m.id),
       permissions,
       currentTaskId: taskId,

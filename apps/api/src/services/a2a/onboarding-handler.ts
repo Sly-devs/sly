@@ -190,30 +190,165 @@ export async function handleRegisterAgent(
     );
   }
 
-  // Auto-create wallet if parent account exists
+  // Handle wallet: BYOW or auto-create
   let walletId: string | null = null;
-  if (parentAccountId) {
-    const walletAddress = `internal://sly/${tenantId}/${parentAccountId}/agent/${agent.id}`;
-    const { data: wallet, error: walletError } = await supabase
-      .from('wallets')
-      .insert({
-        tenant_id: tenantId,
-        owner_account_id: parentAccountId,
-        managed_by_agent_id: agent.id,
-        balance: 0,
-        currency: 'USDC',
-        wallet_address: walletAddress,
-        network: 'internal',
-        status: 'active',
-        wallet_type: 'internal',
-        name: `${name.trim()} Wallet`,
-        purpose: `Auto-created via A2A register_agent`,
-      })
-      .select('id')
-      .single();
+  const byowAddress = payload.wallet_address as string | undefined;
+  const byowSignature = payload.signature as string | undefined;
+  const byowMessage = payload.message as string | undefined;
 
-    if (!walletError && wallet) {
-      walletId = wallet.id;
+  if (byowAddress && byowSignature && byowMessage) {
+    // BYOW: Verify wallet signature and link external wallet
+    try {
+      const { getWalletVerificationService } = await import('../../services/wallet/index.js');
+      const verificationService = getWalletVerificationService();
+      const verifyResult = await verificationService.verifyPersonalSign(
+        byowAddress,
+        byowSignature,
+        byowMessage,
+      );
+
+      if (verifyResult.verified) {
+        const now = new Date().toISOString();
+        // Update agent with verified wallet address
+        await supabase
+          .from('agents')
+          .update({
+            wallet_address: byowAddress.toLowerCase(),
+            wallet_verification_status: 'verified',
+            wallet_verified_at: now,
+          })
+          .eq('id', agent.id)
+          .eq('tenant_id', tenantId);
+
+        // Create external wallet record
+        const ownerAccountId = parentAccountId || agent.id;
+        if (parentAccountId) {
+          const { data: wallet } = await supabase
+            .from('wallets')
+            .insert({
+              tenant_id: tenantId,
+              owner_account_id: parentAccountId,
+              managed_by_agent_id: agent.id,
+              balance: 0,
+              currency: 'USDC',
+              wallet_address: byowAddress.toLowerCase(),
+              network: 'base-sepolia',
+              status: 'active',
+              wallet_type: 'external',
+              custody_type: 'self',
+              provider: 'byow',
+              verification_status: 'verified',
+              verified_at: now,
+              name: `${name.trim()} BYOW Wallet`,
+              purpose: 'Agent BYOW wallet via A2A register_agent',
+            })
+            .select('id')
+            .single();
+          if (wallet) walletId = wallet.id;
+        }
+      } else {
+        console.warn(`[A2A Onboarding] BYOW signature verification failed for ${byowAddress}: ${verifyResult.error}`);
+        // Fall through to auto-create internal wallet
+      }
+    } catch (err) {
+      console.warn('[A2A Onboarding] BYOW verification error, falling back to internal wallet:', err);
+    }
+  }
+
+  // Auto-create wallet if no BYOW wallet was linked
+  // Phase 2: Try Circle sandbox wallet first, fall back to internal
+  if (!walletId && parentAccountId) {
+    const isSandboxEnv = process.env.PAYOS_ENVIRONMENT === 'sandbox' && !!process.env.CIRCLE_API_KEY;
+
+    if (isSandboxEnv) {
+      try {
+        const { getCircleClient } = await import('../../services/circle/client.js');
+        const circle = getCircleClient();
+        const walletSetId = process.env.CIRCLE_WALLET_SET_ID;
+
+        if (walletSetId) {
+          // Use BASE-SEPOLIA for testnet (TEST_API_KEY), BASE for mainnet (LIVE_API_KEY)
+          const isTestnet = process.env.CIRCLE_API_KEY?.startsWith('TEST_API_KEY');
+          const blockchain = isTestnet ? 'BASE-SEPOLIA' : 'BASE';
+          const circleWallet = await circle.createWallet(
+            walletSetId,
+            blockchain as any,
+            `${name.trim()} Agent Wallet`,
+            agent.id,
+          );
+
+          const { data: wallet } = await supabase
+            .from('wallets')
+            .insert({
+              tenant_id: tenantId,
+              owner_account_id: parentAccountId,
+              managed_by_agent_id: agent.id,
+              balance: 0,
+              currency: 'USDC',
+              wallet_address: circleWallet.address,
+              network: 'base-sepolia',
+              status: 'active',
+              wallet_type: 'circle_custodial',
+              custody_type: 'custodial',
+              provider: 'circle',
+              provider_wallet_id: circleWallet.id,
+              provider_wallet_set_id: walletSetId,
+              provider_metadata: {
+                circle_wallet_id: circleWallet.id,
+                circle_state: circleWallet.state,
+                blockchain: 'BASE',
+                created_via: 'a2a_register_agent',
+              },
+              name: `${name.trim()} Wallet`,
+              purpose: 'Circle sandbox wallet via A2A register_agent',
+            })
+            .select('id')
+            .single();
+
+          if (wallet) {
+            walletId = wallet.id;
+            // Also store the on-chain address on the agent
+            await supabase
+              .from('agents')
+              .update({
+                wallet_address: circleWallet.address,
+                wallet_verification_status: 'verified',
+                wallet_verified_at: new Date().toISOString(),
+              })
+              .eq('id', agent.id)
+              .eq('tenant_id', tenantId);
+            console.log(`[A2A Onboarding] Created Circle wallet for agent ${agent.id}: ${circleWallet.address}`);
+          }
+        }
+      } catch (circleErr) {
+        console.warn('[A2A Onboarding] Circle wallet creation failed, falling back to internal:', circleErr);
+      }
+    }
+
+    // Fallback to internal wallet
+    if (!walletId) {
+      const walletAddress = `internal://sly/${tenantId}/${parentAccountId}/agent/${agent.id}`;
+      const { data: wallet, error: walletError } = await supabase
+        .from('wallets')
+        .insert({
+          tenant_id: tenantId,
+          owner_account_id: parentAccountId,
+          managed_by_agent_id: agent.id,
+          balance: 0,
+          currency: 'USDC',
+          wallet_address: walletAddress,
+          network: 'internal',
+          status: 'active',
+          wallet_type: 'internal',
+          name: `${name.trim()} Wallet`,
+          purpose: `Auto-created via A2A register_agent`,
+        })
+        .select('id')
+        .single();
+
+      if (!walletError && wallet) {
+        walletId = wallet.id;
+      }
     }
   }
 
@@ -593,11 +728,13 @@ export async function handleManageWallet(
       return handleWalletCheckBalance(requestId, agentId, tenantId, supabase);
     case 'fund':
       return handleWalletFund(requestId, payload, agentId, tenantId, supabase);
+    case 'link_wallet':
+      return handleWalletLink(requestId, payload, agentId, tenantId, supabase);
     default:
       return buildErrorResponse(
         requestId,
         JSON_RPC_ERRORS.INVALID_PARAMS,
-        `Unknown manage_wallet action: ${action}. Supported: check_balance, fund`,
+        `Unknown manage_wallet action: ${action}. Supported: check_balance, fund, link_wallet`,
       );
   }
 }
@@ -732,6 +869,137 @@ async function handleWalletFund(
     funded_amount: amount,
     new_balance: newBalance,
     currency,
+  });
+}
+
+// ============================================================================
+// link_wallet (manage_wallet action)
+// ============================================================================
+
+async function handleWalletLink(
+  requestId: string | number,
+  payload: Record<string, unknown>,
+  agentId: string,
+  tenantId: string,
+  supabase: SupabaseClient,
+): Promise<A2AJsonRpcResponse> {
+  const walletAddress = payload.wallet_address as string;
+  const signature = payload.signature as string;
+  const message = payload.message as string;
+
+  if (!walletAddress || !walletAddress.startsWith('0x') || walletAddress.length !== 42) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INVALID_PARAMS,
+      'wallet_address must be a valid Ethereum address (0x... 42 chars)',
+    );
+  }
+
+  if (!signature || !message) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INVALID_PARAMS,
+      'signature and message are required for wallet linking',
+    );
+  }
+
+  // Verify signature via EIP-191
+  try {
+    const { getWalletVerificationService } = await import('../../services/wallet/index.js');
+    const verificationService = getWalletVerificationService();
+    const result = await verificationService.verifyPersonalSign(walletAddress, signature, message);
+
+    if (!result.verified) {
+      return buildErrorResponse(
+        requestId,
+        JSON_RPC_ERRORS.INVALID_PARAMS,
+        `Wallet verification failed: ${result.error}`,
+      );
+    }
+  } catch (err: any) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INTERNAL_ERROR,
+      `Wallet verification error: ${err.message}`,
+    );
+  }
+
+  const now = new Date().toISOString();
+  const normalizedAddress = walletAddress.toLowerCase();
+
+  // Update agent with verified wallet address
+  const { error: updateError } = await supabase
+    .from('agents')
+    .update({
+      wallet_address: normalizedAddress,
+      wallet_verification_status: 'verified',
+      wallet_verified_at: now,
+      updated_at: now,
+    })
+    .eq('id', agentId)
+    .eq('tenant_id', tenantId);
+
+  if (updateError) {
+    return buildErrorResponse(requestId, JSON_RPC_ERRORS.INTERNAL_ERROR, 'Failed to update agent wallet');
+  }
+
+  // Create or update external wallet record
+  const { data: existingWallet } = await supabase
+    .from('wallets')
+    .select('id')
+    .eq('managed_by_agent_id', agentId)
+    .eq('tenant_id', tenantId)
+    .eq('wallet_type', 'external')
+    .limit(1)
+    .maybeSingle();
+
+  if (existingWallet) {
+    await supabase
+      .from('wallets')
+      .update({
+        wallet_address: normalizedAddress,
+        verification_status: 'verified',
+        verified_at: now,
+        updated_at: now,
+      })
+      .eq('id', existingWallet.id)
+      .eq('tenant_id', tenantId);
+  } else {
+    // Get parent account for wallet ownership
+    const { data: agent } = await supabase
+      .from('agents')
+      .select('parent_account_id, name')
+      .eq('id', agentId)
+      .eq('tenant_id', tenantId)
+      .single();
+
+    const ownerAccountId = agent?.parent_account_id;
+    if (ownerAccountId) {
+      await supabase.from('wallets').insert({
+        tenant_id: tenantId,
+        owner_account_id: ownerAccountId,
+        managed_by_agent_id: agentId,
+        balance: 0,
+        currency: 'USDC',
+        wallet_address: normalizedAddress,
+        network: 'base-sepolia',
+        status: 'active',
+        wallet_type: 'external',
+        custody_type: 'self',
+        provider: 'byow',
+        verification_status: 'verified',
+        verified_at: now,
+        name: `${agent?.name || 'Agent'} BYOW Wallet`,
+        purpose: 'Linked via A2A manage_wallet link_wallet',
+      });
+    }
+  }
+
+  return buildSuccessResponse(requestId, 'manage_wallet_result', {
+    action: 'link_wallet',
+    wallet_address: normalizedAddress,
+    verification_status: 'verified',
+    verified_at: now,
   });
 }
 

@@ -44,7 +44,7 @@ Every story must meet these criteria before completion:
 
 ### Foundation & Infrastructure
 - [Epic 17: Multi-Protocol Foundation](./epic-17-multi-protocol.md) ✅ - Multi-protocol payment foundation
-- [Epic 18: Agent Wallets & KYA](./epic-18-agent-wallets.md) - Agent wallets and KYA system
+- [Epic 18: Agent Wallets & Contract Policies](./epic-18-agent-wallets-contract-policies.md) - Agent wallets, spending policies, and contract governance
 - [Epic 27: Settlement System](./epic-27-settlement.md) ✅ - Settlement infrastructure
 
 ### x402 & Performance
@@ -106,6 +106,13 @@ Every story must meet these criteria before completion:
 - [Epic 58: A2A Task Processor Worker](./epic-58-a2a-task-processor.md) ⚙️ - Background worker for processing A2A tasks with LLM handlers, tool registry, and payment gating
 - [Epic 60: A2A Agent Onboarding Skills](./epic-60-a2a-agent-onboarding-skills.md) 🎫 ✅ - Register, update, and inspect agents via A2A message/send
 
+### Agent Contracting Governance ⭐ NEW
+- [Epic 18: Agent Wallets & Contract Policies](./epic-18-agent-wallets-contract-policies.md) 🤖 - Contract policy engine, per-counterparty exposure, negotiation guardrails (expanded from 23→35 pts)
+- [Epic 29: Workflow Engine](./epic-29-workflow-engine.md) ⚙️ - Expanded with contract governance conditions + escrow/reputation actions (42→52 pts)
+- [Epic 62: Escrow Orchestration](./epic-62-escrow-orchestration.md) 🔐 - Wrap AgentEscrowProtocol with governance, kill switch, settlement to Pix/SPEI
+- [Epic 63: External Reputation Bridge](./epic-63-external-reputation-bridge.md) 🛡️ - Unified trust score from ERC-8004, Mnemom, Vouched/MCP-I, escrow history
+- [Epic 64: OpenClaw Governance Skill](./epic-64-openclaw-governance-skill.md) 🧩 - Python skill for ClawHub routing contracting through Sly governance
+
 ### Future Considerations (P2/P3)
 - [Epic 37: Facilitator-as-a-Service](./epic-37-facilitator-as-a-service.md) 🏭 - x402 facilitator for LATAM ecosystem
 - [Epic 38: Payment-Optimized Chains](./epic-38-payment-optimized-chains.md) ⛓️ - Tempo & future chain integration
@@ -163,8 +170,12 @@ Strategic explorations before committing to implementation:
 | Epic 59: User Onboarding & SSO | P0 | 69 | Fix signup, team invites, SSO, agent self-registration |
 | Epic 58: A2A Task Processor | P0 | 119 | Background worker, LLM handlers, payment gating |
 | Epic 55: Demo Readiness | P0 | 89 | Seed data + demo UI for 8 scenarios |
-| Epic 29: Workflow Engine | P0 | 52 | Multi-step workflows |
+| Epic 29: Workflow Engine | P0 | 52 | Multi-step workflows (expanded for contracting) |
 | Epic 41: On-Ramp | P1 | 110 | Non-crypto customers |
+| Epic 18: Agent Wallets & Contract Policies | P0 | 35 | Expanded: contract policies, counterparty exposure |
+| Epic 62: Escrow Orchestration | P0 | 38 | Agent contract escrow with governance |
+| Epic 63: External Reputation Bridge | P0 | 25 | Unified trust score aggregation |
+| Epic 64: OpenClaw Governance Skill | P1 | 10 | ClawHub skill for governed contracting |
 
 ### Planned (P0/P1) 📋
 
@@ -404,4 +415,4 @@ Sly supports **FIVE** agentic payment and communication protocols:
 
 ---
 
-*Last updated: February 21, 2026*
+*Last updated: March 1, 2026*

@@ -10,6 +10,9 @@ export interface AgentContext {
   agentId: string;
   accountId: string;
   walletId?: string;
+  walletAddress?: string;
+  walletType?: string;
+  walletBalance?: number;
   mandateIds: string[];
   permissions: string[];
   currentTaskId?: string;

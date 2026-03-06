@@ -237,7 +237,7 @@ export default function A2ASessionsPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-right text-muted-foreground">
-                        {formatDate(session.lastTaskAt)}
+                        {formatDate(session.lastTaskAt, { hour: 'numeric', minute: '2-digit' })}
                       </TableCell>
                     </TableRow>
                   ))

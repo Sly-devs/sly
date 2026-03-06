@@ -889,43 +889,152 @@ app.post('/pay', async (c) => {
 
     // ============================================
     // 11. BATCH SETTLEMENT (OPTIMIZED)
+    // Dual path: SQL ledger (internal) or on-chain (Circle/external)
     // ============================================
     const t11 = Date.now();
-    
+
     // Declare outside try block for access later
     let settlementResult: {
       success: boolean;
       consumerNewBalance: number;
       providerNewBalance: number;
       settledAt: string;
+      txHash?: string;
+      settlementType?: string;
     };
 
     try {
-      const { data: settlementData, error: settlementError } = await supabase
-        .rpc('settle_x402_payment', {
-          p_consumer_wallet_id: wallet.id,
-          p_provider_wallet_id: providerWallet.id,
-          p_gross_amount: auth.amount,
-          p_net_amount: netAmount,
-          p_transfer_id: transfer.id,
-          p_tenant_id: ctx.tenantId
-        });
-      
-      timings['11_settlement'] = Date.now() - t11;
+      const consumerWalletType = wallet.wallet_type || 'internal';
+      const isRealWallet = consumerWalletType === 'circle_custodial' || consumerWalletType === 'external';
+      const isSandboxEnv = process.env.PAYOS_ENVIRONMENT === 'sandbox';
 
-      if (settlementError) {
-        console.error('Batch settlement failed:', settlementError);
-        return c.json({
-          error: 'Payment created but settlement failed',
-          transferId: transfer.id,
-          settlementError: settlementError.message,
-          code: 'SETTLEMENT_FAILED'
-        }, 500);
+      // Check if provider wallet supports on-chain settlement
+      const { data: providerWalletFull } = await supabase
+        .from('wallets')
+        .select('wallet_address, provider_wallet_id, wallet_type')
+        .eq('id', providerWallet.id)
+        .single();
+      const providerOnChainAddress = providerWalletFull?.wallet_address;
+      const providerIsOnChain = !!providerOnChainAddress && !providerOnChainAddress.startsWith('internal://');
+
+      if (isRealWallet && isSandboxEnv && providerIsOnChain) {
+        // ===== ON-CHAIN SETTLEMENT PATH =====
+        // Both consumer and provider wallets support on-chain transfers
+        let txHash: string | undefined;
+
+        if (consumerWalletType === 'circle_custodial' && wallet.provider_wallet_id) {
+          // Circle-to-address transfer
+          const { getCircleClient } = await import('../services/circle/client.js');
+          const circle = getCircleClient();
+          const usdcTokenId = process.env.CIRCLE_USDC_TOKEN_ID;
+
+          if (!usdcTokenId) {
+            throw new Error('CIRCLE_USDC_TOKEN_ID required for Circle settlement');
+          }
+
+          const circleTx = await circle.transferTokens(
+            wallet.provider_wallet_id,
+            usdcTokenId,
+            providerOnChainAddress,
+            auth.amount.toString(),
+            'MEDIUM',
+          );
+
+          // Poll for completion (max 30s)
+          const deadline = Date.now() + 30_000;
+          let txState = circleTx.state;
+          let finalTx = circleTx;
+          while (txState !== 'COMPLETE' && txState !== 'FAILED' && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 2000));
+            finalTx = await circle.getTransaction(circleTx.id);
+            txState = finalTx.state;
+          }
+
+          if (txState !== 'COMPLETE') {
+            // Update transfer to failed
+            await supabase
+              .from('transfers')
+              .update({ status: 'failed', protocol_metadata: { ...transfer.protocol_metadata, circle_tx_state: txState } })
+              .eq('id', transfer.id);
+            throw new Error(`Circle transfer ${txState === 'FAILED' ? 'failed' : 'timed out'}: ${circleTx.id}`);
+          }
+
+          txHash = (finalTx as any).txHash || circleTx.id;
+        } else if (consumerWalletType === 'external') {
+          // External wallet: use viem on-chain transfer
+          const { transferUsdc } = await import('../config/blockchain.js');
+
+          const result = await transferUsdc(providerOnChainAddress, auth.amount);
+          txHash = result.txHash;
+        }
+
+        // Store tx_hash on transfer
+        if (txHash) {
+          await supabase
+            .from('transfers')
+            .update({
+              status: 'completed',
+              tx_hash: txHash,
+              completed_at: new Date().toISOString(),
+              protocol_metadata: {
+                ...transfer.protocol_metadata,
+                settlement_type: 'on_chain',
+                tx_hash: txHash,
+              },
+            })
+            .eq('id', transfer.id);
+        }
+
+        // Also update DB ledger balances for consistency
+        const { data: ledgerSettlement } = await supabase
+          .rpc('settle_x402_payment', {
+            p_consumer_wallet_id: wallet.id,
+            p_provider_wallet_id: providerWallet.id,
+            p_gross_amount: auth.amount,
+            p_net_amount: netAmount,
+            p_transfer_id: transfer.id,
+            p_tenant_id: ctx.tenantId,
+          });
+
+        settlementResult = {
+          ...(ledgerSettlement as any || { success: true, consumerNewBalance: 0, providerNewBalance: 0, settledAt: new Date().toISOString() }),
+          txHash,
+          settlementType: 'on_chain',
+        };
+
+        timings['11_settlement'] = Date.now() - t11;
+        console.log(`On-chain settlement completed: tx=${txHash}`);
+
+      } else {
+        // ===== SQL LEDGER SETTLEMENT PATH (default) =====
+        const { data: settlementData, error: settlementError } = await supabase
+          .rpc('settle_x402_payment', {
+            p_consumer_wallet_id: wallet.id,
+            p_provider_wallet_id: providerWallet.id,
+            p_gross_amount: auth.amount,
+            p_net_amount: netAmount,
+            p_transfer_id: transfer.id,
+            p_tenant_id: ctx.tenantId
+          });
+
+        timings['11_settlement'] = Date.now() - t11;
+
+        if (settlementError) {
+          console.error('Batch settlement failed:', settlementError);
+          return c.json({
+            error: 'Payment created but settlement failed',
+            transferId: transfer.id,
+            settlementError: settlementError.message,
+            code: 'SETTLEMENT_FAILED'
+          }, 500);
+        }
+
+        settlementResult = {
+          ...(settlementData as any),
+          settlementType: 'ledger',
+        };
+        console.log('Batch settlement completed:', settlementResult);
       }
-
-      // Extract settlement result (balance already included!)
-      settlementResult = settlementData as typeof settlementResult;
-      console.log('Batch settlement completed:', settlementResult);
 
     } catch (error: any) {
       console.error('Settlement exception:', error);
@@ -1048,7 +1157,12 @@ app.post('/pay', async (c) => {
             currency: auth.currency
           }),
           // Legacy signature for backward compatibility
-          signature: `payos:${transfer.id}:${auth.requestId}`
+          signature: `payos:${transfer.id}:${auth.requestId}`,
+          // On-chain proof (when available)
+          ...(settlementResult.txHash && {
+            txHash: settlementResult.txHash,
+            settlementType: settlementResult.settlementType,
+          }),
         },
         
         // Performance metrics

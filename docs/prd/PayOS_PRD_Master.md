@@ -1,8 +1,8 @@
 # Sly — Product Requirements Document (PRD)
 
-**Version:** 1.22
-**Date:** January 25, 2026
-**Status:** Rebrand to Sly + Platform Architecture & Card Networks
+**Version:** 1.23
+**Date:** March 1, 2026
+**Status:** Agent Contracting Governance + Platform Architecture & Card Networks
 
 ---
 
@@ -45,6 +45,32 @@ Four agentic payment protocols are now active (x402, AP2, ACP, UCP). Sly is the 
 ---
 
 ## Version History
+
+### Version 1.23 (March 1, 2026)
+**Agent Contracting Governance — 5 Epics for Moltbook/OpenClaw Integration**
+
+Gap analysis of the OpenClaw/Moltbook agent-to-agent contracting ecosystem identified 5 capabilities needed to position Sly as the governed settlement layer for autonomous agent contracts. Three are new epics; two are expansions of existing epics.
+
+**New Epics:**
+- **Epic 62: Escrow Orchestration** (38 pts, P0) — Wrap AgentEscrowProtocol on Base with enterprise governance: pre-escrow authorization, lifecycle monitoring, release governance, kill switch, and settlement to local rails (Pix/SPEI)
+- **Epic 63: External Reputation Bridge** (25 pts, P0) — Read-only aggregation of ERC-8004, Mnemom, Vouched/MCP-I, and on-chain escrow history into unified 0–1000 trust score. Policy engine references tiers for counterparty gating
+- **Epic 64: OpenClaw Governance Skill** (10 pts, P1) — Python skill package published to ClawHub that routes Moltbook agent contracting actions through Sly governance APIs
+
+**Expanded Epics:**
+- **Epic 18: Agent Wallets & Contract Policies** (23 → 35 pts) — Added 3 stories: Contract Policy Engine (18.7), Per-Counterparty Exposure Tracking (18.8), Negotiation Guardrails API (18.9)
+- **Epic 29: Workflow Engine** (42 → 52 pts) — Expanded Stories 29.4 and 29.5 with contract governance expressions and escrow/reputation action types
+
+**Strategic Impact:**
+- Positions Sly as governance infrastructure for 1.5M+ Moltbook agents
+- Escrow-to-local-rail settlement is unique differentiator (USDC → BRL via Pix after escrow release)
+- 148 total new/revised points across 6-week implementation plan
+- Dependency chain: Epic 18 + 29 (parallel) → Epic 62 + 63 (parallel) → Epic 64
+
+**Documentation:**
+- Epic docs: `docs/prd/epics/epic-62-escrow-orchestration.md`, `epic-63-external-reputation-bridge.md`, `epic-64-openclaw-governance-skill.md`
+- Updated: `docs/prd/epics/epic-18-agent-wallets-contract-policies.md`, `epic-29-workflow-engine.md`
+
+---
 
 ### Version 1.21 (January 21, 2026)
 **Platform Architecture & Card Network Epics**
@@ -328,7 +354,7 @@ Sly is now the **only settlement infrastructure** supporting all three agentic p
 | Epic | Name | Phase | Priority | Status | Points | Stories | Doc |
 |------|------|-------|----------|--------|--------|---------|-----|
 | 17 | Multi-Protocol Gateway 🔌 | 3 | P1 | ✅ Complete | 53 | 12/12 | [View](./epics/epic-17-multi-protocol.md) |
-| 18 | Agent Wallets & Spending Policies 🤖 | 3.5 | P1 | 📋 Pending | 23 | 0/6 | [View](./epics/epic-18-agent-wallets.md) |
+| 18 | Agent Wallets & Contract Policies 🤖 | 5.2 | P0 | 📋 Pending | 35 | 0/9 | [View](./epics/epic-18-agent-wallets-contract-policies.md) |
 | 19 | Sly x402 Services 🍾 | 3.5 | P2 | 📋 Pending | 22 | 0/5 | — |
 | 20 | Streaming Payments & Agent Registry 🌊 | 3.5 | P2 | 📋 Pending | 18 | 0/5 | — |
 | 21 | Code Coverage Improvement 📊 | — | P3 | 📋 Pending | 112 | 0/13 | — |
@@ -367,6 +393,9 @@ Sly is now the **only settlement infrastructure** supporting all three agentic p
 | **59** | **User Onboarding, SSO & Agent Self-Registration 🔐** | **3.5** | **P0** | **✅ Complete** | **69** | **16/16** | **[View](./epics/epic-59-user-onboarding-sso-agent-signup.md)** |
 | **60** | **A2A Agent Onboarding Skills 🎫** | **5.2** | **P0** | **✅ Complete** | **28** | **8/8** | **[View](./epics/epic-60-a2a-agent-onboarding-skills.md)** |
 | **61** | **Agent Wallet Identity & Verification 🔗** | **5.2** | **P2** | **📋 Planned** | **TBD** | **0/TBD** | **[View](./epics/epic-61-agent-wallet-identity.md)** |
+| **62** | **Escrow Orchestration 🔐** | **5.3** | **P0** | **📋 Planned** | **38** | **0/9** | **[View](./epics/epic-62-escrow-orchestration.md)** |
+| **63** | **External Reputation Bridge 🛡️** | **5.3** | **P0** | **📋 Planned** | **25** | **0/7** | **[View](./epics/epic-63-external-reputation-bridge.md)** |
+| **64** | **OpenClaw Governance Skill 🧩** | **5.4** | **P1** | **📋 Planned** | **10** | **0/4** | **[View](./epics/epic-64-openclaw-governance-skill.md)** |
 
 **Summary:**
 - **Foundation Complete:** Epics 1-16 (Phase 1-2) fully implemented
@@ -380,10 +409,17 @@ Sly is now the **only settlement infrastructure** supporting all three agentic p
   - Epic 51: Unified Onboarding (protocol-specific flows)
   - Epic 52: Dashboard Redesign (agentic protocol focus)
   - Epic 53: Card Network Agentic Commerce (Visa VIC + Mastercard Agent Pay)
+- **📋 Agent Contracting Governance (NEW):** Epics 18, 29, 62-64 — 148 points
+  - Epic 18: Agent Wallets & Contract Policies (35 pts, expanded)
+  - Epic 29: Workflow Engine (52 pts, expanded)
+  - Epic 62: Escrow Orchestration (38 pts, new)
+  - Epic 63: External Reputation Bridge (25 pts, new)
+  - Epic 64: OpenClaw Governance Skill (10 pts, new)
 - **Total Completed:** ~497 points across 13 epics
 - **Current Focus:** ~65 points (Epics 48-50)
 - **Next Priority:** ~135 points (Epics 51-53)
-- **AI-Native Remaining:** Epic 29 (Workflow Engine), Epic 32 (Tool Discovery)
+- **Agent Contracting:** ~148 points (Epics 18, 29, 62-64)
+- **AI-Native Remaining:** Epic 32 (Tool Discovery)
 - **Production Hardening:** Epics 44-46 (Observability, Webhooks, DR) — placeholders for scale phase
 
 ---
@@ -668,15 +704,101 @@ Sly's Identity 3 positioning as "AI-Native Settlement OS" requires infrastructur
 
 | Epic | Name | Points | Priority | Status |
 |------|------|--------|----------|--------|
-| 28 | Simulation Engine 🔮 | 24 | P0 | Pending |
-| 29 | Workflow Engine ⚙️ | 42 | P0/P1 | Pending |
-| 30 | Structured Response System 📋 | 26 | P0 | Pending |
-| 31 | Context API 🔍 | 16 | P0 | Pending |
+| 28 | Simulation Engine 🔮 | 24 | P0 | ✅ Complete |
+| 29 | Workflow Engine ⚙️ | 52 | P0/P1 | Pending |
+| 30 | Structured Response System 📋 | 26 | P0 | ✅ Complete |
+| 31 | Context API 🔍 | 16 | P0 | ✅ Complete |
 | 32 | Tool Discovery 🧭 | 11 | P0 | Pending |
 | 33 | Metadata Schema 🏷️ | 11 | P1 | Pending |
 | 34 | Transaction Decomposition 📦 | 14 | P1 | Pending |
 | 35 | Entity Onboarding API 🚀 | 14 | P1 | Pending |
-| **TOTAL** | | **158** | | **0/8 Complete** |
+| **TOTAL** | | **168** | | **3/8 Complete** |
+
+---
+
+### Agent Contracting Governance
+
+> **Design Philosophy:** Sly governs agent contracts — we don't become a marketplace, reputation provider, or escrow protocol. We wrap existing infrastructure with enterprise-grade governance, audit trails, and last-mile settlement.
+
+#### Why Agent Contracting Matters
+
+The OpenClaw/Moltbook ecosystem (140K+ GitHub stars, 1.5M+ agents) enables autonomous agent-to-agent contracting on platforms like m/hire and ClaWork. These agents negotiate, sign contracts, lock escrow, and settle payment — all autonomously. But enterprises deploying agents on Moltbook have no governance:
+
+- No spending limits per counterparty
+- No approval workflows for large contracts
+- No reputation verification before committing funds
+- No kill switch when things go wrong
+- No settlement to local banking rails after escrow release
+
+Sly fills this gap as the **governed settlement layer** that enterprises install between their agents and the contracting ecosystem.
+
+#### Agent Contracting Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    MOLTBOOK / OPENCLAW ECOSYSTEM                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │
+│  │   m/hire     │  │  ClaWork    │  │  A2A Tasks  │                 │
+│  │  Job Board   │  │  Contracts  │  │  (Epic 57)  │                 │
+│  └──────┬───────┘  └──────┬──────┘  └──────┬──────┘                 │
+└─────────┼─────────────────┼────────────────┼────────────────────────┘
+          │                 │                │
+          ▼                 ▼                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│              SLY GOVERNANCE LAYER (Epics 18, 29, 62-64)             │
+│                                                                      │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │              OpenClaw Governance Skill (Epic 64)               │  │
+│  │   Contract Discovery → Negotiation → Escrow → Settlement      │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                │                                     │
+│  ┌──────────────────┐  ┌──────┴───────────┐  ┌──────────────────┐  │
+│  │  Contract Policy  │  │     Workflow     │  │    Reputation    │  │
+│  │  Engine (Epic 18) │  │  Engine (Epic 29)│  │  Bridge (Epic 63)│  │
+│  │  Per-counterparty │  │  Approval chains │  │  ERC-8004        │  │
+│  │  limits, type     │  │  Condition logic │  │  Mnemom          │  │
+│  │  restrictions,    │  │  Timeout/escalate│  │  Vouched/MCP-I   │  │
+│  │  reputation gate  │  │                  │  │  Escrow history  │  │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘  │
+│                                │                                     │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │              Escrow Orchestration (Epic 62)                    │  │
+│  │  Pre-authorization → On-chain lock → Lifecycle monitor →      │  │
+│  │  Release governance → Kill switch → Settlement to Pix/SPEI   │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         SETTLEMENT RAILS                             │
+│    Circle USDC     │     Pix (Brazil)    │    SPEI (Mexico)         │
+│    Base Chain      │     BCB Real-time   │    Banxico Real-time     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### Agent Contracting Epics Summary
+
+| Epic | Name | Points | Priority | Status |
+|------|------|--------|----------|--------|
+| 18 | Agent Wallets & Contract Policies 🤖 | 35 | P0 | Pending |
+| 29 | Workflow Engine ⚙️ | 52 | P0/P1 | Pending |
+| 62 | Escrow Orchestration 🔐 | 38 | P0 | Planned |
+| 63 | External Reputation Bridge 🛡️ | 25 | P0 | Planned |
+| 64 | OpenClaw Governance Skill 🧩 | 10 | P1 | Planned |
+| **TOTAL** | | **160** | | **0/5 Complete** |
+
+#### Implementation Sequence
+
+```
+Sprint 1 (Weeks 1-2): Epic 18 P0 + Epic 29 P0 + Epic 63 core     ~43 pts
+                       (wallets + policies + workflow core + ERC-8004)
+    ↓
+Sprint 2 (Weeks 3-4): Epic 18 P1 + Epic 29 P1 + Epic 63 rest     ~48 pts
+                       + Epic 62 P0 (escrow foundation)
+    ↓
+Sprint 3 (Weeks 5-6): Epic 62 P1 + Epic 29 P2 + Epic 64          ~33 pts
+                       (settlement + dashboard + OpenClaw skill)
+```
 
 ---
 
@@ -765,12 +887,15 @@ Sly's Identity 3 positioning as "AI-Native Settlement OS" requires infrastructur
 ## Quick Links
 
 ### Epic Documentation
-- **[Epic 43: UCP Integration](./epics/epic-43-ucp-integration.md)** 🚧 **In Progress** — Google+Shopify protocol (7/14 stories)
+- **[Epic 62: Escrow Orchestration](./epics/epic-62-escrow-orchestration.md)** 📋 **Planned** — Agent contract escrow with governance
+- **[Epic 63: External Reputation Bridge](./epics/epic-63-external-reputation-bridge.md)** 📋 **Planned** — Unified trust score from ERC-8004, Mnemom, Vouched
+- **[Epic 64: OpenClaw Governance Skill](./epics/epic-64-openclaw-governance-skill.md)** 📋 **Planned** — ClawHub skill for governed contracting
+- [Epic 18: Agent Wallets & Contract Policies](./epics/epic-18-agent-wallets-contract-policies.md) 📋 Pending — Expanded for contracting governance
+- [Epic 43: UCP Integration](./epics/epic-43-ucp-integration.md) ✅ Complete — Google+Shopify protocol
 - [Epic 47: UCP Merchant Gateway](./epics/epic-47-ucp-merchant-gateway.md) 📋 Backlog — Non-Shopify merchant support
 - [Epic 17: Multi-Protocol Gateway](./epics/epic-17-multi-protocol.md) ✅ Complete
-- [Epic 18: Agent Wallets](./epics/epic-18-agent-wallets.md) 📋 Next
-- [Epic 27: Settlement Hardening](./epics/epic-27-settlement.md) 📋 High Priority
-- [Epic 28: Simulation Engine](./epics/epic-28-simulation.md) 📋 Pending
+- [Epic 27: Settlement Hardening](./epics/epic-27-settlement.md) ✅ Complete
+- [Epic 29: Workflow Engine](./epics/epic-29-workflow-engine.md) 📋 Pending — Expanded for contract governance
 
 ### Investigations
 - **[UCP Integration Investigation](./investigations/ucp-integration.md)** — Full protocol analysis

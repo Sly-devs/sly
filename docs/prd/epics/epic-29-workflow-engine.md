@@ -1,472 +1,453 @@
-# Epic 29: Workflow Engine ⚙️
+# Epic 29: Workflow Engine
 
 **Status:** Pending
-**Phase:** AI-Native Foundation
-**Priority:** P0 (core), P1 (advanced steps), P2 (agentic composition)
-**Total Points:** 52 (was 42, +10 for agentic composition)
-**Stories:** 0/13 Complete
+**Phase:** 6 (AI-Native Infrastructure)
+**Priority:** P0 (core) / P1 (advanced steps)
+**Estimated Points:** 52
+**Stories:** 11 (0 complete)
 **Dependencies:** None
-**Enables:** Approvals, Batch Processing, Compliance Flows, Agentic Composition
+**Created:** March 1, 2026
 
-[← Back to Master PRD](../PayOS_PRD_Master.md)
+[← Back to Epic List](./README.md)
 
 ---
 
-## Overview
+## Executive Summary
 
 The Workflow Engine provides composable, multi-step processes configured per-partner. Instead of hard-coding "approval workflows for procurement," we build a generic system that handles approvals, batch processing, conditional logic, and multi-stage operations.
 
-**NEW (v1.15):** Agentic Composition support enables AI agents to orchestrate workflows, advancing multi-step processes and chaining PayOS capabilities with external services.
+Originally specced at 42 points / 11 stories in PRD v1.14, this epic is revised to **52 points** with expanded Stories 29.4 and 29.5 to support agent contracting governance. The structural design is unchanged — the extensions add reputation-aware condition expressions and escrow/contract-specific action types.
+
+**For agent contracting, this is the critical governance primitive:**
+- Every contract above a threshold needs approval chains
+- Every escrow release needs authorization
+- Every new counterparty needs compliance review
+- The engine handles all of these through the same configurable step system
+
+**Key Design Decision — Workflows are Configured, Not Coded:**
+Partners define workflow templates via API or dashboard. Steps are composable: mix approvals, conditions, actions, waits, and notifications. Same workflow handles both human and agent actors.
 
 ---
 
-## Design Principles
+## SDK Impact Assessment
 
-1. **Workflows are configured, not coded** — Partners define via API/dashboard
-2. **Steps are composable** — Mix approvals, waits, conditions, actions
-3. **Actors can be humans or agents** — Same workflow, different executors
-4. **State is inspectable** — "Where is this workflow? Who's blocking?"
-5. **Agent-drivable** — AI agents can initiate and advance workflows ⭐ NEW
-
----
-
-## Step Types
-
-| Step Type | Purpose | Example Use |
-|-----------|---------|-------------|
-| `approval` | Require human/agent sign-off | Manager approval for >$1K |
-| `condition` | Branch based on expression | If amount > $10K → CFO review |
-| `action` | Execute PayOS operation | Run the transfer |
-| `wait` | Pause until condition/time | Wait for rate lock window |
-| `notification` | Send webhook/email | Notify requester |
-| `external` | Call external API ⭐ NEW | Fetch data from ERP |
+| Feature/Endpoint | Needs SDK? | Module | Priority | Notes |
+|------------------|------------|--------|----------|-------|
+| `POST /v1/workflows/templates` | ✅ Yes | `sly.workflows` | P0 | Create template |
+| `GET /v1/workflows/templates` | ✅ Yes | `sly.workflows` | P0 | List templates |
+| `POST /v1/workflows/instances` | ✅ Yes | `sly.workflows` | P0 | Trigger workflow |
+| `POST /v1/workflows/instances/:id/steps/:n/approve` | ✅ Yes | `sly.workflows` | P0 | Approve step |
+| `POST /v1/workflows/instances/:id/steps/:n/reject` | ✅ Yes | `sly.workflows` | P0 | Reject step |
+| `GET /v1/workflows/pending` | ✅ Yes | `sly.workflows` | P1 | Pending approvals |
+| Dashboard workflow builder | ❌ No | - | - | Frontend only |
 
 ---
 
-## Example: Procurement Approval Workflow
+## Architecture
 
-```json
-{
-  "name": "Procurement Approval",
-  "trigger_type": "on_transfer",
-  "trigger_config": {
-    "conditions": [{ "field": "metadata.type", "op": "eq", "value": "procurement" }]
-  },
-  "steps": [
-    {
-      "type": "condition",
-      "name": "Check Amount Tier",
-      "config": {
-        "expression": "trigger.amount <= 1000",
-        "if_true": "skip_to:3",
-        "if_false": "continue"
-      }
-    },
-    {
-      "type": "approval",
-      "name": "CFO Approval",
-      "config": {
-        "approvers": { "type": "role", "value": "cfo" },
-        "timeout_hours": 48
-      }
-    },
-    {
-      "type": "approval",
-      "name": "Manager Approval",
-      "config": {
-        "approvers": { "type": "role", "value": "finance_manager" },
-        "timeout_hours": 24
-      }
-    },
-    {
-      "type": "action",
-      "name": "Execute Payment",
-      "config": {
-        "action": "execute_transfer",
-        "params": { "transfer_id": "{{trigger.id}}" }
-      }
-    }
-  ]
-}
+### Step Types
+
+| Step Type | Purpose | Contract Governance Example |
+|-----------|---------|----------------------------|
+| `approval` | Require human/agent sign-off | Manager approval for contract >$1K |
+| `condition` | Branch based on expression | If counterparty reputation <600 → deny |
+| `action` | Execute Sly operation | Create escrow, release escrow, update allowlist |
+| `wait` | Pause until condition/time | Wait for deliverable verification |
+| `notification` | Send webhook/email | Notify requester of approval status |
+
+### Data Flow
+
+```
+Trigger Event (contract proposal, escrow release, new counterparty)
+    │
+    ▼
+┌─────────────────────────────────┐
+│  Match Workflow Template         │ ◄── trigger_type + trigger_config conditions
+│  (by trigger_type & conditions) │
+└──────────┬──────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────┐
+│  Create Workflow Instance        │
+│  - Copy steps from template     │
+│  - Store trigger_data (amount,  │
+│    counterparty, reputation)    │
+│  - Set expires_at               │
+└──────────┬──────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────┐
+│  State Machine — advance through steps   │
+│                                          │
+│  condition → evaluate expression         │
+│    ├── if_true: continue / skip_to:N     │
+│    └── if_false: reject / continue       │
+│                                          │
+│  approval → pause, wait for human/agent  │
+│    ├── approved: advance                 │
+│    └── rejected: stop workflow           │
+│                                          │
+│  action → execute Sly operation          │
+│    └── store result, advance             │
+│                                          │
+│  wait → pause until time/condition       │
+│                                          │
+│  notification → fire webhook, advance    │
+└──────────┬───────────────────────────────┘
+           │
+           ▼
+       COMPLETED / REJECTED / TIMED_OUT
 ```
 
----
+### Contract Governance Templates
 
-## API Endpoints
+**Template 1 — Standard Contract Approval:**
+1. Condition: value under auto-approve threshold? → skip to action
+2. Condition: value above escalation threshold? → add CFO to approvers
+3. Approval: finance manager reviews (timeout 24h, escalates to operations)
+4. Action: authorize contract / create escrow
+5. Notification: webhook to requesting agent with status
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v1/workflows/templates` | POST | Create workflow template |
-| `/v1/workflows/templates` | GET | List templates |
-| `/v1/workflows/templates/{id}` | GET/PUT/DELETE | Manage template |
-| `/v1/workflows/instances` | POST | Manually trigger workflow |
-| `/v1/workflows/instances` | GET | List instances |
-| `/v1/workflows/instances/{id}` | GET | Get instance status |
-| `/v1/workflows/instances/{id}/steps/{n}/approve` | POST | Approve step |
-| `/v1/workflows/instances/{id}/steps/{n}/reject` | POST | Reject step |
-| `/v1/workflows/pending` | GET | My pending approvals |
-| `/v1/workflows/instances/{id}/advance` | POST | Agent advances workflow ⭐ NEW |
-| `/v1/workflows/instances/{id}/steps/{n}/complete-external` | POST | Complete external step ⭐ NEW |
+**Template 2 — New Counterparty Onboarding:**
+1. Action: query External Reputation Bridge (Epic 63)
+2. Condition: reputation meets minimum thresholds? If no → auto-deny
+3. Approval: compliance team reviews counterparty profile
+4. Action: add to allowlist
+5. Notification: update agent and audit log
+
+**Template 3 — Escrow Release Authorization:**
+1. Action: validate deliverable
+2. Condition: contract under auto-release threshold? → skip to release
+3. Approval: designated reviewer confirms deliverable quality
+4. Action: call Epic 62 escrow release
+5. Notification: both parties notified
+
+### Existing Infrastructure Reused
+
+| Component | Location | Reuse |
+|-----------|----------|-------|
+| Transfer execution | `apps/api/src/routes/transfers.ts` | `execute_transfer` action |
+| Simulation engine | Epic 28 | `execute_simulation` action |
+| Webhook delivery | `apps/api/src/services/webhooks/` (Epic 17) | Notification step |
+| Escrow service | Epic 62 | `create_escrow`, `release_escrow` actions |
+| Reputation bridge | Epic 63 | `query_reputation` action |
+| Policy engine | Epic 18 Story 18.7 | `authorize_contract` action |
 
 ---
 
 ## Stories
 
-### Core Workflow Engine (P0)
-
-| Story | Points | Priority | Description |
-|-------|--------|----------|-------------|
-| 29.1 | 5 | P0 | Workflow data model and template CRUD |
-| 29.2 | 5 | P0 | Workflow instance creation and state machine |
-| 29.3 | 5 | P0 | Approval step execution |
-| 29.4 | 3 | P0 | Condition step with expression evaluation |
-
-### Advanced Steps (P1)
-
-| Story | Points | Priority | Description |
-|-------|--------|----------|-------------|
-| 29.5 | 5 | P1 | Action step integration with transfers/simulations |
-| 29.6 | 3 | P1 | Notification step (webhook delivery) |
-| 29.7 | 3 | P1 | Wait step with scheduling |
-| 29.8 | 2 | P1 | Timeout handling and escalation |
-| 29.9 | 3 | P1 | Pending workflows API |
-
-### Dashboard & Analytics (P2)
-
-| Story | Points | Priority | Description |
-|-------|--------|----------|-------------|
-| 29.10 | 5 | P2 | Dashboard workflow builder UI |
-| 29.11 | 3 | P2 | Workflow analytics and reporting |
-
-### Agentic Composition (P2) ⭐ NEW
-
-| Story | Points | Priority | Description |
-|-------|--------|----------|-------------|
-| 29.12 | 5 | P2 | Agent-driven workflow execution |
-| 29.13 | 5 | P2 | External step type for API composition |
-
-**Total Points:** 52 (42 original + 10 new)
+### Phase 1: Core Engine
 
 ---
 
-### Story 29.12: Agent-Driven Workflow Execution (5 pts, P2) ⭐ NEW
+### Story 29.1: Workflow Data Model & Template CRUD
 
-**Priority:** P2  
-**Points:** 5  
-**Dependencies:** Story 29.2 (Workflow Instance), Story 29.3 (Approval Step)
+**Points:** 5
+**Priority:** P0
 
-#### Background
+**Description:**
+Create the workflow tables and implement template CRUD API. Templates define reusable workflow patterns.
 
-From Obsidian research on x42 Scan "composer mode":
-> Agents chain APIs together to accomplish complex tasks. PayOS workflows should be drivable by agents, not just humans.
+**Tables:**
+- `workflow_templates` — template definitions (tenant_id, name, trigger_type, trigger_config, steps JSONB, timeout_hours, on_timeout)
+- `workflow_instances` — running instances (template_id, trigger_entity_type, trigger_entity_id, trigger_data, status, current_step, step_states, outcome)
+- `workflow_step_executions` — individual step audit (instance_id, step_index, step_type, status, approval details, action results, condition results)
 
-#### Description
+**Files:**
+- New: `apps/api/supabase/migrations/XXX_workflows.sql`
+- New: `apps/api/src/routes/workflows.ts`
+- New: `apps/api/src/schemas/workflow.schema.ts`
+- New: `apps/api/src/types/workflows.ts`
 
-Allow AI agents to initiate and advance workflows, enabling agentic composition of PayOS capabilities.
-
-#### Features
-
-**1. Agent Workflow Trigger:**
-```typescript
-// Agent can trigger workflow
-POST /v1/workflows/instances
-Authorization: Bearer agent_token_...
-{
-  "template_id": "wf_procurement_approval",
-  "trigger_data": {
-    "transfer_id": "txn_123",
-    "amount": 5000,
-    "vendor": "Brazilian Supplier Ltd"
-  },
-  "agent_context": {
-    "agent_id": "agent_456",
-    "intent": "Process vendor payment",
-    "conversation_id": "conv_789"
-  }
-}
-```
-
-**2. Agent Approval:**
-```typescript
-// Agent can approve steps (if authorized)
-POST /v1/workflows/instances/{id}/steps/{n}/approve
-Authorization: Bearer agent_token_...
-{
-  "decision": "approved",
-  "reasoning": "Amount within agent spending limit, vendor pre-approved",
-  "agent_signature": "..." // Optional cryptographic proof
-}
-```
-
-**3. Agent Step Advancement:**
-```typescript
-// Agent can check and advance workflows
-POST /v1/workflows/instances/{id}/advance
-Authorization: Bearer agent_token_...
-{
-  "action": "proceed_if_ready"
-}
-```
-
-**4. Agent Approval Policies:**
-```json
-{
-  "agent_id": "agent_456",
-  "workflow_permissions": {
-    "can_initiate": ["procurement_approval", "expense_report"],
-    "can_approve": {
-      "procurement_approval": {
-        "max_amount": 1000,
-        "step_names": ["Manager Approval"]
-      }
-    }
-  }
-}
-```
-
-#### API Endpoints
-
-```
-POST /v1/workflows/instances - Create (enhanced for agent context)
-POST /v1/workflows/instances/{id}/advance - Agent advances to next available step
-GET /v1/workflows/instances/{id}/agent-actions - List actions agent can take
-POST /v1/agents/{id}/workflow-permissions - Configure agent workflow permissions
-```
-
-#### Database Schema Extension
-
-```sql
--- Track agent interactions with workflows
-ALTER TABLE workflow_instances ADD COLUMN initiated_by_agent_id UUID REFERENCES agents(id);
-ALTER TABLE workflow_instances ADD COLUMN agent_context JSONB;
-
-ALTER TABLE workflow_step_executions ADD COLUMN approved_by_agent_id UUID REFERENCES agents(id);
-ALTER TABLE workflow_step_executions ADD COLUMN agent_reasoning TEXT;
-
--- Agent workflow permissions
-CREATE TABLE agent_workflow_permissions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  agent_id UUID NOT NULL REFERENCES agents(id),
-  template_id UUID NOT NULL REFERENCES workflow_templates(id),
-  can_initiate BOOLEAN DEFAULT false,
-  can_approve BOOLEAN DEFAULT false,
-  approval_conditions JSONB,  -- max_amount, step_names, etc.
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-#### Acceptance Criteria
-
-- [ ] Agents can trigger workflows with agent_context
-- [ ] Agents can approve steps within their permission limits
-- [ ] Agent actions recorded with reasoning
-- [ ] Agent workflow permissions configurable per agent
-- [ ] API returns available actions for agent
-- [ ] Audit trail distinguishes human vs agent approvals
+**Acceptance Criteria:**
+- [ ] Migration creates all three tables with RLS
+- [ ] POST creates template with step validation (Zod schema)
+- [ ] GET list with pagination, filter by trigger_type
+- [ ] GET single returns full template with steps
+- [ ] PUT updates template (only if no active instances)
+- [ ] DELETE soft-deletes (sets `is_active=false`)
+- [ ] Validates step types: approval, condition, action, wait, notification
+- [ ] `trigger_type` supports: `manual`, `on_transfer`, `on_contract`, `on_escrow`, `on_threshold`, `scheduled`
 
 ---
 
-### Story 29.13: External Step Type for API Composition (5 pts, P2) ⭐ NEW
+### Story 29.2: Workflow Instance Creation & State Machine
 
-**Priority:** P2  
-**Points:** 5  
-**Dependencies:** Story 29.2 (Workflow Instance), Story 29.6 (Notification Step)
+**Points:** 5
+**Priority:** P0
 
-#### Background
+**Description:**
+Implement workflow instantiation and the core state machine that advances through steps.
 
-From Obsidian research on agentic composition:
-> x42 Scan "composer mode" lets agents chain APIs. Workflows should support calling external services as part of multi-step processes.
+**Files:**
+- New: `apps/api/src/services/workflow-engine.service.ts`
+- New: `apps/api/src/services/workflow-state-machine.ts`
 
-#### Description
-
-Add `external` step type that calls external APIs as part of workflow execution, enabling PayOS workflows to integrate with ERPs, CRMs, and other systems.
-
-#### Features
-
-**1. External Step Configuration:**
-```json
-{
-  "type": "external",
-  "name": "Fetch PO from ERP",
-  "config": {
-    "url": "https://erp.example.com/api/purchase-orders/{{trigger.po_number}}",
-    "method": "GET",
-    "headers": {
-      "Authorization": "Bearer {{secrets.erp_api_key}}"
-    },
-    "timeout_seconds": 30,
-    "retry_config": {
-      "max_retries": 3,
-      "backoff_ms": 1000
-    },
-    "success_condition": "response.status == 200",
-    "extract_fields": {
-      "po_amount": "response.body.total_amount",
-      "po_status": "response.body.status"
-    }
-  }
-}
-```
-
-**2. Webhook-Based Completion:**
-```json
-{
-  "type": "external",
-  "name": "Submit to Compliance System",
-  "config": {
-    "mode": "async",  // Don't wait for response
-    "url": "https://compliance.example.com/api/reviews",
-    "method": "POST",
-    "body": {
-      "transfer_id": "{{trigger.id}}",
-      "callback_url": "{{payos.webhook_url}}/workflows/{{instance.id}}/steps/2/complete"
-    },
-    "completion_timeout_hours": 24
-  }
-}
-```
-
-**3. Completion via Webhook:**
-```typescript
-// External system calls back to complete step
-POST /v1/workflows/instances/{id}/steps/{n}/complete-external
-{
-  "status": "completed",
-  "result": {
-    "compliance_status": "approved",
-    "risk_score": 0.12
-  },
-  "signature": "hmac_sha256_..."  // Verify callback authenticity
-}
-```
-
-**4. Error Handling:**
-```json
-{
-  "type": "external",
-  "config": {
-    "on_failure": "retry",  // or "skip", "fail_workflow", "human_review"
-    "failure_notification": {
-      "type": "webhook",
-      "url": "{{tenant.webhook_url}}"
-    }
-  }
-}
-```
-
-#### API Endpoints
-
-```
-POST /v1/workflows/instances/{id}/steps/{n}/complete-external - External system completes step
-GET /v1/workflows/instances/{id}/steps/{n}/callback-url - Get callback URL for external step
-POST /v1/workflows/templates/{id}/secrets - Configure template secrets
-```
-
-#### Database Schema Extension
-
-```sql
--- Store external step results
-ALTER TABLE workflow_step_executions ADD COLUMN external_request JSONB;
-ALTER TABLE workflow_step_executions ADD COLUMN external_response JSONB;
-ALTER TABLE workflow_step_executions ADD COLUMN callback_token TEXT;  -- For webhook verification
-
--- Template secrets (encrypted)
-CREATE TABLE workflow_template_secrets (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  template_id UUID NOT NULL REFERENCES workflow_templates(id),
-  secret_name TEXT NOT NULL,
-  encrypted_value TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(template_id, secret_name)
-);
-```
-
-#### Acceptance Criteria
-
-- [ ] External step type executes HTTP requests
-- [ ] Supports both sync and async (webhook) modes
-- [ ] Secrets securely stored and injected
-- [ ] Retry logic works with backoff
-- [ ] Webhook completion verifies signature
-- [ ] Extracted fields available to subsequent steps
-- [ ] Timeout handling for async steps
+**Acceptance Criteria:**
+- [ ] POST creates instance from template with trigger_data
+- [ ] State machine advances through steps sequentially
+- [ ] Handles `skip_to` directives from condition steps
+- [ ] Status transitions: pending → in_progress → completed/rejected/cancelled/timed_out
+- [ ] Step execution creates `workflow_step_executions` records
+- [ ] Concurrent instance limit per template (configurable, default 50)
+- [ ] Auto-trigger on events when trigger_type matches (`on_contract`, `on_escrow`)
+- [ ] Idempotency: same `trigger_entity_id` doesn't create duplicate instances
 
 ---
 
-## Updated Story Summary
+### Story 29.3: Approval Step Execution
 
-| Story | Points | Priority | Status | Category |
-|-------|--------|----------|--------|----------|
-| 29.1 | 5 | P0 | Pending | Core |
-| 29.2 | 5 | P0 | Pending | Core |
-| 29.3 | 5 | P0 | Pending | Core |
-| 29.4 | 3 | P0 | Pending | Core |
-| 29.5 | 5 | P1 | Pending | Advanced |
-| 29.6 | 3 | P1 | Pending | Advanced |
-| 29.7 | 3 | P1 | Pending | Advanced |
-| 29.8 | 2 | P1 | Pending | Advanced |
-| 29.9 | 3 | P1 | Pending | Advanced |
-| 29.10 | 5 | P2 | Pending | Dashboard |
-| 29.11 | 3 | P2 | Pending | Analytics |
-| 29.12 | 5 | P2 | ⭐ NEW | Agentic |
-| 29.13 | 5 | P2 | ⭐ NEW | Agentic |
-| **Total** | **52** | | **0/13 Complete** | |
+**Points:** 5
+**Priority:** P0
+
+**Description:**
+Implement the approval step type. Pauses workflow until designated approver(s) approve or reject.
+
+**Files:**
+- New: `apps/api/src/services/workflow-steps/approval-step.ts`
+- Modify: `apps/api/src/routes/workflows.ts` (approve/reject endpoints)
+
+**Acceptance Criteria:**
+- [ ] Step pauses workflow and sets status to `awaiting_approval`
+- [ ] Approvers resolved by: role, specific user_id, agent_id, or "any_of" list
+- [ ] POST /approve sets `approval_decision='approved'`, records `actual_approver`
+- [ ] POST /reject sets `approval_decision='rejected'`, records comment
+- [ ] Rejection stops workflow with `outcome='rejected'`
+- [ ] Approval advances to next step
+- [ ] Context fields from trigger_data displayed to approver
+- [ ] Only designated approvers can approve (403 for others)
 
 ---
 
-## Data Model
+### Story 29.4: Condition Step with Expression Evaluation
 
-See full schema in `/Users/haxaco/Dev/PayOS/docs/prd/PayOS_PRD_v1.15.md` lines 12909-12962
+**Points:** 5
+**Priority:** P0
+**(Expanded from 3 pts for contract governance expressions)**
 
-```sql
-CREATE TABLE workflow_templates (...)
-CREATE TABLE workflow_instances (...)
-CREATE TABLE workflow_step_executions (...)
--- NEW
-CREATE TABLE agent_workflow_permissions (...)
-CREATE TABLE workflow_template_secrets (...)
+**Description:**
+Implement condition step that evaluates expressions and branches workflow. Extended to support reputation scores, counterparty data, and policy fields from the contracting context.
+
+**Files:**
+- New: `apps/api/src/services/workflow-steps/condition-step.ts`
+- New: `apps/api/src/services/expression-evaluator.ts`
+
+**Acceptance Criteria:**
+- [ ] Evaluates JavaScript-like expressions against trigger_data and step results
+- [ ] Supports operators: `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `!`
+- [ ] Supports nested field access: `trigger.counterparty.reputation_score`
+- [ ] Supports step result references: `steps[0].action_result.unified_score`
+- [ ] `if_true` and `if_false` support: `continue`, `skip_to:N`, `reject`, `approve`
+- [ ] Logs evaluated expression, input data, and result for audit
+- [ ] Expression evaluation sandboxed (no arbitrary code execution)
+- [ ] Handles missing fields gracefully (null-safe access)
+- [ ] **Contract extension:** Built-in helpers: `reputation_meets(counterpartyId, minScore)`, `exposure_within(walletId, counterpartyId, limit)`
+
+---
+
+### Phase 2: Advanced Steps
+
+---
+
+### Story 29.5: Action Step Integration
+
+**Points:** 5
+**Priority:** P1
+**(Expanded from 5 pts for contract governance actions)**
+
+**Description:**
+Implement action step that executes Sly operations. Extended to support escrow and reputation operations for agent contracting.
+
+**Action Types:**
+| Action | Source | Description |
+|--------|--------|-------------|
+| `execute_transfer` | Existing | Execute a payment transfer |
+| `execute_simulation` | Epic 28 | Dry-run a transfer |
+| `create_refund` | Epic 10 | Issue a refund |
+| `create_escrow` | Epic 62 🆕 | Create governed escrow |
+| `release_escrow` | Epic 62 🆕 | Release escrow funds |
+| `freeze_escrow` | Epic 62 🆕 | Emergency freeze |
+| `query_reputation` | Epic 63 🆕 | Query External Reputation Bridge |
+| `update_allowlist` | Epic 18 🆕 | Add/remove counterparty from wallet policy |
+| `authorize_contract` | Epic 18 🆕 | Mark pending contract as approved |
+
+**Files:**
+- New: `apps/api/src/services/workflow-steps/action-step.ts`
+- New: `apps/api/src/services/workflow-action-registry.ts`
+
+**Acceptance Criteria:**
+- [ ] Action params support template variables: `{{trigger.field}}`, `{{steps[N].result.field}}`
+- [ ] Action result stored in `step_execution.action_result`
+- [ ] Failed actions set step status to `failed` with error details
+- [ ] Retry logic: configurable retries with backoff (default 0)
+- [ ] All existing action types work
+- [ ] All contract extension action types registered and functional
+
+---
+
+### Story 29.6: Notification Step
+
+**Points:** 3
+**Priority:** P1
+
+**Description:**
+Implement notification step that sends webhooks or triggers external notifications.
+
+**Files:**
+- New: `apps/api/src/services/workflow-steps/notification-step.ts`
+
+**Acceptance Criteria:**
+- [ ] Webhook delivery to configured endpoint
+- [ ] Template variables resolved in notification payload
+- [ ] Supports recipient lists (multiple webhooks)
+- [ ] Uses existing webhook infrastructure from Epic 17
+- [ ] Non-blocking: notification failure doesn't stop workflow
+- [ ] Delivery status tracked in step execution
+
+---
+
+### Story 29.7: Wait Step with Scheduling
+
+**Points:** 3
+**Priority:** P1
+
+**Description:**
+Implement wait step that pauses workflow until a condition is met or time elapses.
+
+**Files:**
+- New: `apps/api/src/services/workflow-steps/wait-step.ts`
+- New: `apps/api/src/workers/workflow-scheduler.ts`
+
+**Acceptance Criteria:**
+- [ ] Wait types: `duration` (wait N hours), `until` (wait until datetime), `condition` (poll until expression true)
+- [ ] Duration waits scheduled via cron/setTimeout
+- [ ] Condition waits polled every 60 seconds
+- [ ] Max wait configurable (default 7 days)
+- [ ] Expired waits follow `on_timeout` policy: cancel, escalate, or auto_approve
+
+---
+
+### Story 29.8: Timeout Handling & Escalation
+
+**Points:** 2
+**Priority:** P1
+
+**Description:**
+Handle workflow and step-level timeouts with configurable escalation.
+
+**Files:**
+- New: `apps/api/src/workers/workflow-timeout.ts`
+
+**Acceptance Criteria:**
+- [ ] Workflow-level timeout (default 72h) checked by scheduled worker
+- [ ] Step-level `timeout_hours` on approval steps
+- [ ] On timeout: cancel workflow, escalate to next approver, or auto_approve
+- [ ] Escalation creates new approval step with expanded approver list
+- [ ] Timeout events logged to `workflow_step_executions`
+
+---
+
+### Story 29.9: Pending Workflows API
+
+**Points:** 3
+**Priority:** P1
+
+**Description:**
+API for users/agents to see their pending approval tasks.
+
+**Files:**
+- Modify: `apps/api/src/routes/workflows.ts`
+
+**Acceptance Criteria:**
+- [ ] GET /pending returns workflows where current user is in approver list
+- [ ] Includes trigger_data context fields for informed decisions
+- [ ] Sortable by created_at, amount, urgency
+- [ ] Filter by trigger_entity_type (contract, escrow, transfer)
+- [ ] Count endpoint for badge display on dashboard
+
+---
+
+### Phase 3: Dashboard & Analytics
+
+---
+
+### Story 29.10: Dashboard Workflow Builder UI
+
+**Points:** 5
+**Priority:** P2
+
+**Description:**
+Visual workflow template builder in the dashboard.
+
+**Files:**
+- New: `apps/web/src/app/dashboard/workflows/page.tsx`
+- New: `apps/web/src/components/workflows/WorkflowBuilder.tsx`
+- New: `apps/web/src/components/workflows/StepPalette.tsx`
+
+**Acceptance Criteria:**
+- [ ] Step palette with drag-and-drop
+- [ ] Step configuration panels for each type
+- [ ] Visual flow diagram showing step sequence and branches
+- [ ] Template validation before save
+- [ ] Pre-built templates: "Contract Approval", "Counterparty Review", "Escrow Release"
+- [ ] Active instance count displayed per template
+
+---
+
+### Story 29.11: Workflow Analytics & Reporting
+
+**Points:** 3
+**Priority:** P2
+
+**Description:**
+Analytics on workflow performance: approval times, rejection rates, bottlenecks.
+
+**Files:**
+- New: `apps/web/src/components/workflows/WorkflowAnalytics.tsx`
+- Modify: `apps/api/src/routes/workflows.ts` (analytics endpoints)
+
+**Acceptance Criteria:**
+- [ ] Average time to approval per template
+- [ ] Approval vs rejection rate per template
+- [ ] Bottleneck identification (which steps take longest)
+- [ ] Active workflow count and trend
+- [ ] Export workflow audit trail for compliance
+
+---
+
+## Points Summary
+
+| Phase | Stories | Points |
+|-------|---------|--------|
+| Phase 1: Core Engine | 29.1–29.4 | 20 |
+| Phase 2: Advanced Steps | 29.5–29.9 | 16 |
+| Phase 3: Dashboard & Analytics | 29.10–29.11 | 8 |
+| **Contract Extensions** | (in 29.4 + 29.5) | **+8** |
+| **Total** | **11** | **52** |
+
+---
+
+## Implementation Sequence
+
+```
+Phase 1: Core Engine (29.1-29.4)         ← No dependencies, immediately testable
+    ↓
+Phase 2: Advanced Steps (29.5-29.9)      ← Depends on Phase 1 state machine
+    ↓
+Phase 3: Dashboard (29.10-29.11)         ← Depends on Phases 1-2
 ```
 
----
-
-## Technical Deliverables
-
-### API Routes
-- `apps/api/src/routes/workflows.ts`
-- `apps/api/src/routes/workflow-external.ts` ⭐ NEW
-
-### Services
-- `apps/api/src/services/workflow-engine.ts` - State machine and execution
-- `apps/api/src/services/workflow-external.ts` ⭐ NEW - External step execution
-- `apps/api/src/workers/workflow-processor.ts` - Background processing
-
-### Database Migrations
-- `20XX_create_workflow_engine.sql`
-- `20XX_add_agent_workflow_support.sql` ⭐ NEW
-- `20XX_add_external_step_support.sql` ⭐ NEW
-
-### UI Components
-- `apps/web/src/app/dashboard/workflows/` - Workflow management UI
-- `apps/web/src/components/workflow-builder/` - Visual workflow builder
+Contract governance actions in 29.5 can be stubbed initially and wired when Epics 62/63 land.
 
 ---
 
-## Success Criteria
+## Definition of Done
 
-- ✅ Support all 6 step types (approval, condition, action, wait, notification, external)
-- ✅ Workflow templates configurable via API
-- ✅ Visual workflow builder in dashboard
-- ✅ 99%+ uptime for workflow processor
-- ✅ < 1s latency for step execution
-- ✅ Complete audit trail of all workflow actions
-- ✅ Agents can initiate and advance workflows ⭐ NEW
-- ✅ External APIs callable as workflow steps ⭐ NEW
-
----
-
-## Related Documentation
-
-- **Epic 28:** Simulation System (for action step integration)
-- **Epic 30:** Structured Response System (for error handling)
-- **Epic 36:** SDK (for agent workflow integration)
-- **Research:** [Obsidian - Agentic Composition](../investigations/agentic-composition.md)
+- [ ] All stories have passing tests (unit + integration)
+- [ ] No cross-tenant data leaks (RLS verified)
+- [ ] State machine handles all transitions per spec
+- [ ] Approval step enforces designated-approver-only access
+- [ ] Timeout worker runs reliably, no stuck workflows
+- [ ] Pre-built contract governance templates seeded for demo tenants
+- [ ] Expression evaluator sandboxed (no arbitrary code execution)

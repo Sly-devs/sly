@@ -293,7 +293,7 @@ export default function A2ATasksPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-right text-muted-foreground">
-                        {formatDate(task.createdAt)}
+                        {formatDate(task.createdAt, { hour: 'numeric', minute: '2-digit' })}
                       </TableCell>
                     </TableRow>
                   ))

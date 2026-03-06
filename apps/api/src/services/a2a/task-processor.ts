@@ -553,36 +553,89 @@ export class A2ATaskProcessor {
         completed_at: new Date().toISOString(),
       });
 
-      // Deduct from caller wallet
+      // Fetch both wallets with type info for real settlement
       const { data: callerWallet } = await this.supabase
         .from('wallets')
-        .select('id, balance, owner_account_id')
+        .select('id, balance, owner_account_id, wallet_type, wallet_address, provider_wallet_id')
         .eq('managed_by_agent_id', mandate.agent_id)
         .eq('tenant_id', this.tenantId)
         .maybeSingle();
 
+      let providerWallet: any = null;
+      if (providerAgentId) {
+        const { data } = await this.supabase
+          .from('wallets')
+          .select('id, balance, wallet_type, wallet_address, provider_wallet_id')
+          .eq('managed_by_agent_id', providerAgentId)
+          .eq('tenant_id', this.tenantId)
+          .maybeSingle();
+        providerWallet = data;
+      }
+
+      let txHash: string | undefined;
+
       if (callerWallet) {
+        // Check if both wallets support real settlement
+        const callerType = callerWallet.wallet_type || 'internal';
+        const providerType = providerWallet?.wallet_type || 'internal';
+        const isRealSettlement = (callerType === 'circle_custodial' || callerType === 'external')
+          && providerWallet
+          && (providerType === 'circle_custodial' || providerType === 'external');
+        const isSandboxEnv = process.env.PAYOS_ENVIRONMENT === 'sandbox';
+
+        // Attempt real on-chain settlement in sandbox
+        if (isRealSettlement && isSandboxEnv) {
+          try {
+            if (callerType === 'circle_custodial' && callerWallet.provider_wallet_id) {
+              const { getCircleClient } = await import('../../services/circle/client.js');
+              const circle = getCircleClient();
+              const usdcTokenId = process.env.CIRCLE_USDC_TOKEN_ID;
+
+              if (usdcTokenId && providerWallet.wallet_address && !providerWallet.wallet_address.startsWith('internal://')) {
+                const circleTx = await circle.transferTokens(
+                  callerWallet.provider_wallet_id,
+                  usdcTokenId,
+                  providerWallet.wallet_address,
+                  amount.toString(),
+                  'MEDIUM',
+                );
+
+                // Poll for completion (max 30s)
+                const deadline = Date.now() + 30_000;
+                let finalTx = circleTx;
+                while (finalTx.state !== 'COMPLETE' && finalTx.state !== 'FAILED' && Date.now() < deadline) {
+                  await new Promise(r => setTimeout(r, 2000));
+                  finalTx = await circle.getTransaction(circleTx.id);
+                }
+
+                if (finalTx.state === 'COMPLETE') {
+                  txHash = (finalTx as any).txHash || circleTx.id;
+                } else {
+                  this.log(taskId, 'warn', `Circle settlement ${finalTx.state}: ${circleTx.id}`);
+                }
+              }
+            } else if (callerType === 'external' && providerWallet.wallet_address && !providerWallet.wallet_address.startsWith('internal://')) {
+              const { transferUsdc } = await import('../../config/blockchain.js');
+              const result = await transferUsdc(providerWallet.wallet_address, amount);
+              txHash = result.txHash;
+            }
+          } catch (realErr: any) {
+            this.log(taskId, 'warn', `On-chain A2A settlement failed (falling back to ledger): ${realErr.message}`);
+          }
+        }
+
+        // Always do ledger settlement (keeps DB balances in sync)
         await this.supabase
           .from('wallets')
           .update({ balance: Math.max(0, Number(callerWallet.balance) - amount) })
           .eq('id', callerWallet.id)
           .gte('balance', amount);
 
-        // Credit provider wallet
-        if (providerAgentId) {
-          const { data: providerWallet } = await this.supabase
+        if (providerWallet) {
+          await this.supabase
             .from('wallets')
-            .select('id, balance')
-            .eq('managed_by_agent_id', providerAgentId)
-            .eq('tenant_id', this.tenantId)
-            .maybeSingle();
-
-          if (providerWallet) {
-            await this.supabase
-              .from('wallets')
-              .update({ balance: Number(providerWallet.balance) + amount })
-              .eq('id', providerWallet.id);
-          }
+            .update({ balance: Number(providerWallet.balance) + amount })
+            .eq('id', providerWallet.id);
         }
 
         // Create transfer record
@@ -604,11 +657,14 @@ export class A2ATaskProcessor {
             initiated_by_type: 'agent',
             initiated_by_id: mandate.agent_id,
             completed_at: new Date().toISOString(),
+            tx_hash: txHash || null,
             protocol_metadata: {
               protocol: 'a2a',
               settlement: true,
               mandateId,
               taskId,
+              settlement_type: txHash ? 'on_chain' : 'ledger',
+              tx_hash: txHash,
             },
           })
           .select('id')

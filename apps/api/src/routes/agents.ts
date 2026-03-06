@@ -326,32 +326,100 @@ agents.post('/', async (c) => {
     assignedWalletId = wallet_id;
   } else if (auto_create_wallet !== false && accountId) {
     // Story 51.6: Auto-create a wallet for the agent (requires parent account as owner)
-    const walletAddress = `internal://payos/${ctx.tenantId}/${accountId}/agent/${data.id}`;
+    // Phase 2: Try Circle sandbox wallet first, fall back to internal
+    const isSandboxEnv = process.env.PAYOS_ENVIRONMENT === 'sandbox' && !!process.env.CIRCLE_API_KEY;
 
-    const { data: wallet, error: walletError } = await supabase
-      .from('wallets')
-      .insert({
-        tenant_id: ctx.tenantId,
-        owner_account_id: accountId,
-        managed_by_agent_id: data.id,
-        balance: 0,
-        currency: 'USDC',
-        wallet_address: walletAddress,
-        network: 'internal',
-        status: 'active',
-        wallet_type: 'internal',
-        name: `${name} Wallet`,
-        purpose: `Auto-created wallet for agent ${name}`,
-      })
-      .select('id')
-      .single();
+    if (isSandboxEnv) {
+      try {
+        const { getCircleClient } = await import('../services/circle/client.js');
+        const circle = getCircleClient();
 
-    if (walletError) {
-      console.error('Warning: Failed to auto-create wallet for agent:', walletError);
-      // Don't fail agent creation, just log the warning
-    } else {
-      assignedWalletId = wallet.id;
-      console.log(`[Agent] Auto-created wallet ${wallet.id} for agent ${data.id}`);
+        // Get or create wallet set for this tenant
+        const walletSetId = process.env.CIRCLE_WALLET_SET_ID;
+        if (walletSetId) {
+          const circleWallet = await circle.createWallet(
+            walletSetId,
+            'BASE',
+            `${name} Agent Wallet`,
+            data.id,
+          );
+
+          const { data: wallet, error: walletError } = await supabase
+            .from('wallets')
+            .insert({
+              tenant_id: ctx.tenantId,
+              owner_account_id: accountId,
+              managed_by_agent_id: data.id,
+              balance: 0,
+              currency: 'USDC',
+              wallet_address: circleWallet.address,
+              network: 'base-sepolia',
+              status: 'active',
+              wallet_type: 'circle_custodial',
+              custody_type: 'custodial',
+              provider: 'circle',
+              provider_wallet_id: circleWallet.id,
+              provider_wallet_set_id: walletSetId,
+              provider_metadata: {
+                circle_wallet_id: circleWallet.id,
+                circle_state: circleWallet.state,
+                blockchain: 'BASE',
+                created_via: 'agent_auto_create',
+              },
+              name: `${name} Wallet`,
+              purpose: `Circle sandbox wallet for agent ${name}`,
+            })
+            .select('id')
+            .single();
+
+          if (!walletError && wallet) {
+            assignedWalletId = wallet.id;
+            // Also store the on-chain address on the agent
+            await supabase
+              .from('agents')
+              .update({
+                wallet_address: circleWallet.address,
+                wallet_verification_status: 'verified',
+                wallet_verified_at: new Date().toISOString(),
+              })
+              .eq('id', data.id)
+              .eq('tenant_id', ctx.tenantId);
+            console.log(`[Agent] Created Circle sandbox wallet ${wallet.id} (${circleWallet.address}) for agent ${data.id}`);
+          }
+        }
+      } catch (circleErr) {
+        console.warn('[Agent] Circle wallet creation failed, falling back to internal:', circleErr);
+      }
+    }
+
+    // Fallback to internal wallet if Circle didn't work
+    if (!assignedWalletId) {
+      const walletAddress = `internal://payos/${ctx.tenantId}/${accountId}/agent/${data.id}`;
+
+      const { data: wallet, error: walletError } = await supabase
+        .from('wallets')
+        .insert({
+          tenant_id: ctx.tenantId,
+          owner_account_id: accountId,
+          managed_by_agent_id: data.id,
+          balance: 0,
+          currency: 'USDC',
+          wallet_address: walletAddress,
+          network: 'internal',
+          status: 'active',
+          wallet_type: 'internal',
+          name: `${name} Wallet`,
+          purpose: `Auto-created wallet for agent ${name}`,
+        })
+        .select('id')
+        .single();
+
+      if (walletError) {
+        console.error('Warning: Failed to auto-create wallet for agent:', walletError);
+      } else {
+        assignedWalletId = wallet.id;
+        console.log(`[Agent] Auto-created wallet ${wallet.id} for agent ${data.id}`);
+      }
     }
   }
 
@@ -2080,6 +2148,228 @@ agents.delete('/:id/endpoint', async (c) => {
   });
 
   return c.json({ data: { id, endpoint_enabled: false } });
+});
+
+// ============================================
+// POST /v1/agents/:id/wallet - Link wallet address
+// Epic 61.1: Agent BYOW (Bring Your Own Wallet)
+// ============================================
+agents.post('/:id/wallet', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  const supabase = createClient();
+
+  if (!isValidUUID(id)) {
+    throw new ValidationError('Invalid agent ID format');
+  }
+
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    throw new ValidationError('Invalid JSON body');
+  }
+
+  const walletAddress = body.wallet_address as string;
+  if (!walletAddress || !walletAddress.startsWith('0x') || walletAddress.length !== 42) {
+    throw new ValidationError('wallet_address must be a valid Ethereum address (0x... 42 chars)');
+  }
+
+  // Verify agent exists and belongs to tenant
+  const { data: agent, error: agentError } = await supabase
+    .from('agents')
+    .select('id, name, wallet_address, wallet_verification_status')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (agentError || !agent) {
+    throw new NotFoundError('Agent', id);
+  }
+
+  // Generate verification challenge
+  const { getWalletVerificationService } = await import('../services/wallet/index.js');
+  const verificationService = getWalletVerificationService();
+  const challenge = verificationService.generateChallenge(walletAddress);
+
+  // Store pending wallet address on agent
+  await supabase
+    .from('agents')
+    .update({
+      wallet_address: walletAddress.toLowerCase(),
+      wallet_verification_status: 'pending',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId);
+
+  return c.json({
+    data: {
+      agent_id: id,
+      wallet_address: walletAddress.toLowerCase(),
+      verification_status: 'pending',
+      challenge,
+    },
+  });
+});
+
+// ============================================
+// POST /v1/agents/:id/wallet/verify - Verify wallet ownership
+// Epic 61.2: Verify via EIP-191 signature
+// ============================================
+agents.post('/:id/wallet/verify', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  const supabase = createClient();
+
+  if (!isValidUUID(id)) {
+    throw new ValidationError('Invalid agent ID format');
+  }
+
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    throw new ValidationError('Invalid JSON body');
+  }
+
+  const signature = body.signature as string;
+  const message = body.message as string;
+  if (!signature || !message) {
+    throw new ValidationError('signature and message are required');
+  }
+
+  // Fetch agent with pending wallet
+  const { data: agent, error: agentError } = await supabase
+    .from('agents')
+    .select('id, name, wallet_address, wallet_verification_status, tenant_id')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (agentError || !agent) {
+    throw new NotFoundError('Agent', id);
+  }
+
+  if (!agent.wallet_address) {
+    throw new ValidationError('No wallet address linked to this agent. Call POST /v1/agents/:id/wallet first.');
+  }
+
+  // Verify signature
+  const { getWalletVerificationService } = await import('../services/wallet/index.js');
+  const verificationService = getWalletVerificationService();
+  const result = await verificationService.verifyPersonalSign(
+    agent.wallet_address,
+    signature,
+    message,
+  );
+
+  if (!result.verified) {
+    return c.json({
+      error: 'Wallet verification failed',
+      details: result.error,
+      code: 'VERIFICATION_FAILED',
+    }, 400);
+  }
+
+  const now = new Date().toISOString();
+
+  // Update agent verification status
+  await supabase
+    .from('agents')
+    .update({
+      wallet_verification_status: 'verified',
+      wallet_verified_at: now,
+      updated_at: now,
+    })
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId);
+
+  // Create or update external wallet record linked to this agent
+  const { data: existingWallet } = await supabase
+    .from('wallets')
+    .select('id')
+    .eq('managed_by_agent_id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('wallet_type', 'external')
+    .limit(1)
+    .maybeSingle();
+
+  if (existingWallet) {
+    // Update existing external wallet
+    await supabase
+      .from('wallets')
+      .update({
+        wallet_address: agent.wallet_address,
+        verification_status: 'verified',
+        verified_at: now,
+        updated_at: now,
+      })
+      .eq('id', existingWallet.id)
+      .eq('tenant_id', ctx.tenantId);
+  } else {
+    // Find owner account (agent's parent or first business account)
+    const { data: agentFull } = await supabase
+      .from('agents')
+      .select('parent_account_id')
+      .eq('id', id)
+      .single();
+
+    let ownerAccountId = agentFull?.parent_account_id;
+    if (!ownerAccountId) {
+      const { data: accounts } = await supabase
+        .from('accounts')
+        .select('id')
+        .eq('tenant_id', ctx.tenantId)
+        .eq('type', 'business')
+        .limit(1);
+      ownerAccountId = accounts?.[0]?.id;
+    }
+
+    if (ownerAccountId) {
+      await supabase.from('wallets').insert({
+        tenant_id: ctx.tenantId,
+        owner_account_id: ownerAccountId,
+        managed_by_agent_id: id,
+        balance: 0,
+        currency: 'USDC',
+        wallet_address: agent.wallet_address,
+        network: 'base-sepolia',
+        status: 'active',
+        wallet_type: 'external',
+        custody_type: 'self',
+        provider: 'byow',
+        verification_status: 'verified',
+        verified_at: now,
+        name: `${agent.name} BYOW Wallet`,
+        purpose: 'Agent BYOW wallet verified via EIP-191',
+      });
+    }
+  }
+
+  // Audit log
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'agent',
+    entityId: id,
+    action: 'wallet_verified',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+    metadata: {
+      wallet_address: agent.wallet_address,
+      verification_method: 'eip191',
+    },
+  });
+
+  return c.json({
+    data: {
+      agent_id: id,
+      wallet_address: agent.wallet_address,
+      verification_status: 'verified',
+      verified_at: now,
+    },
+  });
 });
 
 export default agents;

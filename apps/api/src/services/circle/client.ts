@@ -337,7 +337,8 @@ export class CircleClient {
       return { amount: '0', formatted: 0 };
     }
 
-    const formatted = parseFloat(usdcBalance.amount) / Math.pow(10, usdcBalance.token.decimals);
+    // Circle API returns amount already in human-readable format (e.g. "11" = 11 USDC)
+    const formatted = parseFloat(usdcBalance.amount);
     return { amount: usdcBalance.amount, formatted };
   }
 
@@ -364,14 +365,16 @@ export class CircleClient {
       feeLevel,
     });
 
-    const response = await this.request<CircleApiResponse<{ transaction: CircleTransaction }>>(
+    const response = await this.request<CircleApiResponse<{ transaction?: CircleTransaction } & CircleTransaction>>(
       'POST',
       '/v1/w3s/developer/transactions/transfer',
       request
     );
 
-    console.log(`[Circle] Transfer initiated: ${response.data.transaction.id}`);
-    return response.data.transaction;
+    // Circle returns { data: { id, state, ... } } directly (not nested under .transaction)
+    const tx = response.data.transaction || response.data;
+    console.log(`[Circle] Transfer initiated: ${tx.id} (state: ${tx.state})`);
+    return tx;
   }
 
   /**

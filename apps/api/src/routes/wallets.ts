@@ -17,6 +17,8 @@ import { z } from 'zod';
 import { createClient } from '../db/client.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { getCircleService, USDC_CONTRACTS, EURC_CONTRACTS } from '../services/circle-mock.js';
+import { getCircleServiceForTenant } from '../services/circle/index.js';
+import { settleWalletTransfer, isOnChainCapable } from '../services/wallet-settlement.js';
 import { getWalletVerificationService } from '../services/wallet/index.js';
 import { normalizeFields, buildDeprecationHeader } from '../utils/helpers.js';
 import { triggerWorkflows } from '../services/workflow-trigger.js';
@@ -260,26 +262,22 @@ app.post('/', async (c) => {
         ? `internal://payos/${ctx.tenantId}/${accountId}/agent/${validated.managedByAgentId}`
         : `internal://payos/${ctx.tenantId}/${accountId}/${Date.now()}`;
     } else {
-      // Circle wallet (mock for now, real in Phase 2)
-      const circleService = getCircleService(ctx.tenantId);
+      // Circle wallet — uses real Circle API when CIRCLE_API_KEY is configured,
+      // otherwise falls back to mock service.
+      const circleService = getCircleServiceForTenant(ctx.tenantId);
 
       try {
         const circleWallet = await circleService.createWallet({
-          walletSetId: circleService.getDefaultWalletSetId(),
-          blockchain: blockchain.toUpperCase() as any,
+          blockchain: blockchain as any,
           name: validated.name || `PayOS Wallet`,
           refId: accountId
         });
 
         walletAddress = circleWallet.address;
         providerWalletId = circleWallet.id;
-        providerWalletSetId = circleWallet.walletSetId;
-        providerEntityId = circleService.getEntityId();
         providerMetadata = {
           circle_state: circleWallet.state,
-          circle_account_type: circleWallet.accountType,
-          circle_custody_type: circleWallet.custodyType,
-          circle_create_date: circleWallet.createDate
+          circle_create_date: new Date().toISOString(),
         };
       } catch (circleError: any) {
         console.error('Error creating Circle wallet:', circleError);
@@ -357,6 +355,16 @@ app.post('/', async (c) => {
             operation: 'initial_deposit'
           }
         });
+    }
+
+    // Auto-fund gas for Circle custodial wallets in sandbox
+    if (process.env.PAYOS_ENVIRONMENT === 'sandbox' && walletAddress && validated.walletType !== 'internal') {
+      import('../services/circle/client.js').then(({ getCircleClient }) => {
+        getCircleClient().requestFaucetDrip(walletAddress!, 'BASE-SEPOLIA', {
+          usdc: false,
+          native: true,
+        });
+      }).catch(err => console.warn('[Wallet] Sandbox gas auto-fund failed:', err.message));
     }
 
     // Fire workflow auto-triggers (fire-and-forget)
@@ -1309,17 +1317,50 @@ app.post('/:id/sync', async (c) => {
       return c.json({ error: 'Internal wallets do not require on-chain sync' }, 400);
     }
 
-    // Sync balance from chain
-    const verificationService = getWalletVerificationService();
-    
-    // Get wallet info and balance
-    const [walletInfo, tokenBalance] = await Promise.all([
-      verificationService.getWalletInfo(wallet.wallet_address),
-      verificationService.syncBalance(wallet.wallet_address, wallet.token_contract),
-    ]);
+    let formattedBalance: number;
+    let syncData: Record<string, unknown>;
 
-    // Calculate formatted balance
-    const formattedBalance = parseFloat(tokenBalance.balance) / Math.pow(10, tokenBalance.decimals);
+    // Circle custodial wallets: use Circle API (authoritative source of truth)
+    if (wallet.wallet_type === 'circle_custodial' && wallet.provider_wallet_id) {
+      const { getCircleClient } = await import('../services/circle/client.js');
+      const circle = getCircleClient();
+      const balances = await circle.getWalletBalances(wallet.provider_wallet_id);
+
+      const tokenSymbol = wallet.currency || 'USDC';
+      const tokenBalance = balances.find(b => b.token.symbol === tokenSymbol);
+      // Circle API returns amount already in human-readable format (e.g. "1" = 1 USDC)
+      formattedBalance = tokenBalance ? parseFloat(tokenBalance.amount) : 0;
+
+      // Also fetch native balance for gas info
+      const nativeBalance = balances.find(b => b.token.isNative);
+
+      syncData = {
+        source: 'circle_api',
+        token_balances: balances,
+        native_balance: nativeBalance ? nativeBalance.amount : '0',
+        provider_wallet_id: wallet.provider_wallet_id,
+      };
+    } else {
+      // External / non-Circle wallets: use on-chain RPC
+      const verificationService = getWalletVerificationService();
+
+      const [walletInfo, tokenBalance] = await Promise.all([
+        verificationService.getWalletInfo(wallet.wallet_address),
+        verificationService.syncBalance(wallet.wallet_address, wallet.token_contract),
+      ]);
+
+      formattedBalance = parseFloat(tokenBalance.balance) / Math.pow(10, tokenBalance.decimals);
+
+      syncData = {
+        source: 'on_chain_rpc',
+        raw_balance: tokenBalance.balance,
+        decimals: tokenBalance.decimals,
+        native_balance: walletInfo.balance,
+        nonce: walletInfo.nonce,
+        is_contract: walletInfo.isContract,
+        chain: walletInfo.chain,
+      };
+    }
 
     // Update wallet in database
     const { data: updatedWallet, error: updateError } = await supabase
@@ -1327,14 +1368,7 @@ app.post('/:id/sync', async (c) => {
       .update({
         balance: formattedBalance,
         last_synced_at: new Date().toISOString(),
-        sync_data: {
-          raw_balance: tokenBalance.balance,
-          decimals: tokenBalance.decimals,
-          native_balance: walletInfo.balance,
-          nonce: walletInfo.nonce,
-          is_contract: walletInfo.isContract,
-          chain: walletInfo.chain,
-        },
+        sync_data: syncData,
         updated_at: new Date().toISOString(),
       })
       .eq('id', walletId)
@@ -1354,9 +1388,7 @@ app.post('/:id/sync', async (c) => {
         address: wallet.wallet_address,
         balance: formattedBalance,
         currency: wallet.currency,
-        chain: walletInfo.chain,
-        nativeBalance: walletInfo.balance,
-        isContract: walletInfo.isContract,
+        syncData,
         syncedAt: updatedWallet.last_synced_at,
       },
     });
@@ -1697,6 +1729,161 @@ app.post('/:id/fund', async (c) => {
         error: error.message,
         code: 'CIRCLE_API_ERROR',
       }, error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 502);
+    }
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// ============================================
+// POST /:id/transfer — Wallet-to-wallet transfer (on-chain or ledger)
+// ============================================
+
+const walletTransferSchema = z.object({
+  destinationWalletId: z.string().uuid().optional(),
+  destinationAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
+  amount: z.number().positive(),
+  currency: z.enum(['USDC', 'EURC']).default('USDC'),
+  reference: z.string().max(255).optional(),
+}).refine(
+  (d) => (d.destinationWalletId ? 1 : 0) + (d.destinationAddress ? 1 : 0) === 1,
+  { message: 'Provide exactly one of destinationWalletId or destinationAddress' },
+);
+
+app.post('/:id/transfer', async (c) => {
+  try {
+    const ctx = c.get('ctx');
+    const sourceWalletId = c.req.param('id');
+    const body = await c.req.json();
+    const validated = walletTransferSchema.parse(body);
+
+    const supabase = createClient();
+
+    // 1. Fetch source wallet
+    const { data: sourceWallet, error: srcErr } = await supabase
+      .from('wallets')
+      .select('id, wallet_address, wallet_type, provider_wallet_id, balance, owner_account_id, status, currency')
+      .eq('id', sourceWalletId)
+      .eq('tenant_id', ctx.tenantId)
+      .single();
+
+    if (srcErr || !sourceWallet) {
+      return c.json({ error: 'Source wallet not found' }, 404);
+    }
+    if (sourceWallet.status !== 'active') {
+      return c.json({ error: `Source wallet is ${sourceWallet.status}` }, 400);
+    }
+
+    // 2. Resolve destination
+    let destWallet: any = null;
+    let destAddress: string;
+
+    if (validated.destinationWalletId) {
+      const { data: dw, error: dwErr } = await supabase
+        .from('wallets')
+        .select('id, wallet_address, wallet_type, provider_wallet_id, balance, owner_account_id, status')
+        .eq('id', validated.destinationWalletId)
+        .eq('tenant_id', ctx.tenantId)
+        .single();
+
+      if (dwErr || !dw) {
+        return c.json({ error: 'Destination wallet not found' }, 404);
+      }
+      if (dw.status !== 'active') {
+        return c.json({ error: `Destination wallet is ${dw.status}` }, 400);
+      }
+      destWallet = dw;
+      destAddress = dw.wallet_address;
+    } else {
+      destAddress = validated.destinationAddress!;
+    }
+
+    // 3. Check balance
+    const sourceBalance = parseFloat(sourceWallet.balance);
+    if (sourceBalance < validated.amount) {
+      return c.json({
+        error: 'Insufficient balance',
+        details: { available: sourceBalance, requested: validated.amount },
+      }, 400);
+    }
+
+    // 4. Determine settlement type for transfer record
+    const onChainCapable = isOnChainCapable(sourceWallet, destAddress);
+    const settlementTypeInitial: 'on_chain' | 'ledger' = onChainCapable ? 'on_chain' : 'ledger';
+
+    // 5. Create transfer record
+    const transferMetadata = {
+      protocol: 'wallet_transfer',
+      source_wallet_id: sourceWalletId,
+      destination_wallet_id: destWallet?.id || null,
+      destination_address: destAddress,
+      settlement_type: settlementTypeInitial,
+    };
+
+    const { data: transfer, error: transferErr } = await supabase
+      .from('transfers')
+      .insert({
+        tenant_id: ctx.tenantId,
+        from_account_id: sourceWallet.owner_account_id,
+        to_account_id: destWallet?.owner_account_id || null,
+        amount: validated.amount,
+        currency: validated.currency,
+        type: 'internal',
+        status: 'processing',
+        description: validated.reference || `Wallet transfer ${sourceWalletId} → ${destWallet?.id || destAddress}`,
+        initiated_by_type: ctx.actorType === 'agent' ? 'agent' : 'api_key',
+        initiated_by_id: ctx.actorType === 'agent' ? ctx.actorId : ctx.apiKeyId,
+        initiated_by_name: ctx.actorType === 'agent' ? ctx.actorName : 'api',
+        protocol_metadata: transferMetadata,
+      })
+      .select('id')
+      .single();
+
+    if (transferErr || !transfer) {
+      console.error('Failed to create transfer record:', transferErr);
+      return c.json({ error: 'Failed to create transfer record' }, 500);
+    }
+
+    // 6-8. Settle: on-chain (if capable) + ledger + transfer update
+    const settlement = await settleWalletTransfer({
+      supabase,
+      tenantId: ctx.tenantId,
+      sourceWallet,
+      destinationWallet: destWallet,
+      amount: validated.amount,
+      transferId: transfer.id,
+      protocolMetadata: transferMetadata,
+    });
+
+    if (!settlement.success) {
+      return c.json({ error: settlement.error || 'Settlement failed' }, 500);
+    }
+
+    return c.json({
+      data: {
+        transferId: transfer.id,
+        from: {
+          walletId: sourceWallet.id,
+          address: sourceWallet.wallet_address,
+          newBalance: settlement.sourceNewBalance,
+        },
+        to: {
+          walletId: destWallet?.id || null,
+          address: destAddress,
+          newBalance: settlement.destinationNewBalance ?? null,
+        },
+        amount: validated.amount,
+        currency: validated.currency,
+        settlement: {
+          type: settlement.settlementType,
+          txHash: settlement.txHash || null,
+          confirmedAt: new Date().toISOString(),
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Error in POST /v1/wallets/:id/transfer:', error);
+    if (error instanceof z.ZodError) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', details: error.errors } }, 400);
     }
     return c.json({ error: 'Internal server error' }, 500);
   }

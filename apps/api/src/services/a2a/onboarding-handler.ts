@@ -318,6 +318,14 @@ export async function handleRegisterAgent(
               .eq('id', agent.id)
               .eq('tenant_id', tenantId);
             console.log(`[A2A Onboarding] Created Circle wallet for agent ${agent.id}: ${circleWallet.address}`);
+
+            // Auto-fund gas for sandbox
+            if (process.env.PAYOS_ENVIRONMENT === 'sandbox' && circleWallet.address) {
+              circle.requestFaucetDrip(circleWallet.address, 'BASE-SEPOLIA', {
+                usdc: false,
+                native: true,
+              }).catch(err => console.warn('[A2A Onboarding] Sandbox gas auto-fund failed:', err.message));
+            }
           }
         }
       } catch (circleErr) {

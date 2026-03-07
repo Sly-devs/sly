@@ -781,43 +781,35 @@ async function handleWalletFund(
   tenantId: string,
   supabase: SupabaseClient,
 ): Promise<A2AJsonRpcResponse> {
-  // Environment gate: allow in dev, or when tenant uses test API keys
-  const isDevOrSandbox = process.env.NODE_ENV !== 'production' || !!process.env.SANDBOX_MODE;
+  // Environment gate: sandbox/dev only
+  const isSandbox = process.env.PAYOS_ENVIRONMENT === 'sandbox'
+    || process.env.NODE_ENV !== 'production'
+    || !!process.env.SANDBOX_MODE;
 
-  if (!isDevOrSandbox) {
-    // In production without SANDBOX_MODE, check if tenant has test API keys
-    const { data: apiKey } = await supabase
-      .from('api_keys')
-      .select('environment')
-      .eq('tenant_id', tenantId)
-      .eq('environment', 'test')
-      .limit(1)
-      .single();
-
-    if (!apiKey) {
-      return buildErrorResponse(
-        requestId,
-        JSON_RPC_ERRORS.INVALID_PARAMS,
-        'Test funding is only available for sandbox tenants (pk_test_* keys)',
-      );
-    }
-  }
-
-  const amount = Number(payload.amount);
-  if (!amount || amount <= 0 || amount > 100_000) {
+  if (!isSandbox) {
     return buildErrorResponse(
       requestId,
       JSON_RPC_ERRORS.INVALID_PARAMS,
-      'amount is required and must be between 0 and 100,000',
+      'Test funding is only available in sandbox/testnet environments',
     );
   }
 
   const currency = (payload.currency as string) || 'USDC';
 
-  // Find agent's wallet
+  // Validate amount early (used by internal wallets; Circle faucet ignores it)
+  const amount = Number(payload.amount);
+  if (payload.amount !== undefined && (!amount || amount <= 0 || amount > 100_000)) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INVALID_PARAMS,
+      'amount must be between 0 and 100,000',
+    );
+  }
+
+  // Find agent's wallet (need full details for Circle wallets)
   const { data: wallet, error: walletError } = await supabase
     .from('wallets')
-    .select('id, balance, currency, status')
+    .select('id, balance, currency, status, wallet_type, wallet_address, provider_wallet_id')
     .eq('managed_by_agent_id', agentId)
     .eq('tenant_id', tenantId)
     .limit(1)
@@ -832,9 +824,92 @@ async function handleWalletFund(
   }
 
   const previousBalance = Number(wallet.balance);
+  const isCircle = wallet.wallet_type === 'circle_custodial' && wallet.wallet_address;
+
+  if (isCircle) {
+    // Circle custodial wallet: use Circle faucet for real on-chain USDC
+    try {
+      const { getCircleClient } = await import('../circle/client.js');
+      const circle = getCircleClient();
+
+      // Request faucet drip (USDC + native gas)
+      await circle.requestFaucetDrip(wallet.wallet_address, 'BASE-SEPOLIA', {
+        usdc: true,
+        native: true,
+      });
+
+      // Wait briefly for faucet tx to land, then sync balance from Circle
+      await new Promise(r => setTimeout(r, 8000));
+
+      let newBalance = previousBalance;
+      if (wallet.provider_wallet_id) {
+        const bal = await circle.getUsdcBalance(wallet.provider_wallet_id);
+        newBalance = bal.formatted;
+        await supabase
+          .from('wallets')
+          .update({
+            balance: newBalance,
+            status: 'active',
+            last_synced_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', wallet.id)
+          .eq('tenant_id', tenantId);
+      }
+
+      await supabase.from('audit_log').insert({
+        tenant_id: tenantId,
+        entity_type: 'wallet',
+        entity_id: wallet.id,
+        action: 'faucet_fund',
+        actor_type: 'agent',
+        actor_id: agentId,
+        actor_name: `agent:${agentId}`,
+        changes: {
+          previous_balance: previousBalance,
+          new_balance: newBalance,
+          funded_amount: newBalance - previousBalance,
+          currency,
+          source: 'circle_faucet',
+        },
+        metadata: { environment: 'sandbox', source: 'a2a_manage_wallet' },
+      });
+
+      return buildSuccessResponse(requestId, 'manage_wallet_result', {
+        action: 'fund',
+        wallet_id: wallet.id,
+        previous_balance: previousBalance,
+        funded_amount: newBalance - previousBalance,
+        new_balance: newBalance,
+        currency,
+        source: 'circle_faucet',
+        note: 'Circle faucet limit: ~20 USDC per address per 2 hours',
+      });
+    } catch (err: any) {
+      const msg = err.message || 'Circle faucet request failed';
+      // Check for rate limit (403)
+      if (err.statusCode === 403 || msg.includes('403')) {
+        return buildErrorResponse(
+          requestId,
+          JSON_RPC_ERRORS.INVALID_PARAMS,
+          'Circle faucet rate limit reached (~20 USDC per address per 2 hours). Try again later.',
+        );
+      }
+      return buildErrorResponse(requestId, JSON_RPC_ERRORS.INTERNAL_ERROR, `Faucet funding failed: ${msg}`);
+    }
+  }
+
+  // Internal wallet: ledger-only funding (no on-chain component)
+  if (!amount || amount <= 0) {
+    return buildErrorResponse(
+      requestId,
+      JSON_RPC_ERRORS.INVALID_PARAMS,
+      'amount is required for internal wallet funding',
+    );
+  }
+
   const newBalance = previousBalance + amount;
 
-  // Update balance
   const { error: updateError } = await supabase
     .from('wallets')
     .update({
@@ -849,7 +924,6 @@ async function handleWalletFund(
     return buildErrorResponse(requestId, JSON_RPC_ERRORS.INTERNAL_ERROR, 'Failed to update wallet balance');
   }
 
-  // Create audit log entry
   await supabase.from('audit_log').insert({
     tenant_id: tenantId,
     entity_type: 'wallet',
@@ -864,10 +938,7 @@ async function handleWalletFund(
       new_balance: newBalance,
       currency,
     },
-    metadata: {
-      environment: 'sandbox',
-      source: 'a2a_manage_wallet',
-    },
+    metadata: { environment: 'sandbox', source: 'a2a_manage_wallet' },
   });
 
   return buildSuccessResponse(requestId, 'manage_wallet_result', {
@@ -877,6 +948,7 @@ async function handleWalletFund(
     funded_amount: amount,
     new_balance: newBalance,
     currency,
+    source: 'ledger',
   });
 }
 

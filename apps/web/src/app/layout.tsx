@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 
+import { Analytics } from '@vercel/analytics/react';
 import { Toaster } from 'sonner';
 import { ApiClientProvider } from '@/lib/api-client';
 import { ThemeProvider } from '@/components/providers/theme-provider';
@@ -33,7 +34,7 @@ export default function RootLayout({
           </Web3Provider>
           <Toaster position="top-right" richColors />
         </ThemeProvider>
-
+        <Analytics />
       </body>
     </html>
   );

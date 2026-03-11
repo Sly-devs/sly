@@ -29,7 +29,7 @@ import {
   createApprovalWorkflowService,
   type PaymentProtocol
 } from '../services/approval-workflow.js';
-import { executeOnChainTransfer } from '../services/wallet-settlement.js';
+// executeOnChainTransfer moved to async-settlement-worker (Epic 38, Story 38.1)
 import { createCheckoutTelemetryService } from '../services/telemetry/checkout-telemetry.js';
 
 const app = new Hono();
@@ -802,7 +802,7 @@ app.post('/pay', async (c) => {
     if (endpoint.payment_address) {
       const { data, error } = await supabase
         .from('wallets')
-        .select('id, wallet_type, wallet_address')
+        .select('id, wallet_type, wallet_address, blockchain')
         .eq('wallet_address', endpoint.payment_address)
         .eq('tenant_id', ctx.tenantId)
         .eq('status', 'active')
@@ -813,10 +813,11 @@ app.post('/pay', async (c) => {
     }
 
     // Fallback: account-level lookup excluding consumer wallet
+    const consumerBlockchain = (wallet as any).blockchain || 'base';
     if (!providerWallet) {
       const { data: providerWallets, error } = await supabase
         .from('wallets')
-        .select('id, wallet_type, wallet_address')
+        .select('id, wallet_type, wallet_address, blockchain')
         .eq('owner_account_id', endpoint.account_id)
         .eq('tenant_id', ctx.tenantId)
         .eq('currency', auth.currency)
@@ -826,11 +827,12 @@ app.post('/pay', async (c) => {
 
       providerWalletError = providerWalletError || error;
 
-      // Prefer on-chain capable wallets so settlement goes through Circle
-      const walletPriority = (w: { wallet_type?: string | null; wallet_address?: string | null }) => {
-        if (w.wallet_type === 'circle_custodial' && w.wallet_address && !w.wallet_address.startsWith('internal://')) return 0;
-        if (w.wallet_type === 'external' && w.wallet_address && !w.wallet_address.startsWith('internal://')) return 1;
-        return 2;
+      // Prefer on-chain capable wallets on the same chain as the consumer wallet
+      const walletPriority = (w: { wallet_type?: string | null; wallet_address?: string | null; blockchain?: string | null }) => {
+        const sameChain = (w as any).blockchain === consumerBlockchain ? 0 : 10;
+        if (w.wallet_type === 'circle_custodial' && w.wallet_address && !w.wallet_address.startsWith('internal://')) return sameChain + 0;
+        if (w.wallet_type === 'external' && w.wallet_address && !w.wallet_address.startsWith('internal://')) return sameChain + 1;
+        return sameChain + 2;
       };
       const sorted = (providerWallets || []).sort((a, b) => walletPriority(a) - walletPriority(b));
       providerWallet = sorted[0] ?? null;
@@ -842,6 +844,106 @@ app.post('/pay', async (c) => {
         code: 'PROVIDER_WALLET_NOT_FOUND',
         details: 'The endpoint owner does not have an active wallet for this currency'
       }, 500);
+    }
+
+    // ============================================
+    // 9.5. DEFERRED MICRO-PAYMENT CHECK (Epic 38, Story 38.12)
+    // For payments below threshold, use PaymentIntent instead of full transfer.
+    // Intents settle in batches via BatchSettlementWorker (~60s cycles).
+    // ============================================
+    const DEFERRED_THRESHOLD = parseFloat(process.env.DEFERRED_THRESHOLD_AMOUNT || '1.00');
+    const useDeferredSettlement = auth.amount <= DEFERRED_THRESHOLD && auth.amount > 0;
+
+    if (useDeferredSettlement) {
+      const t_intent = Date.now();
+      try {
+        const { createAndAuthorizeIntent } = await import('../services/payment-intent.js');
+        const intentResult = await createAndAuthorizeIntent({
+          supabase,
+          tenantId: ctx.tenantId,
+          sourceWalletId: wallet.id,
+          destinationWalletId: providerWallet.id,
+          sourceAccountId: wallet.owner_account_id,
+          destinationAccountId: endpoint.account_id,
+          amount: auth.amount,
+          nonce: auth.requestId,
+          protocol: 'x402',
+          protocolMetadata: {
+            endpoint_id: endpoint.id,
+            endpoint_path: endpoint.path,
+            request_id: auth.requestId,
+            fee_amount: feeAmount,
+            net_amount: netAmount,
+          },
+        });
+
+        timings['9.5_deferred_intent'] = Date.now() - t_intent;
+
+        if (!intentResult.success) {
+          return c.json({
+            error: intentResult.error || 'Deferred payment authorization failed',
+            code: 'INTENT_FAILED',
+          }, 402);
+        }
+
+        // Update endpoint stats
+        await supabase
+          .from('x402_endpoints')
+          .update({
+            total_calls: endpoint.total_calls + 1,
+            total_revenue: parseFloat(endpoint.total_revenue) + auth.amount,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', endpoint.id)
+          .eq('tenant_id', ctx.tenantId);
+
+        // Record telemetry
+        {
+          const telemetry = createCheckoutTelemetryService(supabase);
+          telemetry.record({
+            protocol: 'x402',
+            event_type: 'payment.completed',
+            success: true,
+            merchant_domain: endpoint.name,
+            amount: auth.amount,
+            currency: auth.currency,
+            agent_id: wallet.managed_by_agent_id || undefined,
+            protocol_metadata: { endpoint_id: endpoint.id, path: endpoint.path, settlement_mode: 'deferred' },
+          });
+        }
+
+        markRequestProcessed(auth.requestId);
+        timings['total'] = Date.now() - startTotal;
+        console.log(`⚡ [x402/pay DEFERRED] ${auth.amount} USDC in ${timings['total']}ms (intent: ${timings['9.5_deferred_intent']}ms)`);
+
+        return c.json({
+          success: true,
+          message: 'Micro-payment authorized (deferred settlement)',
+          data: {
+            intentId: intentResult.intent!.id,
+            requestId: auth.requestId,
+            amount: auth.amount,
+            feeAmount,
+            netAmount,
+            currency: auth.currency,
+            endpointId: endpoint.id,
+            walletId: wallet.id,
+            newWalletBalance: intentResult.sourceNewBalance,
+            timestamp: intentResult.intent!.created_at,
+            settlementType: 'deferred',
+            settlementStatus: 'authorized',
+            settlementMode: 'batch',
+            settledAt: null,
+            proof: {
+              paymentId: intentResult.intent!.id,
+              signature: `payos:intent:${intentResult.intent!.id}:${auth.requestId}`,
+            },
+          },
+        });
+      } catch (intentErr: any) {
+        console.error('[x402-deferred] Intent creation failed, falling back to standard flow:', intentErr.message);
+        // Fall through to standard transfer flow
+      }
     }
 
     // ============================================
@@ -918,155 +1020,80 @@ app.post('/pay', async (c) => {
     };
 
     try {
+      // ===== LEDGER SETTLEMENT (always fast, <50ms) =====
+      // On-chain settlement is now ASYNC (Epic 38) — handled by AsyncSettlementWorker
+      const { data: settlementData, error: settlementError } = await supabase
+        .rpc('settle_x402_payment', {
+          p_consumer_wallet_id: wallet.id,
+          p_provider_wallet_id: providerWallet.id,
+          p_gross_amount: auth.amount,
+          p_net_amount: netAmount,
+          p_transfer_id: transfer.id,
+          p_tenant_id: ctx.tenantId
+        });
+
+      timings['11_settlement'] = Date.now() - t11;
+
+      if (settlementError) {
+        console.error('Batch settlement failed:', settlementError);
+        return c.json({
+          error: 'Payment created but settlement failed',
+          transferId: transfer.id,
+          settlementError: settlementError.message,
+          code: 'SETTLEMENT_FAILED'
+        }, 500);
+      }
+
+      // Check if on-chain settlement should be deferred to async worker
       const consumerWalletType = wallet.wallet_type || 'internal';
       const isRealWallet = consumerWalletType === 'circle_custodial' || consumerWalletType === 'external';
       const isSandboxEnv = process.env.PAYOS_ENVIRONMENT === 'sandbox';
 
-      // Check if provider wallet supports on-chain settlement
-      const { data: providerWalletFull } = await supabase
-        .from('wallets')
-        .select('wallet_address, provider_wallet_id, wallet_type')
-        .eq('id', providerWallet.id)
-        .single();
-      const providerOnChainAddress = providerWalletFull?.wallet_address;
-      const providerIsOnChain = !!providerOnChainAddress && !providerOnChainAddress.startsWith('internal://');
+      let settlementStatus: 'completed' | 'authorized' = 'completed';
 
-      if (isRealWallet && isSandboxEnv && providerIsOnChain) {
-        // ===== ON-CHAIN SETTLEMENT PATH =====
-        const onChainResult = await executeOnChainTransfer({
-          sourceWallet: wallet,
-          destinationAddress: providerOnChainAddress,
-          amount: auth.amount,
-        });
+      if (isRealWallet && isSandboxEnv) {
+        // Check if provider wallet supports on-chain
+        const { data: providerWalletFull } = await supabase
+          .from('wallets')
+          .select('wallet_address')
+          .eq('id', providerWallet.id)
+          .single();
+        const providerOnChainAddress = providerWalletFull?.wallet_address;
+        const providerIsOnChain = !!providerOnChainAddress && !providerOnChainAddress.startsWith('internal://');
 
-        if (!onChainResult.success) {
-          // x402 hard-fails on on-chain errors (no silent fallback)
-          if (onChainResult.error) {
-            await supabase
-              .from('transfers')
-              .update({ status: 'failed', protocol_metadata: { ...transfer.protocol_metadata, on_chain_error: onChainResult.error } })
-              .eq('id', transfer.id);
-            throw new Error(onChainResult.error);
-          }
-        }
-
-        const txHash = onChainResult.txHash;
-
-        // Store tx_hash on transfer
-        if (txHash) {
-          await supabase
+        if (providerIsOnChain) {
+          // Mark as 'authorized' — async worker will settle on-chain
+          settlementStatus = 'authorized';
+          console.log(`[x402-async] Marking transfer ${transfer.id} as authorized (provider on-chain: ${providerOnChainAddress})`);
+          const { data: asyncData, error: asyncErr } = await supabase
             .from('transfers')
             .update({
-              status: 'completed',
-              tx_hash: txHash,
-              completed_at: new Date().toISOString(),
+              status: 'authorized',
               protocol_metadata: {
                 ...transfer.protocol_metadata,
-                settlement_type: 'on_chain',
-                tx_hash: txHash,
+                settlement_type: 'ledger',
+                on_chain_pending: true,
+                authorized_at: new Date().toISOString(),
               },
             })
-            .eq('id', transfer.id);
-        }
+            .eq('id', transfer.id)
+            .select('id, status')
+            .single();
 
-        // Sync DB balances from Circle API (authoritative source for custodial wallets)
-        let consumerNewBalance = 0;
-        let providerNewBalance = 0;
-        const consumerIsCircle = wallet.wallet_type === 'circle_custodial';
-        const providerIsCircle = providerWalletFull?.wallet_type === 'circle_custodial';
-
-        if (consumerIsCircle || providerIsCircle) {
-          try {
-            const { getCircleClient } = await import('../services/circle/client.js');
-            const circle = getCircleClient();
-
-            if (consumerIsCircle && wallet.provider_wallet_id) {
-              const bal = await circle.getUsdcBalance(wallet.provider_wallet_id);
-              consumerNewBalance = bal.formatted;
-              await supabase
-                .from('wallets')
-                .update({ balance: consumerNewBalance, last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-                .eq('id', wallet.id)
-                .eq('tenant_id', ctx.tenantId);
-            }
-
-            if (providerIsCircle && providerWalletFull?.provider_wallet_id) {
-              const bal = await circle.getUsdcBalance(providerWalletFull.provider_wallet_id);
-              providerNewBalance = bal.formatted;
-              await supabase
-                .from('wallets')
-                .update({ balance: providerNewBalance, last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-                .eq('id', providerWallet.id)
-                .eq('tenant_id', ctx.tenantId);
-            }
-          } catch (syncErr: any) {
-            console.warn(`[x402] Post-settlement Circle balance sync failed, using optimistic math: ${syncErr.message}`);
-            // Optimistic fallback
-            const srcBal = typeof wallet.balance === 'string' ? parseFloat(wallet.balance) : wallet.balance;
-            consumerNewBalance = srcBal - auth.amount;
-            await supabase
-              .from('wallets')
-              .update({ balance: consumerNewBalance, updated_at: new Date().toISOString() })
-              .eq('id', wallet.id)
-              .eq('tenant_id', ctx.tenantId);
+          if (asyncErr) {
+            console.error(`[x402-async] Failed to mark transfer ${transfer.id} as authorized:`, asyncErr.message);
+            settlementStatus = 'completed'; // Fallback — ledger settlement is already done
+          } else {
+            console.log(`[x402-async] Transfer ${transfer.id} now status=${asyncData?.status}`);
           }
-        } else {
-          // Non-Circle on-chain wallets: use RPC for fee splitting
-          const { data: ledgerSettlement } = await supabase
-            .rpc('settle_x402_payment', {
-              p_consumer_wallet_id: wallet.id,
-              p_provider_wallet_id: providerWallet.id,
-              p_gross_amount: auth.amount,
-              p_net_amount: netAmount,
-              p_transfer_id: transfer.id,
-              p_tenant_id: ctx.tenantId,
-            });
-          consumerNewBalance = (ledgerSettlement as any)?.consumerNewBalance || 0;
-          providerNewBalance = (ledgerSettlement as any)?.providerNewBalance || 0;
         }
-
-        settlementResult = {
-          success: true,
-          consumerNewBalance,
-          providerNewBalance,
-          settledAt: new Date().toISOString(),
-          txHash,
-          settlementType: 'on_chain',
-        };
-
-        timings['11_settlement'] = Date.now() - t11;
-        console.log(`On-chain settlement completed: tx=${txHash}`);
-
-      } else {
-        // ===== SQL LEDGER SETTLEMENT PATH (default) =====
-        const { data: settlementData, error: settlementError } = await supabase
-          .rpc('settle_x402_payment', {
-            p_consumer_wallet_id: wallet.id,
-            p_provider_wallet_id: providerWallet.id,
-            p_gross_amount: auth.amount,
-            p_net_amount: netAmount,
-            p_transfer_id: transfer.id,
-            p_tenant_id: ctx.tenantId
-          });
-
-        timings['11_settlement'] = Date.now() - t11;
-
-        if (settlementError) {
-          console.error('Batch settlement failed:', settlementError);
-          return c.json({
-            error: 'Payment created but settlement failed',
-            transferId: transfer.id,
-            settlementError: settlementError.message,
-            code: 'SETTLEMENT_FAILED'
-          }, 500);
-        }
-
-        settlementResult = {
-          ...(settlementData as any),
-          settlementType: 'ledger',
-        };
-        console.log('Batch settlement completed:', settlementResult);
       }
+
+      settlementResult = {
+        ...(settlementData as any),
+        settlementType: settlementStatus === 'authorized' ? 'async' : 'ledger',
+      };
+      console.log(`Settlement completed (${settlementResult.settlementType}):`, settlementResult);
 
     } catch (error: any) {
       console.error('Settlement exception:', error);
@@ -1174,7 +1201,8 @@ app.post('/pay', async (c) => {
         walletId: wallet.id,
         newWalletBalance: newWalletBalance,
         timestamp: transfer.created_at,
-        settlementStatus: 'completed',
+        settlementType: settlementResult.settlementType || 'ledger',
+        settlementStatus: settlementResult.settlementType === 'async' ? 'authorized' : 'completed',
         settledAt: new Date().toISOString(),
 
         // Proof of payment (for retrying original request)

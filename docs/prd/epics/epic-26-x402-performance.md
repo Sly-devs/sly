@@ -70,11 +70,10 @@ x402 payment flow optimized through two phases: Phase 1 (conservative - parallel
 - Cache endpoint lookups (60s TTL)
 - Impact: ~150-200ms saved on cache hits
 
-### Phase 3: Async Settlement 📋 PLANNED
+### Phase 3: Async Settlement -- SUPERSEDED
 
-#### Story 26.4: Async Settlement Worker (5 pts) - Planned
-- Move settlement to background worker for non-blocking response
-- Impact: ~100-120ms saved per payment (non-blocking)
+#### Story 26.4: Async Settlement Worker (5 pts) -- Superseded by Epic 38, Story 38.1
+- **Status:** Superseded. This work is now covered by [Epic 38: High-Frequency Microtransaction Optimization](./epic-38-payment-optimized-chains.md), Story 38.1 (x402 Async Settlement, 5 pts), which extends the scope to include A2A async settlement (38.2), deferred net settlement (38.10-38.14), and batch on-chain settlement.
 
 ---
 
@@ -146,12 +145,8 @@ x402 payment flow optimized through two phases: Phase 1 (conservative - parallel
 - ✅ Bloom filter for idempotency: 169ms → 0ms
 - ✅ Endpoint caching: 166ms → 148ms (cache hit)
 
-**Phase 3 (Async Settlement):** 📋 PLANNED
-- [ ] Payment latency reduced by 70%+
-- [ ] Move settlement to background worker
-- [ ] Webhook delivery success rate > 99%
-- [ ] Settlement success rate > 99.9%
-- [ ] Graceful degradation if worker unavailable
+**Phase 3 (Async Settlement):** Superseded by [Epic 38, Story 38.1](./epic-38-payment-optimized-chains.md)
+- Moved to Epic 38 with expanded scope (async + deferred + batch settlement)
 
 ---
 

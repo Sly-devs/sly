@@ -18,7 +18,7 @@ import { AgentToolRegistry } from './tools/registry.js';
 import { toolHandlers } from './tools/handlers.js';
 import type { AgentContext } from './tools/context-injector.js';
 import type { A2ATask } from './types.js';
-import { executeOnChainTransfer } from '../wallet-settlement.js';
+import { authorizeWalletTransfer, isOnChainCapable } from '../wallet-settlement.js';
 import { A2AClient } from './client.js';
 import { A2AWebhookHandler } from './webhook-handler.js';
 import { createPaymentProofJWT } from '../../routes/x402-payments.js';
@@ -573,44 +573,17 @@ export class A2ATaskProcessor {
         providerWallet = data;
       }
 
-      let txHash: string | undefined;
-
       if (callerWallet) {
-        // Attempt on-chain settlement
         const destAddress = providerWallet?.wallet_address;
-        const onChainResult = await executeOnChainTransfer({
-          sourceWallet: callerWallet,
-          destinationAddress: destAddress || '',
-          amount,
-        });
+        const onChainCapable = isOnChainCapable(callerWallet, destAddress);
 
-        if (onChainResult.success && onChainResult.txHash) {
-          txHash = onChainResult.txHash;
-        } else if (onChainResult.path !== 'skipped' && onChainResult.error) {
-          this.log(taskId, 'warn', `On-chain A2A settlement failed (falling back to ledger): ${onChainResult.error}`);
-        }
-
-        // Always do ledger settlement (keeps DB balances in sync)
-        await this.supabase
-          .from('wallets')
-          .update({ balance: Math.max(0, Number(callerWallet.balance) - amount) })
-          .eq('id', callerWallet.id)
-          .gte('balance', amount);
-
-        if (providerWallet) {
-          await this.supabase
-            .from('wallets')
-            .update({ balance: Number(providerWallet.balance) + amount })
-            .eq('id', providerWallet.id);
-        }
-
-        // Create transfer record
+        // Create transfer record first
         const { data: transfer } = await this.supabase
           .from('transfers')
           .insert({
             tenant_id: this.tenantId,
             type: 'internal',
-            status: 'completed',
+            status: 'pending',
             amount,
             currency: mandate.currency,
             destination_amount: amount,
@@ -622,22 +595,62 @@ export class A2ATaskProcessor {
             description: `A2A settlement: task ${taskId.slice(0, 8)}`,
             initiated_by_type: 'agent',
             initiated_by_id: mandate.agent_id,
-            completed_at: new Date().toISOString(),
-            tx_hash: txHash || null,
             protocol_metadata: {
               protocol: 'a2a',
               settlement: true,
               mandateId,
               taskId,
-              settlement_type: txHash ? 'on_chain' : 'ledger',
-              tx_hash: txHash,
+              wallet_id: callerWallet.id,
+              provider_wallet_id: providerWallet?.id,
             },
           })
           .select('id')
           .single();
 
-        // Link transfer to task
         if (transfer) {
+          // Fast ledger authorization — on-chain deferred to async worker (Epic 38, Story 38.2)
+          const authorization = await authorizeWalletTransfer({
+            supabase: this.supabase,
+            tenantId: this.tenantId,
+            sourceWallet: callerWallet,
+            destinationWallet: providerWallet,
+            amount,
+            transferId: transfer.id,
+            protocolMetadata: {
+              protocol: 'a2a',
+              settlement: true,
+              mandateId,
+              taskId,
+              wallet_id: callerWallet.id,
+              provider_wallet_id: providerWallet?.id,
+            },
+          });
+
+          if (!authorization.success) {
+            this.log(taskId, 'warn', `A2A ledger authorization failed: ${authorization.error}`);
+          }
+
+          // If not on-chain capable, mark as completed (ledger-only is final)
+          if (authorization.success && !onChainCapable) {
+            await this.supabase
+              .from('transfers')
+              .update({
+                status: 'completed',
+                completed_at: new Date().toISOString(),
+                protocol_metadata: {
+                  protocol: 'a2a',
+                  settlement: true,
+                  mandateId,
+                  taskId,
+                  wallet_id: callerWallet.id,
+                  provider_wallet_id: providerWallet?.id,
+                  settlement_type: 'ledger',
+                },
+              })
+              .eq('id', transfer.id);
+          }
+
+          // Link transfer to task
           await this.supabase
             .from('a2a_tasks')
             .update({ transfer_id: transfer.id })

@@ -362,7 +362,7 @@ Sly is now the **only settlement infrastructure** supporting all three agentic p
 | 23 | Dashboard Performance & API Optimization 🚀 | — | P1 | ✅ Complete | 18 | 7/7 | — |
 | 24 | Enhanced API Key Security 🔐 | — | P2 | 📋 Pending | 28 | 0/7 | — |
 | ~~25~~ | ~~User Onboarding~~ | — | — | → Absorbed into Epic 51 | — | — | — |
-| 26 | x402 Payment Performance Optimization ⚡ | — | P1 | ✅ Complete | 13 | 7/7 | — |
+| 26 | x402 Payment Performance Optimization ⚡ | — | P1 | ✅ Complete (Phase 3 → Epic 38) | 13 | 6/7 | [View](./epics/epic-26-x402-performance.md) |
 | 27 | Settlement Infrastructure Hardening 🏗️ | 5 | P1 | ✅ Complete | 34 | 8/8 | [View](./epics/epic-27-settlement.md) |
 | 28 | Simulation Engine 🔮 | 6 | P0 | ✅ Complete | 24 | 8/8 | [View](./epics/epic-28-simulation.md) |
 | 29 | Workflow Engine ⚙️ | 6 | P0 | 📋 Pending | 52 | 0/11 | [View](./epics/epic-29-workflow-engine.md) |
@@ -396,6 +396,7 @@ Sly is now the **only settlement infrastructure** supporting all three agentic p
 | **62** | **Escrow Orchestration 🔐** | **5.3** | **P0** | **📋 Planned** | **38** | **0/9** | **[View](./epics/epic-62-escrow-orchestration.md)** |
 | **63** | **External Reputation Bridge 🛡️** | **5.3** | **P0** | **📋 Planned** | **25** | **0/7** | **[View](./epics/epic-63-external-reputation-bridge.md)** |
 | **64** | **OpenClaw Governance Skill 🧩** | **5.4** | **P1** | **📋 Planned** | **10** | **0/4** | **[View](./epics/epic-64-openclaw-governance-skill.md)** |
+| **38** | **High-Frequency Microtransaction Optimization ⚡** | **5** | **P1** | **📋 Planned** | **63** | **0/18** | **[View](./epics/epic-38-payment-optimized-chains.md)** |
 
 **Summary:**
 - **Foundation Complete:** Epics 1-16 (Phase 1-2) fully implemented

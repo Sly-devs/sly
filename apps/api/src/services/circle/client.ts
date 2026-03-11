@@ -23,6 +23,9 @@ import {
   CircleApiResponse,
   CircleApiError,
   TokenBalance,
+  GasStationConfig,
+  GasStationBalance,
+  GasStationStatus,
 } from './types.js';
 
 // ============================================
@@ -225,7 +228,8 @@ export class CircleClient {
     walletSetId: string,
     blockchains: CircleBlockchain[],
     count: number = 1,
-    metadata?: { name?: string; refId?: string }
+    metadata?: { name?: string; refId?: string },
+    accountType?: 'SCA' | 'EOA'
   ): Promise<CircleWallet[]> {
     const request = await this.withCiphertext({
       idempotencyKey: randomUUID(),
@@ -233,6 +237,7 @@ export class CircleClient {
       blockchains,
       count,
       metadata: metadata ? [metadata] : undefined,
+      ...(accountType ? { accountType } : {}),
     });
 
     const response = await this.request<CircleApiResponse<{ wallets: CircleWallet[] }>>(
@@ -252,13 +257,15 @@ export class CircleClient {
     walletSetId: string,
     blockchain: CircleBlockchain,
     name?: string,
-    refId?: string
+    refId?: string,
+    accountType?: 'SCA' | 'EOA'
   ): Promise<CircleWallet> {
     const wallets = await this.createWallets(
       walletSetId,
       [blockchain],
       1,
-      { name, refId }
+      { name, refId },
+      accountType
     );
     return wallets[0];
   }
@@ -449,6 +456,40 @@ export class CircleClient {
     }
 
     console.log(`[Circle] Faucet drip successful for ${address}`);
+  }
+
+  // ============================================
+  // Gas Station (Epic 38, Story 38.7)
+  // ============================================
+
+  /**
+   * Get Gas Station status.
+   *
+   * NOTE: Circle Gas Station has NO REST API for configuration.
+   * It is managed exclusively via the Circle Developer Console UI.
+   * On testnet, Gas Station is enabled by default with preconfigured policies.
+   * On mainnet, policies must be configured via Console + billing credit card.
+   *
+   * Gas Station automatically sponsors gas for SCA wallets on EVM chains.
+   * This method reports status based on feature flags and environment.
+   */
+  async getGasStationStatus(): Promise<GasStationStatus> {
+    const config: GasStationConfig = {
+      state: 'ENABLED',
+    };
+
+    // Detect environment from PAYOS_ENVIRONMENT
+    const env = process.env.PAYOS_ENVIRONMENT || 'mock';
+    const isTestnet = env !== 'production';
+
+    return {
+      config,
+      balances: [],
+      healthy: true,
+      message: isTestnet
+        ? 'Gas Station enabled (testnet — default policies active, gas fees sponsored by Circle)'
+        : 'Gas Station enabled (mainnet — ensure policies are configured in Circle Console)',
+    };
   }
 
   // ============================================

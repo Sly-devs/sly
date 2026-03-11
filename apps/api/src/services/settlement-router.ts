@@ -36,6 +36,7 @@ export type Protocol = 'x402' | 'ap2' | 'acp' | 'internal' | 'cross_border';
 export type SettlementRail =
   | 'circle_usdc'     // Circle Programmable Wallets (USDC)
   | 'base_chain'      // Base L2 for on-chain settlements
+  | 'solana_chain'    // Solana for on-chain settlements (Epic 38)
   | 'pix'             // Brazil instant payment
   | 'spei'            // Mexico instant payment
   | 'internal'        // Internal ledger transfer
@@ -80,6 +81,7 @@ export interface SettlementRequest {
   currency: string;
   destinationCurrency?: string;
   destinationCountry?: string;
+  blockchain?: string;          // Wallet blockchain (e.g., 'sol', 'base') for chain-aware routing
   protocolMetadata?: Record<string, any>;
   retryCount?: number;
   maxRetries?: number;
@@ -133,6 +135,15 @@ const RAIL_CONFIG: Record<SettlementRail, Omit<SettlementRoute, 'supported'>> = 
     feePercentage: 0.005,      // 0.5%
     feeFixed: 0.05,
     minAmount: 0.10,
+    maxAmount: 500000,
+  },
+  solana_chain: {
+    rail: 'solana_chain',
+    priority: 3,               // Same priority as base_chain (chain-aware routing selects)
+    estimatedTime: 5,          // ~5 seconds (400ms finality + confirmation)
+    feePercentage: 0.003,      // 0.3% (lower fees on Solana)
+    feeFixed: 0.01,
+    minAmount: 0.01,
     maxAmount: 500000,
   },
   pix: {
@@ -204,10 +215,10 @@ const CURRENCY_COUNTRY_MAP: Record<string, string> = {
 const COUNTRY_RAILS: Record<string, SettlementRail[]> = {
   'BR': ['pix', 'visa_pull', 'mastercard_pull', 'wire'],
   'MX': ['spei', 'visa_pull', 'mastercard_pull', 'wire'],
-  'US': ['circle_usdc', 'base_chain', 'visa_pull', 'mastercard_pull', 'wire'],
+  'US': ['circle_usdc', 'base_chain', 'solana_chain', 'visa_pull', 'mastercard_pull', 'wire'],
   'EU': ['visa_pull', 'mastercard_pull', 'wire'],
   // Default: stablecoin and card rails
-  '*': ['circle_usdc', 'base_chain', 'visa_pull', 'mastercard_pull', 'internal'],
+  '*': ['circle_usdc', 'base_chain', 'solana_chain', 'visa_pull', 'mastercard_pull', 'internal'],
 };
 
 // ============================================
@@ -255,11 +266,12 @@ export class SettlementRouter {
       throw new Error(`No settlement rails available for this transfer`);
     }
 
-    // Select the best rail based on protocol and priority
+    // Select the best rail based on protocol, priority, and wallet blockchain
     const selectedRoute = this.selectBestRail(
       request.protocol,
       availableRails,
-      request.amount
+      request.amount,
+      request.blockchain
     );
 
     const decisionTime = Date.now() - startTime;
@@ -371,6 +383,9 @@ export class SettlementRouter {
       case 'base_chain':
         return this.executeBaseChainSettlement(request, feeAmount, netAmount);
 
+      case 'solana_chain':
+        return this.executeSolanaChainSettlement(request, feeAmount, netAmount);
+
       case 'pix':
         return this.executePixSettlement(request, feeAmount, netAmount);
 
@@ -469,6 +484,66 @@ export class SettlementRouter {
       netAmount,
       estimatedCompletion: new Date(Date.now() + 60000).toISOString(),
     };
+  }
+
+  private async executeSolanaChainSettlement(
+    request: SettlementRequest,
+    feeAmount: number,
+    netAmount: number
+  ): Promise<SettlementResponse> {
+    console.log(`[Settlement Router] Solana chain settlement for ${request.amount} ${request.currency}`);
+
+    try {
+      const { transferSolanaUsdc } = await import('../config/solana.js');
+      const destinationAddress = request.protocolMetadata?.destinationAddress;
+
+      if (!destinationAddress) {
+        return {
+          success: false,
+          transferId: request.transferId,
+          status: 'failed',
+          rail: 'solana_chain',
+          grossAmount: request.amount,
+          feeAmount,
+          netAmount,
+          error: {
+            code: 'MISSING_DESTINATION',
+            message: 'Solana destination address required for on-chain settlement',
+            retryable: false,
+          },
+        };
+      }
+
+      const result = await transferSolanaUsdc(destinationAddress, netAmount);
+
+      return {
+        success: true,
+        transferId: request.transferId,
+        status: 'completed',
+        rail: 'solana_chain',
+        settlementId: result.txHash,
+        grossAmount: request.amount,
+        feeAmount,
+        netAmount,
+        settledAt: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      console.error('[Settlement Router] Solana chain settlement error:', error);
+      return {
+        success: false,
+        transferId: request.transferId,
+        status: 'failed',
+        rail: 'solana_chain',
+        grossAmount: request.amount,
+        feeAmount,
+        netAmount,
+        error: {
+          code: 'SOLANA_SETTLEMENT_ERROR',
+          message: error.message || 'Failed to execute Solana on-chain transfer',
+          retryable: this.isRetryableError(error),
+        },
+      };
+    }
   }
 
   private async executePixSettlement(
@@ -878,18 +953,31 @@ export class SettlementRouter {
   private selectBestRail(
     protocol: Protocol,
     availableRails: SettlementRail[],
-    amount: number
+    amount: number,
+    blockchain?: string
   ): SettlementRoute {
     // Protocol-specific preferences
     const protocolPreferences: Record<Protocol, SettlementRail[]> = {
-      'x402': ['circle_usdc', 'base_chain', 'internal'],
-      'ap2': ['circle_usdc', 'pix', 'spei', 'internal'],
+      'x402': ['circle_usdc', 'base_chain', 'solana_chain', 'internal'],
+      'ap2': ['circle_usdc', 'solana_chain', 'pix', 'spei', 'internal'],
       'acp': ['circle_usdc', 'internal', 'wire'],
       'internal': ['internal'],
       'cross_border': ['pix', 'spei', 'wire', 'circle_usdc'],
     };
 
-    const preferences = protocolPreferences[protocol] || ['internal'];
+    let preferences = protocolPreferences[protocol] || ['internal'];
+
+    // Chain-aware routing: if wallet is on Solana, prefer solana_chain over base_chain
+    if (blockchain === 'sol') {
+      preferences = preferences.map(r => r === 'base_chain' ? 'solana_chain' : r);
+      // Ensure solana_chain is near the top if not already present
+      if (!preferences.includes('solana_chain')) {
+        preferences = ['solana_chain', ...preferences];
+      }
+    } else if (blockchain === 'base' || blockchain === 'eth') {
+      // EVM wallets should not use solana_chain
+      preferences = preferences.filter(r => r !== 'solana_chain');
+    }
 
     // Find the first available preferred rail
     for (const preferred of preferences) {
@@ -925,6 +1013,8 @@ export class SettlementRouter {
       reasons.push(`Local rail for ${route.rail.toUpperCase()} (lowest fees)`);
     } else if (route.rail === 'base_chain') {
       reasons.push('On-chain settlement via Base L2');
+    } else if (route.rail === 'solana_chain') {
+      reasons.push('On-chain settlement via Solana (fast finality)');
     } else if (route.rail === 'visa_pull') {
       reasons.push('Visa VIC card pull (agent payment)');
     } else if (route.rail === 'mastercard_pull') {

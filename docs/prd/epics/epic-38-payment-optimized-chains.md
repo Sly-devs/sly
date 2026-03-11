@@ -1,332 +1,278 @@
-# Epic 38: Payment-Optimized Chain Integration (Tempo & Beyond)
+# Epic 38: High-Frequency Microtransaction Optimization
 
-**Status:** 📋 Future Consideration  
-**Phase:** Future (Post-Scale)  
-**Priority:** P3  
-**Total Points:** TBD  
-**Stories:** TBD  
-**Dependencies:** Epic 17 (Multi-Protocol Gateway), Epic 27 (Settlement Infrastructure)  
-**Enables:** High-throughput payments, reduced settlement costs, sub-second finality
+**Status:** P1 — Active Development
+**Phase:** Performance & Scale
+**Priority:** P1
+**Total Points:** 63
+**Stories:** 18 (across 5 phases)
+**Dependencies:** Epic 26 (x402 Performance - Phase 3 folded in), Epic 50 (Settlement Decoupling - complete), Epic 57 (A2A Protocol - complete)
+**Enables:** Sub-100ms authorization latency, multi-chain support, gasless transactions, deferred batch settlement
 
-[← Back to Epic List](./README.md)
+[<- Back to Epic List](./README.md)
 
 ---
 
 ## Executive Summary
 
-**The Challenge:** Current blockchains (Base, Ethereum, Solana) are general-purpose and not optimized for payment workloads. At scale, PayOS may face:
-- 18-hour settlement time for tens of thousands of payments (noted in research)
-- Gas fee volatility during network congestion
-- Throughput bottlenecks (3.8 payments/sec current benchmark)
-
-**The Opportunity:** Payment-optimized blockchains like Tempo are emerging with features specifically designed for high-volume payment processing.
-
-**When to Consider:** When PayOS processes >1,000 payments/day and current chains become bottlenecks.
+A2A and x402 are our primary agent-to-agent payment rails, but current settlement is synchronous and slow. The Circle polling loop blocks responses for up to 30 seconds, and we only support Base chain. For a busy agentic marketplace with high-frequency microtransactions ($0.01-$1.00), we need sub-100ms authorization latency, multi-chain support (Solana + Base), gasless transactions, and deferred batch settlement.
 
 ---
 
-## Background: The Payment Chain Problem
+## Current Bottlenecks
 
-### Current Chain Limitations (from Obsidian Research)
+- `executeOnChainTransfer()` polls Circle every 2s for up to 30s, blocking the response
+- Single chain (Base only) despite Circle supporting Solana, Polygon, etc.
+- No Gas Station -- external wallets need native tokens for gas
+- Per-transaction on-chain settlement -- no batching for micro-payments
+- No deferred settlement -- all payments block on on-chain confirmation
 
-> "Current blockchains (Solana, Ethereum) not optimized for payments - specialized chains like Tempo emerging"
+## Reusable Infrastructure
 
-> "18-hour settlement time for tens of thousands of payments on current chains - bottleneck for scale"
+- Circle client already defines `SOL/SOL-DEVNET` in types (`services/circle/types.ts`)
+- Wallet schema already supports `blockchain: 'sol'` (`routes/wallets.ts:65`)
+- Settlement router already has multi-rail routing + batch ops (`settlement-router.ts`)
+- Settlement triggers engine (Epic 50) supports immediate/threshold/schedule/manual
+- `settle_x402_payment` RPC is atomic and fast (<50ms) for ledger-only settlement
 
-### What Payment Workloads Need
+## Multi-Chain Policy
 
-| Feature | General Chain | Payment Chain |
-|---------|---------------|---------------|
-| Gas fees | ETH/SOL only | Any asset (gas sponsorship) |
-| Throughput | Variable | Guaranteed lanes |
-| Batching | Manual | Native batch transactions |
-| Finality | 12+ blocks | Sub-second |
-| Double-spend | Complex | Account-layer freezing |
-| Latency | 1-15 seconds | <1 second |
-
----
-
-## Payment-Optimized Chain Candidates
-
-### 1. Tempo (Primary Candidate)
-
-**From Research Notes:**
-> "Key payment chain features: gas sponsorship with any asset, batch transactions, reliable throughput, priority lanes"
-
-**Features:**
-- **Gas Sponsorship:** Pay fees in USDC, not native token
-- **Batch Transactions:** Single tx settles 100+ payments
-- **Priority Lanes:** Guaranteed inclusion for payment traffic
-- **Account Freezing:** Double-spend prevention at account layer
-
-**Status:** Early stage (as of research date)
-
-**Integration Complexity:** Medium-High (new chain, new APIs)
-
-### 2. Monad
-
-**Features:**
-- 10,000+ TPS
-- EVM compatible
-- Sub-second finality
-
-**Status:** Mainnet pending
-
-**Integration Complexity:** Low (EVM compatible)
-
-### 3. Sei V2
-
-**Features:**
-- Optimized for trading/payments
-- Parallel transaction execution
-- Native order matching
-
-**Status:** Production
-
-**Integration Complexity:** Medium (Cosmos SDK)
-
-### 4. Solana Pay Enhancements
-
-**Features:**
-- Priority fees for guaranteed inclusion
-- Compressed transactions
-- Native USDC support
-
-**Status:** Production
-
-**Integration Complexity:** Low (already supported)
+Agents choose their chain at wallet creation time. No forced default -- the wallet creation API already accepts `blockchain` param.
 
 ---
 
-## Technical Evaluation Framework
+## Phase 1: Async Settlement Worker (8 pts, ~1 sprint)
 
-### When to Evaluate Payment Chains
+*Biggest quick win -- decouples response from on-chain settlement. Subsumes Epic 26 Phase 3.*
 
-**Triggers:**
-1. PayOS processes >1,000 payments/day consistently
-2. Gas costs exceed 1% of payment volume
-3. Settlement latency complaints from partners
-4. Current chain experiences congestion affecting PayOS
+### Story 38.1: x402 Async Settlement (5 pts)
 
-**Metrics to Track:**
-```typescript
-interface ChainPerformanceMetrics {
-  avg_settlement_latency_ms: number;
-  p99_settlement_latency_ms: number;
-  gas_cost_per_payment_usd: number;
-  failed_settlement_rate: number;
-  daily_throughput_capacity: number;
-}
-```
+Return payment response after fast ledger authorization; settle on-chain asynchronously.
 
-### Evaluation Criteria
+**Files to modify:**
+- `apps/api/src/services/wallet-settlement.ts` -- Add `authorizeWalletTransfer()` that does ledger debit/credit only (the `.gte()` guard path), returns in <50ms
+- `apps/api/src/routes/x402-payments.ts` -- After ledger settlement, return response immediately. Enqueue on-chain settlement task instead of blocking on `executeOnChainTransfer()`
+- **New:** `apps/api/src/workers/x402-settlement-worker.ts` -- Polls `transfers` with `status='authorized'`, executes on-chain via `executeOnChainTransfer()`, updates to `completed`
 
-| Criterion | Weight | Tempo | Monad | Sei | Solana |
-|-----------|--------|-------|-------|-----|--------|
-| Gas sponsorship | 25% | ✅ Native | ❌ | ❌ | ⚠️ Limited |
-| Batch support | 20% | ✅ Native | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual |
-| USDC liquidity | 20% | ❓ Unknown | ❓ Unknown | ⚠️ Limited | ✅ High |
-| EVM compatible | 15% | ❓ Unknown | ✅ Yes | ❌ | ❌ |
-| Mainnet ready | 10% | ❌ | ❌ | ✅ | ✅ |
-| Circle support | 10% | ❓ Unknown | ❓ Unknown | ❓ Unknown | ✅ Yes |
+**New transfer status:** `authorized` (ledger settled, on-chain pending)
+**Latency impact:** ~2-30s down to ~50-200ms per payment
+
+### Story 38.2: A2A Async Settlement (3 pts)
+
+Same async pattern for A2A payments.
+
+**Files to modify:**
+- `apps/api/src/services/a2a/payment-handler.ts` -- Use `authorizeWalletTransfer()` instead of `settleWalletTransfer()`
 
 ---
 
-## Proposed Architecture
+## Phase 2: Solana Chain Activation (13 pts, ~1.5 sprints)
 
-### Multi-Chain Settlement Layer
+*Second chain for faster finality (100-150ms vs 200ms on Base)*
+
+### Story 38.3: Solana Chain Configuration (3 pts)
+
+- `apps/api/src/config/blockchain.ts` -- Add Solana to `CHAIN_CONFIGS` (devnet + mainnet)
+- **New:** `apps/api/src/config/solana.ts` -- `@solana/web3.js` client, SPL Token balance/transfer functions
+- `apps/api/src/services/wallet-settlement.ts` -- Add Solana branch to `executeOnChainTransfer()`
+
+**New deps:** `@solana/web3.js`, `@solana/spl-token`
+
+### Story 38.4: Circle Wallet Creation on Solana (3 pts)
+
+- `apps/api/src/services/circle/index.ts` -- Ensure `createWallet()` correctly handles SOL/SOL-DEVNET based on environment
+- `apps/api/src/routes/wallets.ts` -- Verify `blockchain: 'sol'` flows through correctly (types already support it)
+
+### Story 38.5: Settlement Router Chain Awareness (5 pts)
+
+- `apps/api/src/services/settlement-router.ts` -- Add `solana_chain` rail, chain-aware routing (Solana wallets prefer Solana rail)
+- `apps/api/src/services/wallet-settlement.ts` -- Update `isOnChainCapable()` to check wallet `blockchain` field
+- **Migration:** `20260310_solana_rail.sql`
+
+### Story 38.6: Solana Balance Sync (2 pts)
+
+- `apps/api/src/routes/wallets.ts` -- Add Solana path to `/sync` endpoint using `getSolanaUsdcBalance()`
+
+---
+
+## Phase 3: Circle Gas Station (8 pts, ~1 sprint)
+
+*Gasless transactions -- agents don't need native tokens. Can run in parallel with Phase 2.*
+
+### Story 38.7: Gas Station API Integration (3 pts)
+
+- `apps/api/src/services/circle/client.ts` -- Add `getGasStationConfig()`, `updateGasStationConfig()`, `getGasStationStatus()`
+- `apps/api/src/services/circle/types.ts` -- Add `GasStationConfig` interface
+
+### Story 38.8: Gas Station Activation & Monitoring (3 pts)
+
+- `apps/api/src/config/environment.ts` -- Add `circleGasStation` feature flag
+- `apps/api/src/routes/wallets.ts` -- Add Gas Station status/configure endpoints
+
+### Story 38.9: Gas Station Health Alerts (2 pts)
+
+- `apps/api/src/services/circle/index.ts` -- Add `checkGasStationHealth()` to service interface
+- `apps/api/src/app.ts` -- Include Gas Station balance in `/health` response
+
+---
+
+## Phase 4: Deferred Net Settlement (21 pts, ~2-3 sprints)
+
+*Sub-100ms authorization for micro-payments via signed intents + batch settlement. Depends on Phase 1.*
+
+### Story 38.10: Payment Intent Schema (3 pts)
+
+- **New:** `apps/api/src/services/payment-intent.ts` -- `PaymentIntent` type, `createPaymentIntent()`, `authorizePaymentIntent()` (<10ms ledger operation)
+- **Migration:** `20260315_payment_intents.sql` -- `payment_intents` table with nonce uniqueness, batch tracking
+
+### Story 38.11: Net Position Tracker (5 pts)
+
+- **New:** `apps/api/src/services/net-position.ts` -- In-memory tracker with DB persistence: `recordIntent()`, `getNetPosition()`, `clearPositions()`
+- **New:** `apps/api/src/services/settlement-batcher.ts` -- `createBatch()` computes net positions, `executeBatch()` settles net amounts on-chain
+
+Example: 1000 micro-payments between agents A and B net to a single $3 on-chain transfer.
+
+### Story 38.12: x402 Intent-Based Micro-payments (5 pts)
+
+- `apps/api/src/routes/x402-payments.ts` -- For payments below `deferred_threshold_amount` (e.g. $1.00), create `PaymentIntent` instead of `Transfer`. Returns `settlementMode: 'deferred'`
+- `apps/api/src/services/settlement.ts` -- Add `deferredThresholdAmount` to `SettlementConfig`
+
+### Story 38.13: A2A Intent-Based Micro-payments (3 pts)
+
+- `apps/api/src/services/a2a/payment-handler.ts` -- Add `settleViaIntent()` for micro-payment A2A tasks
+
+### Story 38.14: Batch Settlement Worker (5 pts)
+
+- **New:** `apps/api/src/workers/batch-settlement-worker.ts` -- Runs on configurable schedule (default 60s), computes net positions per tenant, executes on-chain transfers for net amounts, marks intents as settled
+
+---
+
+## Phase 5: CCTP Cross-Chain & Metrics (13 pts, ~2 sprints)
+
+*Cross-chain USDC movement + performance observability. Depends on Phase 2.*
+
+### Story 38.15: CCTP Bridge Service (5 pts)
+
+- **New:** `apps/api/src/services/cctp/bridge.ts` -- `burnUsdc()`, `mintUsdc()`, `getTransferStatus()` for Base <-> Solana USDC movement
+- `apps/api/src/services/settlement-router.ts` -- Add `cctp_bridge` rail
+
+### Story 38.16: Cross-Chain Wallet Routing (3 pts)
+
+- `apps/api/src/services/wallet-settlement.ts` -- Auto-detect cross-chain scenarios, route through CCTP
+- `apps/api/src/services/a2a/payment-handler.ts` -- Cross-chain A2A routing
+
+### Story 38.17: Chain Performance Metrics (3 pts)
+
+- **Migration:** `20260320_chain_metrics.sql` -- `chain_performance_metrics` table
+- `apps/api/src/services/wallet-settlement.ts` -- Record timing/gas metrics after each settlement
+- `apps/api/src/routes/settlement.ts` -- `GET /v1/settlement/chain-metrics` endpoint
+
+### Story 38.18: Solana Priority Fees (2 pts)
+
+- `apps/api/src/config/solana.ts` -- Compute budget instructions, dynamic priority fee estimation
+
+---
+
+## SDK Impact Assessment
+
+| Feature/Endpoint | Needs SDK? | Module | Priority | Notes |
+|------------------|------------|--------|----------|-------|
+| Async settlement (38.1-38.2) | No | - | - | Internal optimization, no API change |
+| Solana wallet creation (38.4) | Types | `sly.wallets` | P1 | `blockchain: 'sol'` already in types |
+| Gas Station config (38.8) | No | - | - | Admin-only endpoint |
+| `GET /v1/settlement/chain-metrics` (38.17) | Yes | `sly.settlements` | P2 | New read-only endpoint |
+| Deferred settlement mode (38.12) | Types | Types only | P1 | Add `settlementMode` to response types |
+
+**SDK Stories Required:**
+- [ ] Update `@sly/types` with `authorized` transfer status and `settlementMode` field
+- [ ] Add `getChainMetrics()` to `sly.settlements` module
+
+---
+
+## Latency Impact Summary
+
+| Scenario | Current | After Phase 1 | After Phase 4 |
+|----------|---------|---------------|---------------|
+| x402 payment response | 2-30s | 50-200ms | <100ms |
+| A2A payment response | 2-30s | 50-200ms | <100ms |
+| On-chain confirmation | Blocking | Async (background) | Batched (every 60s) |
+| Micro-payment authorization | N/A | N/A | <10ms (ledger) |
+
+---
+
+## Story Summary
+
+| Story | Points | Phase | Priority | Description |
+|-------|--------|-------|----------|-------------|
+| 38.1 | 5 | Phase 1 | P1 | x402 Async Settlement |
+| 38.2 | 3 | Phase 1 | P1 | A2A Async Settlement |
+| 38.3 | 3 | Phase 2 | P1 | Solana Chain Configuration |
+| 38.4 | 3 | Phase 2 | P1 | Circle Wallet Creation on Solana |
+| 38.5 | 5 | Phase 2 | P1 | Settlement Router Chain Awareness |
+| 38.6 | 2 | Phase 2 | P1 | Solana Balance Sync |
+| 38.7 | 3 | Phase 3 | P1 | Gas Station API Integration |
+| 38.8 | 3 | Phase 3 | P1 | Gas Station Activation & Monitoring |
+| 38.9 | 2 | Phase 3 | P2 | Gas Station Health Alerts |
+| 38.10 | 3 | Phase 4 | P1 | Payment Intent Schema |
+| 38.11 | 5 | Phase 4 | P1 | Net Position Tracker |
+| 38.12 | 5 | Phase 4 | P1 | x402 Intent-Based Micro-payments |
+| 38.13 | 3 | Phase 4 | P1 | A2A Intent-Based Micro-payments |
+| 38.14 | 5 | Phase 4 | P1 | Batch Settlement Worker |
+| 38.15 | 5 | Phase 5 | P2 | CCTP Bridge Service |
+| 38.16 | 3 | Phase 5 | P2 | Cross-Chain Wallet Routing |
+| 38.17 | 3 | Phase 5 | P2 | Chain Performance Metrics |
+| 38.18 | 2 | Phase 5 | P2 | Solana Priority Fees |
+| **Total** | **63** | | | |
+
+---
+
+## Dependency Graph
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         PAYOS SETTLEMENT ROUTER                             │
-│                                                                             │
-│  Payment Request → Routing Logic → Optimal Chain Selection                  │
-│                                                                             │
-│  Routing Factors:                                                           │
-│  • Payment size (batch vs single)                                           │
-│  • Destination (LATAM → prefer Circle-supported chains)                     │
-│  • Urgency (real-time vs batch)                                             │
-│  • Cost optimization                                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-            ┌───────────────────────┼───────────────────────┐
-            │                       │                       │
-            ▼                       ▼                       ▼
-┌───────────────────┐   ┌───────────────────┐   ┌───────────────────┐
-│   BASE (Current)  │   │   TEMPO (Future)  │   │   SOLANA (Option) │
-│                   │   │                   │   │                   │
-│ • Default chain   │   │ • Batch payments  │   │ • High throughput │
-│ • Circle native   │   │ • Gas sponsorship │   │ • Circle USDC     │
-│ • x402 ecosystem  │   │ • Priority lanes  │   │ • Fast finality   │
-└───────────────────┘   └───────────────────┘   └───────────────────┘
-```
-
-### Batch Settlement Flow (Tempo Example)
-
-```
-Current Flow (per-payment):
-┌────────┐   ┌────────┐   ┌────────┐   ┌────────┐
-│Payment1│ → │ Tx #1  │ → │Confirm1│ → │Settle1 │
-└────────┘   └────────┘   └────────┘   └────────┘
-┌────────┐   ┌────────┐   ┌────────┐   ┌────────┐
-│Payment2│ → │ Tx #2  │ → │Confirm2│ → │Settle2 │
-└────────┘   └────────┘   └────────┘   └────────┘
-... x 100 = 100 transactions, 100 gas fees
-
-Batch Flow (Tempo):
-┌────────┐
-│Payment1│ ─┐
-└────────┘  │
-┌────────┐  │   ┌─────────────┐   ┌─────────┐   ┌──────────┐
-│Payment2│ ─┼─→ │ Batch Tx #1 │ → │ Confirm │ → │ 100 Settl│
-└────────┘  │   └─────────────┘   └─────────┘   └──────────┘
-...         │
-┌────────┐  │
-│Payment100├─┘
-└────────┘
-
-= 1 transaction, 1 gas fee (shared across 100 payments)
+Phase 1 (Async Settlement)          Phase 3 (Gas Station)
+  |-- 38.1 (x402 async)               |-- 38.7 (API integration)
+  |-- 38.2 (A2A async)                |-- 38.8 (activation)
+  |                                    |-- 38.9 (health alerts)
+  v
+Phase 4 (Deferred Net Settlement)   Phase 2 (Solana) [parallel w/ Phase 3]
+  |-- 38.10 (intent schema)           |-- 38.3 (chain config)
+  |-- 38.11 (net position tracker)    |-- 38.4 (Circle wallets)
+  |-- 38.12 (x402 intents)            |-- 38.5 (router awareness)
+  |-- 38.13 (A2A intents)             |-- 38.6 (balance sync)
+  |-- 38.14 (batch worker)            |
+                                       v
+                                     Phase 5 (CCTP + Metrics)
+                                       |-- 38.15 (CCTP bridge)
+                                       |-- 38.16 (cross-chain routing)
+                                       |-- 38.17 (chain metrics)
+                                       |-- 38.18 (Solana priority fees)
 ```
 
 ---
 
-## Potential Stories (Draft)
+## Verification
 
-### Phase 1: Research & Monitoring
-
-| Story | Points | Priority | Description |
-|-------|--------|----------|-------------|
-| 38.1 | 2 | P3 | Add chain performance metrics tracking |
-| 38.2 | 3 | P3 | Create chain evaluation dashboard |
-| 38.3 | 2 | P3 | Set up alerts for chain congestion |
-
-### Phase 2: Multi-Chain Foundation
-
-| Story | Points | Priority | Description |
-|-------|--------|----------|-------------|
-| 38.4 | 5 | P3 | Abstract settlement layer for multi-chain |
-| 38.5 | 3 | P3 | Implement chain routing logic |
-| 38.6 | 3 | P3 | Add chain configuration per tenant |
-
-### Phase 3: Tempo Integration (When Ready)
-
-| Story | Points | Priority | Description |
-|-------|--------|----------|-------------|
-| 38.7 | 8 | P3 | Tempo SDK integration |
-| 38.8 | 5 | P3 | Batch transaction builder |
-| 38.9 | 5 | P3 | Gas sponsorship integration |
-| 38.10 | 3 | P3 | Tempo testnet validation |
-
-### Phase 4: Production & Optimization
-
-| Story | Points | Priority | Description |
-|-------|--------|----------|-------------|
-| 38.11 | 5 | P3 | Tempo mainnet deployment |
-| 38.12 | 3 | P3 | Cost optimization algorithms |
-| 38.13 | 2 | P3 | Chain failover logic |
-
-**Total Estimated Points:** 49
+- **Phase 1:** Unit test `authorizeWalletTransfer()` returns without Circle API call. Integration test: x402 pay returns in <500ms, async worker settles on-chain within 60s.
+- **Phase 2:** Create Solana wallet via API, fund via Circle faucet, execute Solana-to-Solana transfer.
+- **Phase 3:** Transfer between agent wallets with Gas Station enabled, verify no native token consumed.
+- **Phase 4:** Send 100 micro-payments between two agents, verify only 1 net on-chain transfer in batch.
+- **Phase 5:** Transfer USDC from Base wallet to Solana wallet via CCTP, verify balances on both chains.
 
 ---
 
 ## Risk Assessment
 
-### Technical Risks
-
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
-| Tempo delays/pivots | Medium | High | Evaluate alternatives (Monad, Sei) |
-| Circle doesn't support new chain | Medium | High | Stay on Base as primary |
-| Integration complexity | Medium | Medium | Start with testnet early |
-| Liquidity fragmentation | Low | Medium | Use bridges, maintain Base liquidity |
-
-### Business Risks
-
-| Risk | Likelihood | Impact | Mitigation |
-|------|------------|--------|------------|
-| Distraction from core product | High | Medium | Only pursue post-PMF |
-| Chain becomes unsupported | Low | High | Abstract settlement layer first |
-| Regulatory issues with new chain | Low | Medium | Legal review before integration |
-
----
-
-## Decision Framework
-
-### Pursue Payment Chain Integration IF:
-
-1. **Scale Trigger:** >1,000 payments/day sustained
-2. **Cost Trigger:** Gas costs >1% of TPV
-3. **Latency Trigger:** Partner complaints about settlement time
-4. **Market Trigger:** Competitors announce payment chain support
-
-### Don't Pursue IF:
-
-1. **Pre-PMF:** Focus on customer acquisition first
-2. **Chain Immaturity:** No production deployments yet
-3. **No Circle Support:** Can't offramp to LATAM rails
-4. **Engineering Bandwidth:** Core features incomplete
-
----
-
-## Monitoring Before Decision
-
-### Metrics to Track Now
-
-```sql
--- Add to existing metrics tables
-CREATE TABLE chain_performance_metrics (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  chain TEXT NOT NULL,  -- 'base', 'ethereum', 'solana'
-  date DATE NOT NULL,
-  
-  -- Latency
-  avg_settlement_latency_ms NUMERIC,
-  p50_settlement_latency_ms NUMERIC,
-  p99_settlement_latency_ms NUMERIC,
-  
-  -- Cost
-  total_gas_cost_usd NUMERIC,
-  avg_gas_per_payment_usd NUMERIC,
-  
-  -- Throughput
-  total_payments INT,
-  failed_payments INT,
-  
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(chain, date)
-);
-```
-
-### Alert Thresholds
-
-| Metric | Warning | Critical |
-|--------|---------|----------|
-| Avg settlement latency | >30s | >60s |
-| Gas cost per payment | >$0.10 | >$0.50 |
-| Failed settlement rate | >1% | >5% |
-| Daily throughput | >500 | >1000 |
-
----
-
-## Recommendation
-
-**Status: P3 — Future Consideration**
-
-**Current Action:**
-1. Add chain performance tracking (Story 38.1-38.3)
-2. Monitor Tempo development
-3. Evaluate when scale triggers hit
-
-**Revisit When:**
-- PayOS hits 1,000+ payments/day
-- Tempo reaches mainnet
-- Circle announces Tempo/alternative chain support
+| Solana RPC reliability | Medium | Medium | Use fallback RPC providers, retry with backoff |
+| Circle Gas Station limits | Low | Medium | Monitor gas budget, alert on low balance |
+| Batch settlement failure | Low | High | Individual fallback settlement, reconciliation checks |
+| CCTP bridge delays | Medium | Medium | Expose estimated time, async status polling |
+| Net position accounting errors | Low | High | Double-entry bookkeeping, periodic reconciliation |
 
 ---
 
 ## Related Documents
 
-- [Epic 17: Multi-Protocol Gateway](./epic-17-multi-protocol.md)
-- [Epic 27: Settlement Infrastructure](./epic-27-settlement.md)
-- [Obsidian: Stablecoin Infrastructure Research](../investigations/stablecoin-infrastructure.md)
-- [Tempo Documentation](https://tempo.xyz/docs) (when available)
+- [Epic 26: x402 Performance](./epic-26-x402-performance.md) -- Phase 3 superseded by Story 38.1
+- [Epic 50: Settlement Decoupling](./epic-50-settlement-decoupling.md) -- Settlement triggers engine (complete)
+- [Epic 57: Google A2A Protocol](./epic-57-google-a2a-protocol.md) -- A2A payment rails (complete)

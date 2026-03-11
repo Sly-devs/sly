@@ -230,6 +230,33 @@ export const EURC_CONTRACTS: Record<string, string> = {
   'AVAX': '0xc891EB4cbdEFf6e073e859e987815Ed1505c2ACD',
 };
 
+// ============================================
+// Gas Station Types (Epic 38, Story 38.7)
+// ============================================
+
+export type GasStationState = 'ENABLED' | 'DISABLED';
+
+export interface GasStationConfig {
+  state: GasStationState;
+  walletId?: string;
+  gasLimit?: string;
+  maxPriorityFee?: string;
+  maxFee?: string;
+}
+
+export interface GasStationBalance {
+  blockchain: CircleBlockchain;
+  nativeTokenBalance: string;
+  walletAddress: string;
+}
+
+export interface GasStationStatus {
+  config: GasStationConfig | null;
+  balances: GasStationBalance[];
+  healthy: boolean;
+  message?: string;
+}
+
 /**
  * Get USDC contract address for a blockchain
  */

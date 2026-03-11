@@ -7,6 +7,8 @@ import { webhookCleanupWorker } from './workers/webhook-cleanup.js';
 import { SettlementWindowProcessor } from './workers/settlement-window-processor.js';
 import { TreasuryWorker } from './workers/treasury-worker.js';
 import { getA2ATaskWorker } from './workers/a2a-task-worker.js';
+import { getAsyncSettlementWorker } from './workers/async-settlement-worker.js';
+import { getBatchSettlementWorker } from './workers/batch-settlement-worker.js';
 import { environmentManager } from './config/environment.js';
 import { loadHandlersFromDB } from './services/ucp/payment-handlers/index.js';
 import { createClient } from './db/client.js';
@@ -22,6 +24,8 @@ const enableWebhookCleanup = process.env.ENABLE_WEBHOOK_CLEANUP !== 'false'; // 
 const enableSettlementWindows = process.env.ENABLE_SETTLEMENT_WINDOWS !== 'false'; // Enabled by default
 const enableTreasuryWorker = process.env.ENABLE_TREASURY_WORKER !== 'false'; // Enabled by default
 const enableA2AWorker = process.env.ENABLE_A2A_WORKER !== 'false'; // Enabled by default
+const enableAsyncSettlement = process.env.ENABLE_ASYNC_SETTLEMENT !== 'false'; // Enabled by default
+const enableBatchSettlement = process.env.ENABLE_BATCH_SETTLEMENT !== 'false'; // Enabled by default
 
 console.log(`
 ╔══════════════════════════════════════════════════╗
@@ -37,6 +41,8 @@ console.log(`
 ║  ⏱️  Settlement Windows: ${(enableSettlementWindows ? 'ON' : 'OFF').padEnd(23)}║
 ║  💰 Treasury Sync: ${(enableTreasuryWorker ? 'ON' : 'OFF').padEnd(28)}║
 ║  🤖 A2A Task Worker: ${(enableA2AWorker ? 'ON' : 'OFF').padEnd(25)}║
+║  ⚡ Async Settlement: ${(enableAsyncSettlement ? 'ON' : 'OFF').padEnd(24)}║
+║  📦 Batch Settlement: ${(enableBatchSettlement ? 'ON' : 'OFF').padEnd(23)}║
 ╚══════════════════════════════════════════════════╝
 `);
 
@@ -94,6 +100,21 @@ if (enableA2AWorker) {
   a2aWorker.start();
 }
 
+// Start async settlement worker - Story 38.1
+let asyncSettlementWorker: ReturnType<typeof getAsyncSettlementWorker> | null = null;
+if (enableAsyncSettlement) {
+  asyncSettlementWorker = getAsyncSettlementWorker();
+  asyncSettlementWorker.start();
+}
+
+// Start batch settlement worker - Story 38.14
+let batchSettlementWorker: ReturnType<typeof getBatchSettlementWorker> | null = null;
+if (enableBatchSettlement) {
+  const batchInterval = parseInt(process.env.BATCH_SETTLEMENT_INTERVAL_MS || '60000');
+  batchSettlementWorker = getBatchSettlementWorker();
+  batchSettlementWorker.start(batchInterval);
+}
+
 // Graceful shutdown
 const shutdown = async (signal: string) => {
   console.log(`${signal} received, shutting down gracefully...`);
@@ -112,6 +133,12 @@ const shutdown = async (signal: string) => {
   }
   if (a2aWorker) {
     await a2aWorker.stop();
+  }
+  if (asyncSettlementWorker) {
+    asyncSettlementWorker.stop();
+  }
+  if (batchSettlementWorker) {
+    batchSettlementWorker.stop();
   }
   process.exit(0);
 };

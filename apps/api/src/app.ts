@@ -163,6 +163,16 @@ app.get('/health', async (c) => {
     }
     
     console.log('✅ Health check passed - DB connected');
+
+    // Optional Gas Station health check (non-blocking)
+    let gasStation: any = undefined;
+    try {
+      const { checkGasStationHealth } = await import('./services/circle/index.js');
+      gasStation = await checkGasStationHealth();
+    } catch {
+      // Gas Station check is optional — don't fail health on it
+    }
+
     return c.json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
@@ -170,6 +180,7 @@ app.get('/health', async (c) => {
       checks: {
         api: 'running',
         database: 'connected',
+        ...(gasStation ? { gasStation } : {}),
       },
     });
   } catch (error: any) {

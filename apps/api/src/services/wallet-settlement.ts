@@ -35,7 +35,7 @@ export interface OnChainTransferResult {
   success: boolean;
   txHash?: string;
   error?: string;
-  path: 'circle' | 'viem' | 'skipped';
+  path: 'circle' | 'viem' | 'solana' | 'skipped';
 }
 
 export interface SettleWalletTransferParams {
@@ -111,10 +111,22 @@ export async function executeOnChainTransfer(
     if (srcType === 'circle_custodial' && sourceWallet.provider_wallet_id) {
       const { getCircleClient } = await import('./circle/client.js');
       const circle = getCircleClient();
-      const usdcTokenId = process.env.CIRCLE_USDC_TOKEN_ID;
+
+      // Resolve the correct USDC token ID for this wallet's chain
+      // Each blockchain has a different Circle token ID for USDC
+      let usdcTokenId = process.env.CIRCLE_USDC_TOKEN_ID;
+      try {
+        const balances = await circle.getWalletBalances(sourceWallet.provider_wallet_id);
+        const usdcToken = balances.find(b => b.token.symbol === 'USDC');
+        if (usdcToken) {
+          usdcTokenId = usdcToken.token.id;
+        }
+      } catch {
+        // Fall back to env var
+      }
 
       if (!usdcTokenId) {
-        return { success: false, path: 'circle', error: 'CIRCLE_USDC_TOKEN_ID required' };
+        return { success: false, path: 'circle', error: 'Could not resolve USDC token ID for wallet' };
       }
 
       const circleTx = await circle.transferTokens(
@@ -146,8 +158,18 @@ export async function executeOnChainTransfer(
       return { success: true, txHash, path: 'circle' };
     }
 
-    // External (viem) path
+    // External wallet path — detect chain from destination address format
     if (srcType === 'external') {
+      const { isSolanaAddress } = await import('../config/solana.js');
+
+      if (isSolanaAddress(destinationAddress)) {
+        // Solana external wallet path (Story 38.3)
+        const { transferSolanaUsdc } = await import('../config/solana.js');
+        const result = await transferSolanaUsdc(destinationAddress, amount);
+        return { success: true, txHash: result.txHash, path: 'solana' };
+      }
+
+      // EVM external wallet path (Base)
       const { transferUsdc } = await import('../config/blockchain.js');
       const result = await transferUsdc(destinationAddress, amount);
       return { success: true, txHash: result.txHash, path: 'viem' };
@@ -159,6 +181,119 @@ export async function executeOnChainTransfer(
     const path = srcType === 'circle_custodial' ? 'circle' : srcType === 'external' ? 'viem' : 'skipped';
     return { success: false, path: path as OnChainTransferResult['path'], error: err.message };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Layer 1.5: Ledger-only authorization (async settlement — Epic 38)
+// ---------------------------------------------------------------------------
+
+export interface AuthorizeWalletTransferParams {
+  supabase: SupabaseClient;
+  tenantId: string;
+  sourceWallet: SettlementWallet;
+  destinationWallet: SettlementWallet | null;
+  amount: number;
+  transferId: string;
+  protocolMetadata?: Record<string, unknown>;
+}
+
+export interface AuthorizeWalletTransferResult {
+  success: boolean;
+  error?: string;
+  sourceNewBalance?: number;
+  destinationNewBalance?: number;
+}
+
+/**
+ * Ledger-only authorization: debit source + credit destination in DB.
+ * Does NOT trigger on-chain settlement — that's deferred to the async worker.
+ * Marks transfer as 'authorized' (ledger settled, on-chain pending).
+ *
+ * Returns in <50ms. Used by x402 and A2A for fast payment responses.
+ */
+export async function authorizeWalletTransfer(
+  params: AuthorizeWalletTransferParams,
+): Promise<AuthorizeWalletTransferResult> {
+  const { supabase, tenantId, sourceWallet, destinationWallet, amount, transferId, protocolMetadata } = params;
+
+  // Atomic debit with .gte() guard to prevent double-spend
+  const srcBal = typeof sourceWallet.balance === 'string'
+    ? parseFloat(sourceWallet.balance)
+    : sourceWallet.balance;
+  const newBal = srcBal - amount;
+
+  const { data: debited, error: debitErr } = await supabase
+    .from('wallets')
+    .update({ balance: newBal, updated_at: new Date().toISOString() })
+    .eq('id', sourceWallet.id)
+    .eq('tenant_id', tenantId)
+    .gte('balance', amount)
+    .select('balance')
+    .single();
+
+  if (debitErr || !debited) {
+    // Mark transfer as failed
+    await supabase
+      .from('transfers')
+      .update({
+        status: 'failed',
+        protocol_metadata: { ...(protocolMetadata || {}), settlement_type: 'ledger', error: 'Insufficient balance or concurrent debit' },
+      })
+      .eq('id', transferId)
+      .eq('tenant_id', tenantId);
+    return { success: false, error: 'Insufficient balance or concurrent debit' };
+  }
+
+  const sourceNewBalance = parseFloat(debited.balance);
+  let destinationNewBalance: number | undefined;
+
+  if (destinationWallet) {
+    const destBalance = typeof destinationWallet.balance === 'string'
+      ? parseFloat(destinationWallet.balance)
+      : destinationWallet.balance;
+    destinationNewBalance = destBalance + amount;
+
+    const { error: creditErr } = await supabase
+      .from('wallets')
+      .update({ balance: destinationNewBalance, updated_at: new Date().toISOString() })
+      .eq('id', destinationWallet.id)
+      .eq('tenant_id', tenantId);
+
+    if (creditErr) {
+      // Rollback the debit
+      console.error(`[Settlement] Credit failed, rolling back debit on ${sourceWallet.id}`);
+      await supabase
+        .from('wallets')
+        .update({ balance: (sourceNewBalance ?? 0) + amount, updated_at: new Date().toISOString() })
+        .eq('id', sourceWallet.id)
+        .eq('tenant_id', tenantId);
+      await supabase
+        .from('transfers')
+        .update({
+          status: 'failed',
+          protocol_metadata: { ...(protocolMetadata || {}), settlement_type: 'ledger', error: 'Ledger credit failed (debit rolled back)' },
+        })
+        .eq('id', transferId)
+        .eq('tenant_id', tenantId);
+      return { success: false, error: 'Ledger credit failed (debit rolled back)' };
+    }
+  }
+
+  // Mark transfer as 'authorized' — ledger settled, on-chain pending
+  await supabase
+    .from('transfers')
+    .update({
+      status: 'authorized',
+      protocol_metadata: {
+        ...(protocolMetadata || {}),
+        settlement_type: 'ledger',
+        authorized_at: new Date().toISOString(),
+      },
+    })
+    .eq('id', transferId)
+    .eq('tenant_id', tenantId);
+
+  return { success: true, sourceNewBalance, destinationNewBalance };
 }
 
 // ---------------------------------------------------------------------------

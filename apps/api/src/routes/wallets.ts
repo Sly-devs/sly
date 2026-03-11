@@ -23,6 +23,20 @@ import { getWalletVerificationService } from '../services/wallet/index.js';
 import { normalizeFields, buildDeprecationHeader } from '../utils/helpers.js';
 import { triggerWorkflows } from '../services/workflow-trigger.js';
 
+// Derive correct network name per blockchain (Solana uses solana-devnet/mainnet, others use {chain}-mainnet)
+function getNetworkName(blockchain: string): string {
+  if (blockchain === 'sol') {
+    return process.env.PAYOS_ENVIRONMENT === 'production' ? 'solana-mainnet' : 'solana-devnet';
+  }
+  return `${blockchain}-mainnet`;
+}
+
+// Derive Circle faucet blockchain based on wallet blockchain
+function getFaucetBlockchain(blockchain: string): string {
+  if (blockchain === 'sol') return 'SOL-DEVNET';
+  return 'BASE-SEPOLIA';
+}
+
 const app = new Hono();
 
 // Apply auth middleware to all routes
@@ -63,6 +77,7 @@ const createWalletSchema = z.object({
   // New Phase 2 fields
   walletType: z.enum(['internal', 'circle_custodial', 'circle_mpc']).default('internal'),
   blockchain: z.enum(['base', 'eth', 'polygon', 'avax', 'sol']).default('base'),
+  accountType: z.enum(['SCA', 'EOA']).optional(), // SCA required for Gas Station on EVM chains
 
   // Optional metadata
   name: z.string().max(255).optional(),
@@ -267,10 +282,22 @@ app.post('/', async (c) => {
       const circleService = getCircleServiceForTenant(ctx.tenantId);
 
       try {
+        // Auto-select SCA for EVM chains when Gas Station is enabled (gasless txns)
+        let accountType = validated.accountType as 'SCA' | 'EOA' | undefined;
+        if (!accountType && blockchain !== 'sol') {
+          try {
+            const { isFeatureEnabled } = await import('../config/environment.js');
+            if (isFeatureEnabled('circleGasStation')) {
+              accountType = 'SCA';
+            }
+          } catch { /* feature check is optional */ }
+        }
+
         const circleWallet = await circleService.createWallet({
           blockchain: blockchain as any,
           name: validated.name || `PayOS Wallet`,
-          refId: accountId
+          refId: accountId,
+          accountType,
         });
 
         walletAddress = circleWallet.address;
@@ -299,7 +326,7 @@ app.post('/', async (c) => {
         currency: validated.currency,
         spending_policy: validated.spendingPolicy || null,
         wallet_address: walletAddress,
-        network: `${blockchain}-mainnet`,
+        network: getNetworkName(blockchain),
         status: 'active',
         name: validated.name,
         purpose: validated.purpose,
@@ -360,7 +387,7 @@ app.post('/', async (c) => {
     // Auto-fund gas for Circle custodial wallets in sandbox
     if (process.env.PAYOS_ENVIRONMENT === 'sandbox' && walletAddress && validated.walletType !== 'internal') {
       import('../services/circle/client.js').then(({ getCircleClient }) => {
-        getCircleClient().requestFaucetDrip(walletAddress!, 'BASE-SEPOLIA', {
+        getCircleClient().requestFaucetDrip(walletAddress!, getFaucetBlockchain(blockchain) as any, {
           usdc: false,
           native: true,
         });
@@ -557,7 +584,7 @@ app.post('/external', async (c) => {
         currency: validated.currency,
         spending_policy: validated.spendingPolicy || null,
         wallet_address: validated.walletAddress,
-        network: `${blockchain}-mainnet`,
+        network: getNetworkName(blockchain),
         status: verificationStatus === 'verified' ? 'active' : 'frozen',
         name: validated.name,
         purpose: validated.purpose,
@@ -814,9 +841,16 @@ app.get('/:id/balance', async (c) => {
           const balance = await circle.getUsdcBalance(walletRecord.provider_wallet_id);
           onChainBalance = balance.formatted.toString();
         } else if (wallet.wallet_address && !wallet.wallet_address.startsWith('internal://')) {
-          // External wallet: use viem for on-chain balance
-          const { getUsdcBalance: getOnChainUsdcBalance } = await import('../config/blockchain.js');
-          onChainBalance = await getOnChainUsdcBalance(wallet.wallet_address);
+          // External wallet: use Solana or EVM balance check based on blockchain
+          const walletBlockchain = (wallet as any).blockchain || 'base';
+          if (walletBlockchain === 'sol') {
+            const { getSolanaUsdcBalance } = await import('../config/solana.js');
+            const { formatted } = await getSolanaUsdcBalance(wallet.wallet_address);
+            onChainBalance = formatted.toString();
+          } else {
+            const { getUsdcBalance: getOnChainUsdcBalance } = await import('../config/blockchain.js');
+            onChainBalance = await getOnChainUsdcBalance(wallet.wallet_address);
+          }
         }
 
         // Update sync_data in background
@@ -1340,8 +1374,26 @@ app.post('/:id/sync', async (c) => {
         native_balance: nativeBalance ? nativeBalance.amount : '0',
         provider_wallet_id: wallet.provider_wallet_id,
       };
+    } else if (wallet.blockchain === 'sol') {
+      // Solana wallets: use Solana RPC for USDC + SOL balance
+      const { getSolanaUsdcBalance, getSolBalance } = await import('../config/solana.js');
+
+      const [usdcResult, solBalance] = await Promise.all([
+        getSolanaUsdcBalance(wallet.wallet_address),
+        getSolBalance(wallet.wallet_address),
+      ]);
+
+      formattedBalance = usdcResult.formatted;
+
+      syncData = {
+        source: 'solana_rpc',
+        raw_balance: usdcResult.raw.toString(),
+        decimals: 6,
+        native_balance: solBalance,
+        chain: 'solana',
+      };
     } else {
-      // External / non-Circle wallets: use on-chain RPC
+      // External / non-Circle EVM wallets: use on-chain RPC
       const verificationService = getWalletVerificationService();
 
       const [walletInfo, tokenBalance] = await Promise.all([
@@ -1631,10 +1683,11 @@ app.post('/:id/fund', async (c) => {
     const { getCircleClient } = await import('../services/circle/client.js');
     const circle = getCircleClient();
 
-    // Call Circle faucet API
+    // Call Circle faucet API — use correct blockchain for Solana vs EVM wallets
+    const faucetChain = getFaucetBlockchain(wallet.blockchain || 'base');
     await circle.requestFaucetDrip(
       wallet.wallet_address,
-      'BASE-SEPOLIA',
+      faucetChain as any,
       {
         usdc: validated.currency === 'USDC',
         eurc: validated.currency === 'EURC',
@@ -1734,6 +1787,53 @@ app.post('/:id/fund', async (c) => {
       }, error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 502);
     }
     return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// ============================================
+// Gas Station (Epic 38, Story 38.8)
+// ============================================
+
+/**
+ * GET /v1/wallets/gas-station/status
+ * Get Circle Gas Station status.
+ *
+ * NOTE: Gas Station is configured exclusively via Circle Developer Console.
+ * There is no REST API for Gas Station policy management.
+ * On testnet, Gas Station is enabled by default with preconfigured policies.
+ * SCA (Smart Contract Account) wallets are required for Gas Station on EVM chains.
+ */
+app.get('/gas-station/status', async (c) => {
+  try {
+    const { isFeatureEnabled } = await import('../config/environment.js');
+    if (!isFeatureEnabled('circleGasStation')) {
+      return c.json({
+        error: 'Gas Station feature is not enabled',
+        code: 'FEATURE_DISABLED',
+        hint: 'Set PAYOS_FEATURE_CIRCLE_GAS_STATION=true to enable',
+      }, 403);
+    }
+
+    if (!process.env.CIRCLE_API_KEY) {
+      return c.json({
+        error: 'Circle API key not configured',
+        code: 'CIRCLE_NOT_CONFIGURED',
+      }, 503);
+    }
+
+    const { getCircleClient } = await import('../services/circle/client.js');
+    const circle = getCircleClient();
+    const status = await circle.getGasStationStatus();
+
+    return c.json({
+      data: {
+        ...status,
+        note: 'Gas Station policies are managed via Circle Developer Console (console.circle.com). SCA wallets required for EVM chains.',
+      },
+    });
+  } catch (error: any) {
+    console.error('Error in GET /v1/wallets/gas-station/status:', error);
+    return c.json({ error: error.message || 'Internal server error' }, 500);
   }
 });
 

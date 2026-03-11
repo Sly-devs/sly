@@ -16,6 +16,8 @@ import type {
   TokenBalance,
   CircleTransaction,
   PayOSBlockchain,
+  GasStationConfig,
+  GasStationStatus,
 } from './types.js';
 import { toCircleBlockchain, getUsdcContract, getEurcContract } from './types.js';
 
@@ -30,6 +32,7 @@ export interface CircleServiceInterface {
     blockchain: PayOSBlockchain;
     name?: string;
     refId?: string;
+    accountType?: 'SCA' | 'EOA';
   }): Promise<{
     id: string;
     address: string;
@@ -89,6 +92,7 @@ class RealCircleService implements CircleServiceInterface {
     blockchain: PayOSBlockchain;
     name?: string;
     refId?: string;
+    accountType?: 'SCA' | 'EOA';
   }): Promise<{
     id: string;
     address: string;
@@ -102,7 +106,8 @@ class RealCircleService implements CircleServiceInterface {
       walletSetId,
       circleBlockchain,
       params.name,
-      params.refId
+      params.refId,
+      params.accountType
     );
 
     return {
@@ -182,6 +187,7 @@ class MockCircleServiceAdapter implements CircleServiceInterface {
     blockchain: PayOSBlockchain;
     name?: string;
     refId?: string;
+    accountType?: 'SCA' | 'EOA';
   }): Promise<{
     id: string;
     address: string;
@@ -281,6 +287,50 @@ export function clearCircleServiceCache(): void {
   serviceCache.clear();
 }
 
+// ============================================
+// Gas Station Health Check (Epic 38, Story 38.9)
+// ============================================
+
+/**
+ * Check Gas Station health status.
+ * Returns null if Circle is not configured or Gas Station feature is disabled.
+ *
+ * NOTE: Gas Station has no REST API — it's managed via Circle Console.
+ * We report status based on feature flags and environment configuration.
+ */
+export async function checkGasStationHealth(): Promise<{
+  enabled: boolean;
+  healthy: boolean;
+  message: string;
+} | null> {
+  if (!isServiceEnabled('circle') || !process.env.CIRCLE_API_KEY) {
+    return null;
+  }
+
+  // Check if Gas Station feature is enabled
+  const { isFeatureEnabled } = await import('../../config/environment.js');
+  if (!isFeatureEnabled('circleGasStation')) {
+    return null;
+  }
+
+  try {
+    const client = getCircleClient();
+    const status = await client.getGasStationStatus();
+
+    return {
+      enabled: status.config?.state === 'ENABLED',
+      healthy: status.healthy,
+      message: status.message || 'Unknown',
+    };
+  } catch {
+    return {
+      enabled: false,
+      healthy: false,
+      message: 'Gas Station check failed',
+    };
+  }
+}
+
 // Re-export types and utilities
 export {
   CircleClient,
@@ -303,5 +353,7 @@ export type {
   CircleTransaction,
   PayOSBlockchain,
   CircleServiceInterface,
+  GasStationConfig,
+  GasStationStatus,
 };
 

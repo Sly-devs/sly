@@ -62,10 +62,13 @@ export interface FeatureFlags {
   acpSharedPaymentToken: boolean;   // Enable ACP SharedPaymentToken
   ap2MandateVerification: boolean;  // Enable AP2 VDC verification
   
+  // Gas Station (Epic 38)
+  circleGasStation: boolean;        // Enable Circle Gas Station (gasless txns)
+
   // Compliance
   walletScreening: boolean;         // Enable Elliptic wallet screening
   entityScreening: boolean;         // Enable ComplyAdvantage screening
-  
+
   // Operations
   batchSettlements: boolean;        // Enable batch settlements (100+)
   multiCurrency: boolean;           // Enable multi-currency (BRL↔MXN)
@@ -142,6 +145,7 @@ const DEFAULT_FEATURE_FLAGS: Record<PayOSEnvironment, FeatureFlags> = {
     circlePayouts: true,
     circleWallets: true,
     circleFxQuotes: true,
+    circleGasStation: false,
     x402Payments: true,
     x402Settlement: true,
     superfluidStreaming: false,
@@ -156,6 +160,7 @@ const DEFAULT_FEATURE_FLAGS: Record<PayOSEnvironment, FeatureFlags> = {
     circlePayouts: true,
     circleWallets: true,
     circleFxQuotes: true,
+    circleGasStation: true,   // Gas Station available in sandbox
     x402Payments: true,
     x402Settlement: true,
     superfluidStreaming: false,  // Enable when ready
@@ -170,6 +175,7 @@ const DEFAULT_FEATURE_FLAGS: Record<PayOSEnvironment, FeatureFlags> = {
     circlePayouts: false,  // Requires approval
     circleWallets: false,  // Requires approval
     circleFxQuotes: false,
+    circleGasStation: false,  // Enable after Gas Station funded
     x402Payments: false,
     x402Settlement: false,
     superfluidStreaming: false,
@@ -241,6 +247,7 @@ class EnvironmentManager {
       circlePayouts: this.parseFeatureFlag('CIRCLE_PAYOUTS', baseFlags.circlePayouts),
       circleWallets: this.parseFeatureFlag('CIRCLE_WALLETS', baseFlags.circleWallets),
       circleFxQuotes: this.parseFeatureFlag('CIRCLE_FX_QUOTES', baseFlags.circleFxQuotes),
+      circleGasStation: this.parseFeatureFlag('CIRCLE_GAS_STATION', baseFlags.circleGasStation),
       x402Payments: this.parseFeatureFlag('X402_PAYMENTS', baseFlags.x402Payments),
       x402Settlement: this.parseFeatureFlag('X402_SETTLEMENT', baseFlags.x402Settlement),
       superfluidStreaming: this.parseFeatureFlag('SUPERFLUID_STREAMING', baseFlags.superfluidStreaming),

@@ -56,7 +56,7 @@ export type TransferType =
 /** Protocol-specific transfer types */
 export type ProtocolTransferType = 'x402' | 'ap2' | 'acp';
 
-export type TransferStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+export type TransferStatus = 'pending' | 'processing' | 'authorized' | 'completed' | 'failed' | 'cancelled';
 
 export type StreamStatus = 'active' | 'paused' | 'cancelled';
 export type StreamHealth = 'healthy' | 'warning' | 'critical';

@@ -113,10 +113,12 @@ Every story must meet these criteria before completion:
 - [Epic 63: External Reputation Bridge](./epic-63-external-reputation-bridge.md) 🛡️ - Unified trust score from ERC-8004, Mnemom, Vouched/MCP-I, escrow history
 - [Epic 64: OpenClaw Governance Skill](./epic-64-openclaw-governance-skill.md) 🧩 - Python skill for ClawHub routing contracting through Sly governance
 
+### High-Frequency Payments
+- [Epic 38: High-Frequency Microtransaction Optimization](./epic-38-payment-optimized-chains.md) - Async settlement, multi-chain (Solana+Base), gasless txs, deferred batch settlement
+
 ### Future Considerations (P2/P3)
-- [Epic 37: Facilitator-as-a-Service](./epic-37-facilitator-as-a-service.md) 🏭 - x402 facilitator for LATAM ecosystem
-- [Epic 38: Payment-Optimized Chains](./epic-38-payment-optimized-chains.md) ⛓️ - Tempo & future chain integration
-- [Epic 39: Open Issuance](./epic-39-open-issuance.md) 🪙 - Custom stablecoin support
+- [Epic 37: Facilitator-as-a-Service](./epic-37-facilitator-as-a-service.md) - x402 facilitator for LATAM ecosystem
+- [Epic 39: Open Issuance](./epic-39-open-issuance.md) - Custom stablecoin support
 
 ### Production Hardening (P2/P3)
 - [Epic 44: Observability & Monitoring](./epic-44-observability.md) 📊 - Monitoring, alerting, SLAs
@@ -176,6 +178,7 @@ Strategic explorations before committing to implementation:
 | Epic 62: Escrow Orchestration | P0 | 38 | Agent contract escrow with governance |
 | Epic 63: External Reputation Bridge | P0 | 25 | Unified trust score aggregation |
 | Epic 64: OpenClaw Governance Skill | P1 | 10 | ClawHub skill for governed contracting |
+| Epic 38: HF Microtransactions | P1 | 63 | Async settlement, multi-chain, batch settlement |
 
 ### Planned (P0/P1) 📋
 
@@ -203,7 +206,7 @@ Strategic explorations before committing to implementation:
 |------|----------|--------|-------|
 | Epic 21: Code Coverage | P3 | 112 | |
 | Epic 37: Facilitator | P3 | TBD | Decision pending |
-| Epic 38: Payment Chains | P3 | ~49 | Post-scale |
+| Epic 38: HF Microtransactions | P1 | 63 | Async settlement, multi-chain, batch |
 | Epic 39: Open Issuance | P3 | ~47 | Post-PMF |
 | Epic 46: DR | P3 | ~60 | |
 | **Subtotal P3** | | **~268** | |
@@ -220,6 +223,14 @@ Strategic explorations before committing to implementation:
 ---
 
 ## Recent Changes
+
+### March 7, 2026
+- **Epic 38: High-Frequency Microtransaction Optimization** — REVISED (63 points, P1)
+  - Completely rewritten from "Payment-Optimized Chains" (Tempo/future chains) to actionable microtransaction optimization
+  - 18 stories across 5 phases: Async Settlement, Solana Chain, Gas Station, Deferred Net Settlement, CCTP Cross-Chain
+  - Supersedes Epic 26 Phase 3 (Story 26.4 -> Story 38.1)
+  - Key deliverables: sub-100ms authorization, Solana support, gasless txs, batch on-chain settlement
+  - Linear stories: SLY-368 through SLY-385 with full dependency graph
 
 ### February 28, 2026
 - **Epic 60: A2A Agent Onboarding Skills** — COMPLETE ✅ (28 points)

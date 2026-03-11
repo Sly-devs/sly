@@ -10,7 +10,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { A2ATaskService } from './task-service.js';
 import type { InputRequiredContext } from './types.js';
-import { settleWalletTransfer, isOnChainCapable } from '../wallet-settlement.js';
+import { authorizeWalletTransfer, isOnChainCapable } from '../wallet-settlement.js';
 
 interface PaymentRequirement {
   amount: number;
@@ -76,7 +76,40 @@ export class A2APaymentHandler {
       return { success: false, error: `Insufficient balance: ${fromWallet.balance} < ${amount}` };
     }
 
-    const expectedSettlementType = isOnChainCapable(fromWallet, toWallet.wallet_address) ? 'on_chain' : 'ledger';
+    const onChainCapable = isOnChainCapable(fromWallet, toWallet.wallet_address);
+
+    // Epic 38, Story 38.13: For micro-payments below threshold, use deferred intent
+    const DEFERRED_THRESHOLD = parseFloat(process.env.DEFERRED_THRESHOLD_AMOUNT || '1.00');
+    if (amount <= DEFERRED_THRESHOLD && amount > 0) {
+      try {
+        const { createAndAuthorizeIntent } = await import('../payment-intent.js');
+        const intentResult = await createAndAuthorizeIntent({
+          supabase: this.supabase,
+          tenantId: this.tenantId,
+          sourceWalletId: fromWallet.id,
+          destinationWalletId: toWallet.id,
+          sourceAccountId: fromWallet.owner_account_id,
+          destinationAccountId: toWallet.owner_account_id,
+          amount,
+          protocol: 'a2a',
+          protocolMetadata: {
+            task_id: taskId,
+            from_agent_id: fromAgentId,
+            to_agent_id: toAgentId,
+          },
+        });
+
+        if (intentResult.success && intentResult.intent) {
+          await this.taskService.linkPayment(taskId, intentResult.intent.id);
+          console.log(`[A2A-deferred] Micro-payment ${amount} ${currency} via intent ${intentResult.intent.id} for task ${taskId}`);
+          return { success: true, transferId: intentResult.intent.id };
+        }
+        // If intent fails, fall through to standard flow
+        console.warn(`[A2A-deferred] Intent failed (${intentResult.error}), falling back to standard flow`);
+      } catch (err: any) {
+        console.warn(`[A2A-deferred] Intent creation error, falling back: ${err.message}`);
+      }
+    }
 
     // Create transfer record
     const { data: transfer, error: transferError } = await this.supabase
@@ -88,7 +121,7 @@ export class A2APaymentHandler {
         amount,
         currency,
         type: 'internal',
-        status: 'processing',
+        status: 'pending',
         description: `A2A task payment for task ${taskId}`,
         initiated_by_type: 'agent',
         initiated_by_id: fromAgentId,
@@ -98,7 +131,8 @@ export class A2APaymentHandler {
           task_id: taskId,
           from_agent_id: fromAgentId,
           to_agent_id: toAgentId,
-          settlement_type: expectedSettlementType,
+          wallet_id: fromWallet.id,
+          provider_wallet_id: toWallet.id,
         },
       })
       .select('id')
@@ -108,8 +142,8 @@ export class A2APaymentHandler {
       return { success: false, error: 'Failed to create transfer record' };
     }
 
-    // Settle: on-chain (if capable) + ledger + transfer update
-    const settlement = await settleWalletTransfer({
+    // Fast ledger authorization — on-chain deferred to async worker (Epic 38, Story 38.2)
+    const authorization = await authorizeWalletTransfer({
       supabase: this.supabase,
       tenantId: this.tenantId,
       sourceWallet: fromWallet,
@@ -121,17 +155,40 @@ export class A2APaymentHandler {
         task_id: taskId,
         from_agent_id: fromAgentId,
         to_agent_id: toAgentId,
+        wallet_id: fromWallet.id,
+        provider_wallet_id: toWallet.id,
       },
     });
 
-    if (!settlement.success) {
-      return { success: false, transferId: transfer.id, error: settlement.error || 'Settlement failed' };
+    if (!authorization.success) {
+      return { success: false, transferId: transfer.id, error: authorization.error || 'Authorization failed' };
+    }
+
+    // If not on-chain capable, the transfer is already final (ledger-only)
+    // Mark as completed since async worker won't pick it up
+    if (!onChainCapable) {
+      await this.supabase
+        .from('transfers')
+        .update({
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          protocol_metadata: {
+            protocol: 'a2a',
+            task_id: taskId,
+            from_agent_id: fromAgentId,
+            to_agent_id: toAgentId,
+            wallet_id: fromWallet.id,
+            provider_wallet_id: toWallet.id,
+            settlement_type: 'ledger',
+          },
+        })
+        .eq('id', transfer.id);
     }
 
     // Link payment to task
     await this.taskService.linkPayment(taskId, transfer.id);
 
-    return { success: true, transferId: transfer.id, txHash: settlement.txHash };
+    return { success: true, transferId: transfer.id };
   }
 
   /**
@@ -238,7 +295,7 @@ export class A2APaymentHandler {
       return { verified: false, error: 'Transfer not found' };
     }
 
-    if (transfer.status !== 'completed') {
+    if (transfer.status !== 'completed' && transfer.status !== 'authorized') {
       return { verified: false, error: `Transfer status: ${transfer.status}` };
     }
 
@@ -306,8 +363,8 @@ export class A2APaymentHandler {
       .eq('tenant_id', this.tenantId)
       .single();
 
-    if (!transfer || transfer.status !== 'completed') {
-      return { verified: false, error: 'Wallet transfer not found or not completed' };
+    if (!transfer || (transfer.status !== 'completed' && transfer.status !== 'authorized')) {
+      return { verified: false, error: 'Wallet transfer not found or not settled' };
     }
 
     await this.taskService.linkPayment(taskId, transferId);

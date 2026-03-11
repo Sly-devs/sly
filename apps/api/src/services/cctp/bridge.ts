@@ -91,9 +91,12 @@ export interface CCTPTransferResult {
 // ============================================
 
 /**
- * CCTP v2 domain IDs and contract addresses.
+ * CCTP v2 domain IDs and public contract addresses.
+ * These are NOT secrets — they are published on-chain protocol constants
+ * from Circle's CCTP documentation (developers.circle.com/stablecoins/cctp-protocol-contract).
  * Testnet addresses are for Base Sepolia and Solana Devnet.
  */
+// nosemgrep: generic-high-entropy-secret
 const CCTP_DOMAINS: Record<CCTPEnvironment, Partial<Record<CCTPChain, CCTPDomainConfig>>> = {
   testnet: {
     base: {

@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS api_request_counts_2026_03 PARTITION OF api_request_c
 CREATE TABLE IF NOT EXISTS api_request_counts_2026_04 PARTITION OF api_request_counts
   FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
 
+-- Enable RLS on partitions (not inherited from parent)
+ALTER TABLE api_request_counts_2026_03 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_request_counts_2026_04 ENABLE ROW LEVEL SECURITY;
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_api_request_counts_tenant_bucket
   ON api_request_counts (tenant_id, minute_bucket DESC);
@@ -72,6 +76,10 @@ CREATE TABLE IF NOT EXISTS operation_events_2026_03 PARTITION OF operation_event
   FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
 CREATE TABLE IF NOT EXISTS operation_events_2026_04 PARTITION OF operation_events
   FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
+
+-- Enable RLS on partitions (not inherited from parent)
+ALTER TABLE operation_events_2026_03 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE operation_events_2026_04 ENABLE ROW LEVEL SECURITY;
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_operation_events_tenant_time

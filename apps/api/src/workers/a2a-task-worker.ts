@@ -641,6 +641,22 @@ export class A2ATaskWorker {
 
       this.log(task.id, 'warn', `Task stuck past timeout (${timeoutMs / 1000}s${isForwarded ? ', forwarded' : ''}), failing`);
 
+      // Story 58.17: Emit audit event for timeout failure
+      taskEventBus.emitTask(task.id, {
+        type: 'timeout',
+        taskId: task.id,
+        data: { timeoutMs, isForwarded, previousState: 'working' },
+        timestamp: new Date().toISOString(),
+      }, {
+        tenantId: task.tenant_id,
+        agentId: task.agent_id,
+        actorType: 'worker',
+        actorId: this.workerId,
+        fromState: 'working',
+        toState: 'failed',
+        durationMs: timeoutMs,
+      });
+
       // Cancel linked settlement mandate if any
       const mandateId = (task.metadata as any)?.settlementMandateId;
       if (mandateId) {

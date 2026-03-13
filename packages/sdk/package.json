@@ -45,6 +45,11 @@
       "types": "./dist/cards.d.ts",
       "import": "./dist/cards.mjs",
       "require": "./dist/cards.js"
+    },
+    "./a2a": {
+      "types": "./dist/a2a.d.ts",
+      "import": "./dist/a2a.mjs",
+      "require": "./dist/a2a.js"
     }
   },
   "files": [

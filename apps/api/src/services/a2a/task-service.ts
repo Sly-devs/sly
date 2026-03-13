@@ -20,7 +20,10 @@ import type {
   InputRequiredContext,
 } from './types.js';
 import { normalizeParts } from './types.js';
-import { taskEventBus } from './task-event-bus.js';
+import { taskEventBus, type AuditContext } from './task-event-bus.js';
+
+/** Default maximum messages to include in context window (Story 58.18). */
+const DEFAULT_MAX_CONTEXT_MESSAGES = 100;
 
 export interface ListTasksFilters {
   agentId?: string | null;
@@ -95,6 +98,10 @@ export class A2ATaskService {
 
   /**
    * Get a task by ID with its messages and artifacts.
+   *
+   * Story 58.18: Context window management — limits messages to the most
+   * recent N (not oldest N). Applies a default cap of 100 if no explicit
+   * historyLength is provided and the agent hasn't configured one.
    */
   async getTask(taskId: string, historyLength?: number): Promise<A2ATask | null> {
     const { data: taskRow, error: taskError } = await this.supabase
@@ -106,19 +113,31 @@ export class A2ATaskService {
 
     if (taskError || !taskRow) return null;
 
-    // Fetch messages
-    let messagesQuery = this.supabase
+    // Resolve effective context window limit:
+    // 1. Explicit historyLength from caller (e.g. A2AConfiguration)
+    // 2. Agent-level max_context_messages setting
+    // 3. Global default (100)
+    let effectiveLimit = historyLength;
+    if (!effectiveLimit) {
+      const { data: agentRow } = await this.supabase
+        .from('agents')
+        .select('max_context_messages')
+        .eq('id', taskRow.agent_id)
+        .eq('tenant_id', this.tenantId)
+        .maybeSingle();
+      effectiveLimit = agentRow?.max_context_messages || DEFAULT_MAX_CONTEXT_MESSAGES;
+    }
+
+    // Fetch the most recent N messages (descending), then reverse to chronological order
+    const { data: messagesDesc } = await this.supabase
       .from('a2a_messages')
       .select('*')
       .eq('task_id', taskId)
       .eq('tenant_id', this.tenantId)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false })
+      .limit(effectiveLimit);
 
-    if (historyLength) {
-      messagesQuery = messagesQuery.limit(historyLength);
-    }
-
-    const { data: messages } = await messagesQuery;
+    const messages = (messagesDesc || []).reverse();
 
     // Fetch artifacts
     const { data: artifacts } = await this.supabase
@@ -147,15 +166,19 @@ export class A2ATaskService {
     const updateData: Record<string, unknown> = { state };
     if (statusMessage !== undefined) updateData.status_message = statusMessage;
 
-    // Read-merge-write metadata so existing keys aren't lost
+    // Read current state + metadata before the update (for audit trail from_state)
+    const { data: currentRow } = await this.supabase
+      .from('a2a_tasks')
+      .select('state, metadata')
+      .eq('id', taskId)
+      .eq('tenant_id', this.tenantId)
+      .single();
+
+    const previousState = currentRow?.state !== state ? currentRow?.state : undefined;
+
+    // Merge metadata so existing keys aren't lost
     if (metadata) {
-      const { data: existing } = await this.supabase
-        .from('a2a_tasks')
-        .select('metadata')
-        .eq('id', taskId)
-        .eq('tenant_id', this.tenantId)
-        .single();
-      updateData.metadata = { ...(existing?.metadata || {}), ...metadata };
+      updateData.metadata = { ...(currentRow?.metadata || {}), ...metadata };
     }
 
     // When re-submitting a task, clear processor claim so worker can re-acquire it
@@ -186,6 +209,12 @@ export class A2ATaskService {
       taskId,
       data: { state, statusMessage: statusMessage || null },
       timestamp: new Date().toISOString(),
+    }, {
+      tenantId: this.tenantId,
+      agentId: taskRow.agent_id,
+      actorType: 'system',
+      fromState: previousState,
+      toState: state,
     });
 
     return this.getTask(taskId);
@@ -218,12 +247,24 @@ export class A2ATaskService {
 
     const msg = this.rowToMessage(msgRow as A2AMessageRow);
 
+    // Look up agent_id for audit context
+    const { data: taskRow } = await this.supabase
+      .from('a2a_tasks')
+      .select('agent_id')
+      .eq('id', taskId)
+      .eq('tenant_id', this.tenantId)
+      .maybeSingle();
+
     taskEventBus.emitTask(taskId, {
       type: 'message',
       taskId,
       data: { messageId: msg.messageId, role, parts: msg.parts },
       timestamp: new Date().toISOString(),
-    });
+    }, taskRow ? {
+      tenantId: this.tenantId,
+      agentId: taskRow.agent_id,
+      actorType: role === 'user' ? 'user' : 'agent',
+    } : undefined);
 
     return msg;
   }
@@ -255,6 +296,14 @@ export class A2ATaskService {
 
     const art = this.rowToArtifact(row as A2AArtifactRow);
 
+    // Look up agent_id for audit context
+    const { data: artTaskRow } = await this.supabase
+      .from('a2a_tasks')
+      .select('agent_id')
+      .eq('id', taskId)
+      .eq('tenant_id', this.tenantId)
+      .maybeSingle();
+
     taskEventBus.emitTask(taskId, {
       type: 'artifact',
       taskId,
@@ -265,7 +314,11 @@ export class A2ATaskService {
         parts: art.parts,
       },
       timestamp: new Date().toISOString(),
-    });
+    }, artTaskRow ? {
+      tenantId: this.tenantId,
+      agentId: artTaskRow.agent_id,
+      actorType: 'agent',
+    } : undefined);
 
     return art;
   }

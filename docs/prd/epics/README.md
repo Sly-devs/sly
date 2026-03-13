@@ -103,7 +103,7 @@ Every story must meet these criteria before completion:
 
 ### Agent Interoperability ⭐ NEW
 - [Epic 57: Google A2A Protocol](./epic-57-google-a2a-protocol.md) 🤝 ✅ - Google A2A protocol for agent discovery, communication, and paid task execution
-- [Epic 58: A2A Task Processor Worker](./epic-58-a2a-task-processor.md) ⚙️ - Background worker for processing A2A tasks with LLM handlers, tool registry, and payment gating
+- [Epic 58: A2A Task Processor Worker](./epic-58-a2a-task-processor.md) ⚙️ ✅ - Background worker for processing A2A tasks with tool registry, payment gating, custom tools, audit trail
 - [Epic 60: A2A Agent Onboarding Skills](./epic-60-a2a-agent-onboarding-skills.md) 🎫 ✅ - Register, update, and inspect agents via A2A message/send
 
 ### Agent Contracting Governance ⭐ NEW
@@ -178,7 +178,7 @@ Strategic explorations before committing to implementation:
 
 | Epic | Priority | Points | Notes |
 |------|----------|--------|-------|
-| Epic 58: A2A Task Processor | P0 | 119 | Background worker, LLM handlers, payment gating |
+| Epic 58: A2A Task Processor | ✅ | 119 | 17/18 done (109 pts). 58.4 LLM deferred — regex router sufficient |
 | Epic 55: Demo Readiness | P0 | 89 | Seed data + demo UI for 8 scenarios |
 | Epic 29: Workflow Engine | P0 | 52 | Multi-step workflows (expanded for contracting) |
 | Epic 41: On-Ramp | P1 | 110 | Non-crypto customers |
@@ -230,6 +230,14 @@ Strategic explorations before committing to implementation:
 ---
 
 ## Recent Changes
+
+### March 12, 2026
+- **Epic 58: A2A Task Processor** — Marked COMPLETE ✅ (17/18 stories, ~109/119 points)
+  - Stories 58.11 (SDK Types): A2A types exported to `@sly/types`, A2AClient added to `@sly/sdk` with discover/sendMessage/getTask/cancelTask/listTasks/respond/customTools
+  - Stories 58.15 (Custom Tool Support): `agent_custom_tools` table, webhook execution with HMAC signing, registry loads tenant-defined tools
+  - Stories 58.17 (Audit Trail): `a2a_audit_events` table (RLS), event bus persists all lifecycle events, worker timeout events included
+  - Stories 58.18 (Context Window): Fixed historyLength bug (now returns most recent N messages), default cap 100, per-agent `max_context_messages` setting
+  - Story 58.4 (LLM Managed Handler): Intentionally deferred — regex router is faster and cheaper for A2A use case
 
 ### March 11, 2026
 - **Epic 66: Email Notification System** — NEW (35 points, P1)

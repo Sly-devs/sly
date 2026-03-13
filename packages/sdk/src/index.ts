@@ -36,6 +36,7 @@ import { UCPClient } from './protocols/ucp/client';
 import { CapabilitiesClient } from './capabilities';
 import { LangChainTools } from './langchain/tools';
 import { CardsClient } from './cards';
+import { A2AClient } from './protocols/a2a/client';
 
 /**
  * Main Sly SDK class
@@ -100,6 +101,12 @@ export class Sly extends SlyClient {
    */
   public readonly cards: CardsClient;
 
+  /**
+   * A2A (Agent-to-Agent Protocol) client
+   * Google's task-based protocol for inter-agent communication
+   */
+  public readonly a2a: A2AClient;
+
   constructor(config: SlyConfig) {
     // Validate API key
     if (!config.apiKey || config.apiKey.trim() === '') {
@@ -139,6 +146,9 @@ export class Sly extends SlyClient {
 
     // Initialize Cards client
     this.cards = new CardsClient(this);
+
+    // Initialize A2A client
+    this.a2a = new A2AClient(this);
   }
 }
 

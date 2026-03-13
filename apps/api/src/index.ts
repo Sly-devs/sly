@@ -15,6 +15,7 @@ import { createClient } from './db/client.js';
 import { startOpTracker, stopOpTracker } from './services/ops/track-op.js';
 import { startRequestCounter, stopRequestCounter } from './services/ops/request-counter.js';
 import { startPartitionManager, stopPartitionManager } from './workers/partition-manager.js';
+import { taskEventBus } from './services/a2a/task-event-bus.js';
 
 // Railway uses PORT, fallback to API_PORT for local dev
 const port = parseInt(process.env.PORT || process.env.API_PORT || '4000');
@@ -57,6 +58,9 @@ environmentManager.logStartupInfo();
 startOpTracker();
 startRequestCounter();
 startPartitionManager();
+
+// Initialize A2A audit persistence (Story 58.17)
+taskEventBus.initAuditPersistence(createClient());
 
 // Load DB-driven payment handlers
 loadHandlersFromDB(createClient()).catch((err) => {

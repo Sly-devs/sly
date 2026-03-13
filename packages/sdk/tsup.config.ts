@@ -10,6 +10,7 @@ export default defineConfig({
     langchain: 'src/langchain/index.ts',
     vercel: 'src/vercel/index.ts',
     cards: 'src/cards/index.ts',
+    a2a: 'src/protocols/a2a/index.ts',
   },
   format: ['cjs', 'esm'],
   dts: true,

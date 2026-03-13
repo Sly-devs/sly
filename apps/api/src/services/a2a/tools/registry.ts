@@ -66,11 +66,14 @@ export class AgentToolRegistry {
 
   /**
    * Get tool definitions available to a specific agent,
-   * filtered by the agent's permissions.
+   * filtered by the agent's permissions + custom tools.
    *
    * Note: Lazily imports @sly/mcp-server to avoid its top-level
    * process.exit(1) when SLY_API_KEY is not set (which is normal
    * for the API server — only the MCP CLI needs that env var).
+   *
+   * Story 58.15: Also loads tenant-defined custom tools from
+   * `agent_custom_tools` table.
    */
   async getToolsForAgent(ctx: AgentContext): Promise<ToolDefinition[]> {
     const agentPerms = ctx.permissions;
@@ -80,8 +83,7 @@ export class AgentToolRegistry {
       const mod = await import('@sly/mcp-server');
       mcpToolDefinitions = mod.tools || [];
     } catch {
-      // MCP server not available — return only synthetic tools
-      return [...SYNTHETIC_TOOLS];
+      // MCP server not available — continue with synthetic + custom tools only
     }
 
     const filtered = mcpToolDefinitions
@@ -100,8 +102,34 @@ export class AgentToolRegistry {
         inputSchema: tool.inputSchema as Record<string, unknown>,
       }));
 
-    // Add synthetic tools
-    return [...SYNTHETIC_TOOLS, ...filtered];
+    // Story 58.15: Load custom tools for this agent
+    const customTools = await this.getCustomToolsForAgent(ctx.tenantId, ctx.agentId);
+
+    // Add synthetic tools + MCP tools + custom tools
+    return [...SYNTHETIC_TOOLS, ...filtered, ...customTools];
+  }
+
+  /**
+   * Load tenant-defined custom tools for a specific agent (Story 58.15).
+   */
+  private async getCustomToolsForAgent(
+    tenantId: string,
+    agentId: string,
+  ): Promise<ToolDefinition[]> {
+    const { data: rows } = await this.supabase
+      .from('agent_custom_tools')
+      .select('tool_name, description, input_schema')
+      .eq('agent_id', agentId)
+      .eq('tenant_id', tenantId)
+      .eq('status', 'active');
+
+    if (!rows || rows.length === 0) return [];
+
+    return rows.map((row: any) => ({
+      name: `custom:${row.tool_name}`,
+      description: row.description || '',
+      inputSchema: row.input_schema || { type: 'object', properties: {}, required: [] },
+    }));
   }
 
   /**
@@ -150,6 +178,11 @@ export class AgentToolRegistry {
       }
     }
 
+    // Story 58.15: If this is a custom tool, execute via webhook
+    if (toolName.startsWith('custom:')) {
+      return this.executeCustomTool(ctx, toolName, enrichedArgs);
+    }
+
     // No in-process handler — return error suggesting the tool exists
     // but execution isn't implemented yet. Story 58.4 will add HTTP fallback.
     return {
@@ -159,6 +192,75 @@ export class AgentToolRegistry {
         message: `Tool '${toolName}' is defined but has no in-process handler yet. Use the Sly API directly.`,
       },
     };
+  }
+
+  /**
+   * Execute a tenant-defined custom tool via its configured handler (Story 58.15).
+   */
+  private async executeCustomTool(
+    ctx: AgentContext,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
+    const rawName = toolName.replace(/^custom:/, '');
+
+    const { data: tool } = await this.supabase
+      .from('agent_custom_tools')
+      .select('*')
+      .eq('agent_id', ctx.agentId)
+      .eq('tenant_id', ctx.tenantId)
+      .eq('tool_name', rawName)
+      .eq('status', 'active')
+      .maybeSingle();
+
+    if (!tool) {
+      return { success: false, error: { code: 'TOOL_NOT_FOUND', message: `Custom tool '${rawName}' not found` } };
+    }
+
+    if (tool.handler_type === 'noop') {
+      return { success: true, data: { message: `Tool '${rawName}' executed (noop handler)` } };
+    }
+
+    if (!tool.handler_url) {
+      return { success: false, error: { code: 'NO_HANDLER', message: `Custom tool '${rawName}' has no handler URL` } };
+    }
+
+    // Execute via HTTP
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), tool.handler_timeout_ms || 30000);
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // HMAC signing if secret is configured
+      if (tool.handler_secret) {
+        const { createHmac } = await import('crypto');
+        const bodyStr = JSON.stringify({ tool: rawName, args, agentId: ctx.agentId, tenantId: ctx.tenantId });
+        const signature = createHmac('sha256', tool.handler_secret).update(bodyStr).digest('hex');
+        headers['x-sly-signature'] = `sha256=${signature}`;
+      }
+
+      const response = await fetch(tool.handler_url, {
+        method: tool.handler_method || 'POST',
+        headers,
+        body: JSON.stringify({ tool: rawName, args, agentId: ctx.agentId, tenantId: ctx.tenantId }),
+        signal: controller.signal,
+      });
+
+      const responseText = await response.text();
+      let data: any;
+      try { data = JSON.parse(responseText); } catch { data = { raw: responseText }; }
+      if (!response.ok) {
+        return { success: false, error: { code: 'HANDLER_ERROR', message: `HTTP ${response.status}`, data } };
+      }
+      return { success: true, data };
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        return { success: false, error: { code: 'TIMEOUT', message: `Custom tool '${rawName}' timed out after ${tool.handler_timeout_ms}ms` } };
+      }
+      return { success: false, error: { code: 'HANDLER_ERROR', message: err.message } };
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   /**

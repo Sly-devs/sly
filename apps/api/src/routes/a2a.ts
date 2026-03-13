@@ -128,15 +128,8 @@ a2aPublicRouter.get('/agents/:agentId/card', async (c) => {
   const result = await fetchAgentCard(agentId, undefined, getBaseUrl(c));
   if ('error' in result) return c.json({ error: result.error }, result.status);
 
-  trackOp({
-    tenantId: 'public',
-    operation: OpType.A2A_AGENT_DISCOVERED,
-    subject: `a2a/agent/${agentId}/card`,
-    actorType: 'system',
-    actorId: 'public',
-    correlationId: c.get('requestId'),
-    success: true,
-  });
+  // Note: public discovery routes skip trackOp — no tenant context,
+  // and 'public' is not a valid UUID for the tenant_id FK.
 
   return agentCardResponse(result.card);
 });
@@ -157,16 +150,6 @@ a2aPublicRouter.get('/:agentId/.well-known/agent.json', async (c) => {
 
   const result = await fetchAgentCard(agentId, undefined, getBaseUrl(c));
   if ('error' in result) return c.json({ error: result.error }, result.status);
-
-  trackOp({
-    tenantId: 'public',
-    operation: OpType.A2A_AGENT_DISCOVERED,
-    subject: `a2a/agent/${agentId}/.well-known/agent.json`,
-    actorType: 'system',
-    actorId: 'public',
-    correlationId: c.get('requestId'),
-    success: true,
-  });
 
   return agentCardResponse(result.card);
 });

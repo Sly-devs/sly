@@ -1,10 +1,11 @@
 # Epic 18: Agent Wallets & Contract Policies
 
-**Status:** Pending
+**Status:** Complete
 **Phase:** 5.2 (Agent Governance)
 **Priority:** P0 — Foundation for All Agent Contracting
 **Estimated Points:** 35
-**Stories:** 9 (0 complete)
+**Stories:** 9 (9 complete)
+**Completed:** 2026-03-14
 **Dependencies:** Epic 3 (Agent System & KYA ✅), Epic 40 (Circle Sandbox ✅)
 **Created:** March 1, 2026
 

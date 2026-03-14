@@ -387,6 +387,48 @@ export class SlyClient {
      */
     getTransactions: (id: string, params?: PaginationParams & { type?: string; from?: string; to?: string }) =>
       this.get<{ data: AgentTransaction[]; pagination: { limit: number; offset: number; total: number } }>(`/agents/${id}/transactions`, params),
+
+    /**
+     * Get agent wallet details (balance, policy, status)
+     */
+    getWallet: (id: string) =>
+      this.get<any>(`/agents/${id}/wallet`),
+
+    /**
+     * Freeze agent wallet
+     */
+    freezeWallet: (id: string) =>
+      this.post<any>(`/agents/${id}/wallet/freeze`),
+
+    /**
+     * Unfreeze agent wallet
+     */
+    unfreezeWallet: (id: string) =>
+      this.post<any>(`/agents/${id}/wallet/unfreeze`),
+
+    /**
+     * Set or update agent wallet contract policy
+     */
+    setWalletPolicy: (id: string, policy: any) =>
+      this.put<any>(`/agents/${id}/wallet/policy`, policy),
+
+    /**
+     * Evaluate a policy check against the agent wallet
+     */
+    evaluatePolicy: (id: string, request: any) =>
+      this.post<any>(`/agents/${id}/wallet/policy/evaluate`, request),
+
+    /**
+     * Get counterparty exposure data for agent wallet
+     */
+    getExposures: (id: string) =>
+      this.get<any>(`/agents/${id}/wallet/exposures`),
+
+    /**
+     * Get policy evaluation history for agent wallet
+     */
+    getEvaluations: (id: string, params?: { page?: number; limit?: number }) =>
+      this.get<any>(`/agents/${id}/wallet/policy/evaluations`, params),
   };
 
   // ============================================

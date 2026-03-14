@@ -27,6 +27,7 @@ import {
   Trash2,
   Network,
   CreditCard,
+  Wallet,
 } from 'lucide-react';
 import { useQuery as useTanstackQuery } from '@tanstack/react-query';
 import type { Agent, Stream, AgentLimits } from '@sly/api-client';
@@ -43,11 +44,12 @@ import { AgentActivityFeed } from '@/components/agents/agent-activity-feed';
 import { AgentQuickActions } from '@/components/agents/agent-quick-actions';
 import { ConfigureAgentDialog } from '@/components/agents/configure-agent-dialog';
 import { KyaTierBadge } from '@/components/agents/kya-tier-badge';
+import { WalletTab } from '@/components/agents/wallet-tab';
 import type { AgentAction } from '@/lib/mock-data/agent-activity';
 import { formatCurrency } from '@/lib/utils';
 import { format } from 'date-fns';
 
-type TabType = 'overview' | 'streams' | 'mandates' | 'checkouts' | 'a2a' | 'permissions' | 'kya' | 'activity';
+type TabType = 'overview' | 'streams' | 'mandates' | 'checkouts' | 'a2a' | 'wallet' | 'permissions' | 'kya' | 'activity';
 
 function getAgentIcon(agentName: string) {
   if (agentName.includes('Inference API Consumer')) {
@@ -219,6 +221,7 @@ export default function AgentDetailPage() {
     { id: 'mandates' as TabType, label: 'Mandates', icon: FileText },
     { id: 'checkouts' as TabType, label: 'Checkouts', icon: ShoppingCart },
     { id: 'a2a' as TabType, label: 'A2A', icon: Network },
+    { id: 'wallet' as TabType, label: 'Wallet', icon: Wallet },
     { id: 'permissions' as TabType, label: 'Permissions', icon: Key },
     { id: 'kya' as TabType, label: 'KYA', icon: Shield },
     { id: 'activity' as TabType, label: 'Activity', icon: History },
@@ -484,6 +487,9 @@ export default function AgentDetailPage() {
       )}
       {activeTab === 'a2a' && (
         <A2ATab agentId={agentId} />
+      )}
+      {activeTab === 'wallet' && (
+        <WalletTab agentId={agentId} />
       )}
       {activeTab === 'permissions' && (
         <PermissionsTab agent={agent} />

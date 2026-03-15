@@ -17,6 +17,7 @@ import { ValidationError, NotFoundError } from '../middleware/error.js';
 import { generateAgentToken, hashApiKey, getKeyPrefix } from '../utils/crypto.js';
 import { ErrorCode } from '@sly/types';
 import { triggerWorkflows } from '../services/workflow-trigger.js';
+import { validateProcessingConfig, VALID_PROCESSING_MODES } from '../utils/processing-config-validation.js';
 import { trackOp } from '../services/ops/track-op.js';
 import { OpType } from '../services/ops/operation-types.js';
 import { checkAgentLimit } from '../services/tenant-limits.js';
@@ -107,6 +108,8 @@ const createAgentSchema = z.object({
   permissions: permissionsSchema,
   wallet_id: z.string().uuid().optional(), // Existing wallet to assign
   auto_create_wallet: z.boolean().optional().default(true), // Story 51.6: Auto-create wallet if not specified
+  processing_mode: z.enum(['managed', 'webhook', 'manual']).optional(),
+  processing_config: z.record(z.unknown()).optional(),
 });
 
 const updateAgentSchema = z.object({
@@ -116,6 +119,8 @@ const updateAgentSchema = z.object({
   dailyLimit: z.number().positive().optional(),
   monthlyLimit: z.number().positive().optional(),
   perTransactionLimit: z.number().positive().optional(),
+  processing_mode: z.enum(['managed', 'webhook', 'manual']).optional(),
+  processing_config: z.record(z.unknown()).optional(),
 });
 
 // Default permissions for new agents
@@ -228,9 +233,23 @@ agents.post('/', async (c) => {
     c.header('X-Deprecated-Fields', deprecatedFieldsUsed.join(', '));
   }
 
-  const { name, description, permissions, wallet_id, auto_create_wallet } = parsed.data;
+  const { name, description, permissions, wallet_id, auto_create_wallet, processing_mode, processing_config } = parsed.data;
   // Get the account ID (prefer new name, fall back to old)
   const accountId = parsed.data.accountId || parsed.data.parentAccountId;
+
+  // Validate processing_mode + processing_config pairing
+  if (processing_mode && !processing_config) {
+    throw new ValidationError('processing_config is required when processing_mode is provided');
+  }
+  if (processing_config && !processing_mode) {
+    throw new ValidationError('processing_mode is required when processing_config is provided');
+  }
+  if (processing_mode && processing_config) {
+    const configResult = validateProcessingConfig(processing_mode, processing_config);
+    if (!configResult.valid) {
+      throw new ValidationError(configResult.error!);
+    }
+  }
 
   // Story 59.15: Parent account is optional — validate if provided
   let parentAccount: any = null;
@@ -287,22 +306,28 @@ agents.post('/', async (c) => {
 
   // Create agent - store ONLY the hash, never the plaintext token
   // Story 59.15: parent_account_id is nullable for standalone agents
+  const insertData: Record<string, any> = {
+    tenant_id: ctx.tenantId,
+    parent_account_id: accountId || null,
+    name,
+    description: description || null,
+    status: 'active',
+    kya_tier: 0, // Start unverified
+    kya_status: 'unverified',
+    auth_type: 'api_key',
+    auth_client_id: authTokenPrefix, // Only store prefix for display
+    auth_token_hash: authTokenHash,  // Secure hash for verification
+    auth_token_prefix: authTokenPrefix, // Indexed for lookup
+    permissions: mergedPermissions,
+  };
+  if (processing_mode) {
+    insertData.processing_mode = processing_mode;
+    insertData.processing_config = processing_config;
+  }
+
   const { data, error } = await supabase
     .from('agents')
-    .insert({
-      tenant_id: ctx.tenantId,
-      parent_account_id: accountId || null,
-      name,
-      description: description || null,
-      status: 'active',
-      kya_tier: 0, // Start unverified
-      kya_status: 'unverified',
-      auth_type: 'api_key',
-      auth_client_id: authTokenPrefix, // Only store prefix for display
-      auth_token_hash: authTokenHash,  // Secure hash for verification
-      auth_token_prefix: authTokenPrefix, // Indexed for lookup
-      permissions: mergedPermissions,
-    })
+    .insert(insertData)
     .select('*')
     .single();
   
@@ -591,6 +616,25 @@ agents.patch('/:id', async (c) => {
       ...parsed.data.permissions,
     };
   }
+
+  // Validate processing_mode + processing_config pairing
+  const hasMode = parsed.data.processing_mode !== undefined;
+  const hasConfig = parsed.data.processing_config !== undefined;
+  if (hasMode && !hasConfig) {
+    throw new ValidationError('processing_config is required when processing_mode is provided');
+  }
+  if (hasConfig && !hasMode) {
+    throw new ValidationError('processing_mode is required when processing_config is provided');
+  }
+  if (hasMode && hasConfig) {
+    const configResult = validateProcessingConfig(parsed.data.processing_mode!, parsed.data.processing_config!);
+    if (!configResult.valid) {
+      throw new ValidationError(configResult.error!);
+    }
+    updates.processing_mode = parsed.data.processing_mode;
+    updates.processing_config = parsed.data.processing_config;
+  }
+
   // If any limits are being updated, cap by parent account tier
   const hasLimitUpdate =
     parsed.data.dailyLimit !== undefined ||

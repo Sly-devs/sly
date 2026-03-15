@@ -23,6 +23,7 @@ import { normalizeParts } from '../services/a2a/types.js';
 import { verifyApiKey } from '../utils/crypto.js';
 import { trackOp } from '../services/ops/track-op.js';
 import { OpType } from '../services/ops/operation-types.js';
+import { validateProcessingConfig } from '../utils/processing-config-validation.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -863,7 +864,7 @@ a2aRouter.get('/agents/:agentId/config', async (c) => {
   }
 
   return c.json({
-    processingMode: (agent as any).processing_mode || 'manual',
+    processingMode: (agent as any).processing_mode || 'managed',
     processingConfig: (agent as any).processing_config || {},
   });
 });
@@ -888,58 +889,13 @@ a2aRouter.put('/agents/:agentId/config', async (c) => {
   const processingMode = body.processing_mode || body.processingMode;
   const processingConfig = body.processing_config || body.processingConfig || {};
 
-  // Validate processing mode
-  if (!processingMode || !['managed', 'webhook', 'manual'].includes(processingMode)) {
+  // Validate processing mode + config via shared helper
+  if (!processingMode) {
     return c.json({ error: 'processing_mode must be one of: managed, webhook, manual' }, 400);
   }
-
-  // Mode-specific validation
-  if (processingMode === 'managed') {
-    if (!processingConfig.model || typeof processingConfig.model !== 'string' || processingConfig.model.trim() === '') {
-      return c.json({ error: 'managed mode requires a non-empty model string' }, 400);
-    }
-    if (!processingConfig.systemPrompt || typeof processingConfig.systemPrompt !== 'string' || processingConfig.systemPrompt.trim() === '') {
-      return c.json({ error: 'managed mode requires a non-empty systemPrompt' }, 400);
-    }
-    if (processingConfig.systemPrompt.length > 10000) {
-      return c.json({ error: 'systemPrompt must be 10000 characters or less' }, 400);
-    }
-    if (processingConfig.maxTokens !== undefined) {
-      const maxTokens = Number(processingConfig.maxTokens);
-      if (isNaN(maxTokens) || maxTokens < 512 || maxTokens > 200000) {
-        return c.json({ error: 'maxTokens must be between 512 and 200000' }, 400);
-      }
-    }
-    if (processingConfig.temperature !== undefined) {
-      const temp = Number(processingConfig.temperature);
-      if (isNaN(temp) || temp < 0 || temp > 2) {
-        return c.json({ error: 'temperature must be between 0 and 2' }, 400);
-      }
-    }
-  } else if (processingMode === 'webhook') {
-    if (!processingConfig.callbackUrl || typeof processingConfig.callbackUrl !== 'string') {
-      return c.json({ error: 'webhook mode requires a callbackUrl' }, 400);
-    }
-    try {
-      const url = new URL(processingConfig.callbackUrl);
-      if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
-        return c.json({ error: 'callbackUrl must use HTTPS (or localhost for development)' }, 400);
-      }
-    } catch {
-      return c.json({ error: 'callbackUrl must be a valid URL' }, 400);
-    }
-    if (processingConfig.timeoutMs !== undefined) {
-      const timeout = Number(processingConfig.timeoutMs);
-      if (isNaN(timeout) || timeout < 1000 || timeout > 120000) {
-        return c.json({ error: 'timeoutMs must be between 1000 and 120000' }, 400);
-      }
-    }
-  } else if (processingMode === 'manual') {
-    // Manual mode: config should be empty
-    const keys = Object.keys(processingConfig);
-    if (keys.length > 0) {
-      return c.json({ error: 'manual mode does not accept processing config' }, 400);
-    }
+  const configResult = validateProcessingConfig(processingMode, processingConfig);
+  if (!configResult.valid) {
+    return c.json({ error: configResult.error }, 400);
   }
 
   const supabase = createClient();

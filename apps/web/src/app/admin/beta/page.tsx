@@ -99,7 +99,7 @@ function useAdminApi() {
   return { session, saveSession, clearSession, fetchAdmin, isAuthenticated: !!session };
 }
 
-type Tab = 'dashboard' | 'applications' | 'codes' | 'tenants' | 'funnel';
+type Tab = 'dashboard' | 'applications' | 'codes' | 'tenants' | 'agents' | 'funnel';
 
 export default function BetaAdminPage() {
   const { session, saveSession, clearSession, fetchAdmin, isAuthenticated } = useAdminApi();
@@ -198,7 +198,8 @@ export default function BetaAdminPage() {
     { key: 'dashboard', label: 'Dashboard', icon: Activity },
     { key: 'applications', label: 'Applications', icon: Users },
     { key: 'codes', label: 'Invite Codes', icon: Key },
-    { key: 'tenants', label: 'Tenants', icon: Bot },
+    { key: 'tenants', label: 'Tenants', icon: Building2 },
+    { key: 'agents', label: 'Agents', icon: Bot },
     { key: 'funnel', label: 'Funnel', icon: BarChart3 },
   ];
 
@@ -241,6 +242,7 @@ export default function BetaAdminPage() {
         {tab === 'applications' && <ApplicationsTab fetchAdmin={fetchAdmin} />}
         {tab === 'codes' && <CodesTab fetchAdmin={fetchAdmin} />}
         {tab === 'tenants' && <TenantsTab fetchAdmin={fetchAdmin} />}
+        {tab === 'agents' && <AgentsTab fetchAdmin={fetchAdmin} />}
         {tab === 'funnel' && <FunnelTab fetchAdmin={fetchAdmin} />}
       </div>
     </div>
@@ -1086,6 +1088,407 @@ function TenantDetail({
 // ============================================
 // Funnel Tab
 // ============================================
+// ============================================
+// Agents Tab — Leaderboard + Detail
+// ============================================
+
+const kyaBadge: Record<number, string> = {
+  0: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+  1: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  2: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400',
+  3: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+};
+
+function AgentsTab({ fetchAdmin }: { fetchAdmin: (path: string, opts?: RequestInit) => Promise<any> }) {
+  const [agents, setAgents] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (statusFilter) params.set('status', statusFilter);
+      const qs = params.toString();
+      const data = await fetchAdmin(`/agents${qs ? `?${qs}` : ''}`);
+      setAgents(data.data || []);
+    } catch (err: any) {
+      setError(err.message);
+    }
+    setLoading(false);
+  }, [fetchAdmin, search, statusFilter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const statusFilters = [
+    { key: '', label: 'All' },
+    { key: 'active', label: 'Active' },
+    { key: 'suspended', label: 'Suspended' },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {statusFilters.map((f) => (
+          <Button
+            key={f.key}
+            variant={statusFilter === f.key ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setStatusFilter(f.key)}
+          >
+            {f.label}
+          </Button>
+        ))}
+        <div className="relative ml-auto">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+          <Input
+            className="pl-8 h-8 w-48 text-sm"
+            placeholder="Search agents..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <Button variant="outline" size="sm" onClick={load}>
+          <RefreshCw className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {error && <p className="text-sm text-red-500">{error}</p>}
+
+      {loading ? (
+        <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-gray-400" /></div>
+      ) : agents.length === 0 ? (
+        <p className="text-center text-gray-500 py-12">No agents found</p>
+      ) : (
+        <div className="bg-white dark:bg-gray-950 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 dark:bg-gray-900">
+              <tr>
+                <th className="text-left p-3 font-medium text-gray-500 w-8">#</th>
+                <th className="text-left p-3 font-medium text-gray-500">Agent</th>
+                <th className="text-left p-3 font-medium text-gray-500">Tenant</th>
+                <th className="text-left p-3 font-medium text-gray-500">Status</th>
+                <th className="text-left p-3 font-medium text-gray-500">KYA</th>
+                <th className="text-right p-3 font-medium text-gray-500">Tasks</th>
+                <th className="text-right p-3 font-medium text-gray-500">Success</th>
+                <th className="text-right p-3 font-medium text-gray-500">Volume</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {agents.map((a, i) => (
+                <tr key={a.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/50">
+                  <td className="p-3 text-gray-400 font-mono text-xs">{i + 1}</td>
+                  <td className="p-3">
+                    <button
+                      className="text-blue-600 dark:text-blue-400 hover:underline font-medium text-left"
+                      onClick={() => setSelectedAgentId(a.id)}
+                    >
+                      {a.name}
+                    </button>
+                    {a.description && (
+                      <p className="text-xs text-gray-500 truncate max-w-xs">{a.description}</p>
+                    )}
+                  </td>
+                  <td className="p-3 text-gray-600 dark:text-gray-400 text-xs">{a.tenant_name}</td>
+                  <td className="p-3">
+                    <span className={`inline-flex items-center px-2 py-0.5 text-xs rounded-full ${statusBadge[a.status] || statusBadge.active}`}>
+                      {a.status}
+                    </span>
+                  </td>
+                  <td className="p-3">
+                    <span className={`inline-flex items-center px-2 py-0.5 text-xs rounded-full ${kyaBadge[a.kya_tier] || kyaBadge[0]}`}>
+                      Tier {a.kya_tier}
+                    </span>
+                  </td>
+                  <td className="p-3 text-right font-mono text-xs">
+                    <span className="text-green-600">{a.tasks?.completed || 0}</span>
+                    {(a.tasks?.failed || 0) > 0 && (
+                      <span className="text-red-500 ml-1">/ {a.tasks.failed}f</span>
+                    )}
+                    <span className="text-gray-400 ml-1">/ {a.tasks?.total || 0}</span>
+                  </td>
+                  <td className="p-3 text-right font-mono text-xs">
+                    <span className={a.success_rate >= 80 ? 'text-green-600' : a.success_rate >= 50 ? 'text-yellow-600' : 'text-red-500'}>
+                      {a.tasks?.total > 0 ? `${a.success_rate}%` : '—'}
+                    </span>
+                  </td>
+                  <td className="p-3 text-right font-mono text-xs text-gray-600 dark:text-gray-400">
+                    {a.total_volume ? `$${Number(a.total_volume).toLocaleString()}` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {selectedAgentId && (
+        <AgentDetail
+          agentId={selectedAgentId}
+          fetchAdmin={fetchAdmin}
+          onClose={() => setSelectedAgentId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function AgentDetail({ agentId, fetchAdmin, onClose }: {
+  agentId: string;
+  fetchAdmin: (path: string, opts?: RequestInit) => Promise<any>;
+  onClose: () => void;
+}) {
+  const [detail, setDetail] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await fetchAdmin(`/agents/${agentId}`);
+        setDetail(data);
+      } catch (err: any) {
+        setError(err.message);
+      }
+      setLoading(false);
+    })();
+  }, [agentId, fetchAdmin]);
+
+  if (loading) {
+    return (
+      <Card className="mt-4">
+        <CardContent className="flex justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error || !detail) {
+    return (
+      <Card className="mt-4">
+        <CardContent className="py-6">
+          <p className="text-sm text-red-500">{error || 'Failed to load agent'}</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={onClose}>Close</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const { agent, skills, wallets, recentTasks, taskStats } = detail;
+
+  return (
+    <Card className="mt-4">
+      <CardHeader className="flex flex-row items-start justify-between">
+        <div>
+          <CardTitle className="text-lg flex items-center gap-2">
+            {agent.name}
+            <span className={`inline-flex items-center px-2 py-0.5 text-xs rounded-full ${statusBadge[agent.status] || statusBadge.active}`}>
+              {agent.status}
+            </span>
+            <span className={`inline-flex items-center px-2 py-0.5 text-xs rounded-full ${kyaBadge[agent.kya_tier] || kyaBadge[0]}`}>
+              KYA {agent.kya_tier}
+            </span>
+          </CardTitle>
+          <p className="text-sm text-gray-500 mt-1">{agent.description || 'No description'}</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* Agent Info Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div>
+            <span className="text-gray-500">ID</span>
+            <p className="font-mono text-xs mt-0.5">{agent.id.slice(0, 12)}...</p>
+          </div>
+          <div>
+            <span className="text-gray-500">Tenant</span>
+            <p className="mt-0.5">{agent.tenant_name}</p>
+          </div>
+          <div>
+            <span className="text-gray-500">Parent Account</span>
+            <p className="mt-0.5">{agent.parent_account_name || '—'}</p>
+          </div>
+          <div>
+            <span className="text-gray-500">Type</span>
+            <p className="mt-0.5">{agent.type || 'standard'}</p>
+          </div>
+          <div>
+            <span className="text-gray-500">Discoverable</span>
+            <p className="mt-0.5">{agent.discoverable ? 'Yes' : 'No'}</p>
+          </div>
+          <div>
+            <span className="text-gray-500">x402 Enabled</span>
+            <p className="mt-0.5">{agent.x402_enabled ? 'Yes' : 'No'}</p>
+          </div>
+          <div>
+            <span className="text-gray-500">Endpoint</span>
+            <p className="font-mono text-xs mt-0.5 truncate max-w-[200px]" title={agent.endpoint_url || ''}>
+              {agent.endpoint_url || '—'}
+            </p>
+          </div>
+          <div>
+            <span className="text-gray-500">Created</span>
+            <p className="mt-0.5">{new Date(agent.created_at).toLocaleDateString()}</p>
+          </div>
+        </div>
+
+        {/* Task Stats */}
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">Task Stats</h3>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            {[
+              { label: 'Total', value: taskStats.total, color: 'text-gray-900 dark:text-white' },
+              { label: 'Completed', value: taskStats.completed, color: 'text-green-600' },
+              { label: 'Failed', value: taskStats.failed, color: 'text-red-500' },
+              { label: 'Working', value: taskStats.working, color: 'text-blue-500' },
+              { label: 'Avg Duration', value: taskStats.avgDurationMs ? `${taskStats.avgDurationMs}ms` : '—', color: 'text-gray-600' },
+            ].map((s) => (
+              <div key={s.label} className="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 text-center">
+                <div className={`text-xl font-bold ${s.color}`}>{s.value}</div>
+                <div className="text-xs text-gray-500">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Skills */}
+        {skills.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+              Skills ({skills.length})
+            </h3>
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-lg overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-200 dark:border-gray-800">
+                    <th className="text-left p-2 font-medium text-gray-500">Skill</th>
+                    <th className="text-left p-2 font-medium text-gray-500">Tags</th>
+                    <th className="text-right p-2 font-medium text-gray-500">Price</th>
+                    <th className="text-right p-2 font-medium text-gray-500">Invocations</th>
+                    <th className="text-right p-2 font-medium text-gray-500">Revenue</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
+                  {skills.map((s: any) => (
+                    <tr key={s.skill_id}>
+                      <td className="p-2">
+                        <span className="font-medium">{s.name}</span>
+                        <span className="text-gray-400 ml-1">({s.skill_id})</span>
+                      </td>
+                      <td className="p-2">
+                        {(s.tags || []).map((t: string) => (
+                          <span key={t} className="inline-block bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded px-1.5 py-0.5 mr-1 text-[10px]">
+                            {t}
+                          </span>
+                        ))}
+                      </td>
+                      <td className="p-2 text-right font-mono">
+                        {Number(s.base_price) > 0 ? `${s.base_price} ${s.currency}` : 'Free'}
+                      </td>
+                      <td className="p-2 text-right font-mono">{s.total_invocations || 0}</td>
+                      <td className="p-2 text-right font-mono">
+                        {Number(s.total_fees_collected) > 0 ? `${s.total_fees_collected} ${s.currency}` : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Wallets */}
+        {wallets.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+              Wallets ({wallets.length})
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {wallets.map((w: any) => (
+                <div key={w.id} className="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 text-sm">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-medium">{w.currency}</span>
+                    <span className={`px-2 py-0.5 text-xs rounded-full ${statusBadge[w.status] || statusBadge.active}`}>
+                      {w.status}
+                    </span>
+                  </div>
+                  <div className="text-xl font-bold">${Number(w.balance || 0).toLocaleString()}</div>
+                  <div className="text-xs text-gray-500 mt-1 font-mono truncate">{w.wallet_address || '—'}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">{w.wallet_type} / {w.custody_type} / {w.provider || 'none'}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Recent Tasks */}
+        {recentTasks.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+              Recent Tasks (last 20)
+            </h3>
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-lg overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-200 dark:border-gray-800">
+                    <th className="text-left p-2 font-medium text-gray-500">ID</th>
+                    <th className="text-left p-2 font-medium text-gray-500">State</th>
+                    <th className="text-left p-2 font-medium text-gray-500">Direction</th>
+                    <th className="text-right p-2 font-medium text-gray-500">Duration</th>
+                    <th className="text-right p-2 font-medium text-gray-500">Created</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
+                  {recentTasks.map((t: any) => (
+                    <tr key={t.id}>
+                      <td className="p-2 font-mono text-gray-500">{t.id.slice(0, 8)}</td>
+                      <td className="p-2">
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] ${
+                          t.state === 'completed' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                          t.state === 'failed' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+                          t.state === 'working' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
+                          'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+                        }`}>
+                          {t.state}
+                        </span>
+                      </td>
+                      <td className="p-2 text-gray-500">{t.direction || '—'}</td>
+                      <td className="p-2 text-right font-mono text-gray-500">
+                        {t.processing_duration_ms ? `${t.processing_duration_ms}ms` : '—'}
+                      </td>
+                      <td className="p-2 text-right text-gray-500">
+                        {new Date(t.created_at).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Permissions */}
+        {agent.permissions && Object.keys(agent.permissions).length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">Permissions</h3>
+            <pre className="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto">
+              {JSON.stringify(agent.permissions, null, 2)}
+            </pre>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function FunnelTab({ fetchAdmin }: { fetchAdmin: (path: string, opts?: RequestInit) => Promise<any> }) {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);

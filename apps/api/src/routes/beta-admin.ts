@@ -459,4 +459,169 @@ betaAdmin.get('/stats', async (c) => {
   });
 });
 
+// ============================================
+// GET /admin/beta/agents - Agent leaderboard
+// ============================================
+betaAdmin.get('/agents', async (c) => {
+  const supabase = createClient();
+  const page = parseInt(c.req.query('page') || '1');
+  const limit = parseInt(c.req.query('limit') || '50');
+  const status = c.req.query('status') || '';
+  const search = c.req.query('search') || '';
+
+  let query = (supabase.from('agents') as any)
+    .select('id, name, description, status, kya_tier, discoverable, endpoint_url, total_volume, total_transactions, wallet_address, created_at, tenant_id', { count: 'exact' })
+    .order('total_transactions', { ascending: false, nullsFirst: false });
+
+  if (status) {
+    query = query.eq('status', status);
+  }
+  if (search) {
+    query = query.ilike('name', `%${search}%`);
+  }
+
+  query = query.range((page - 1) * limit, page * limit - 1);
+  const { data: agents, count, error } = await query;
+
+  if (error) {
+    return c.json({ error: `Failed to list agents: ${error.message}` }, 500);
+  }
+
+  // Enrich with tenant name and task counts
+  const agentIds = (agents || []).map((a: any) => a.id);
+  const tenantIds = [...new Set((agents || []).map((a: any) => a.tenant_id))];
+
+  const [tenantsResult, tasksResult] = await Promise.all([
+    tenantIds.length
+      ? (supabase.from('tenants') as any).select('id, name').in('id', tenantIds)
+      : { data: [] },
+    agentIds.length
+      ? supabase.rpc('get_agent_task_counts', undefined).then(() => null).catch(() => null)
+      : null,
+  ]);
+
+  const tenantMap = new Map((tenantsResult.data || []).map((t: any) => [t.id, t.name]));
+
+  // Get task counts per agent via direct query
+  let taskCountMap = new Map<string, { completed: number; failed: number; total: number }>();
+  if (agentIds.length) {
+    const { data: taskCounts } = await (supabase.from('a2a_tasks') as any)
+      .select('agent_id, state')
+      .in('agent_id', agentIds);
+
+    if (taskCounts) {
+      for (const t of taskCounts) {
+        const entry = taskCountMap.get(t.agent_id) || { completed: 0, failed: 0, total: 0 };
+        entry.total++;
+        if (t.state === 'completed') entry.completed++;
+        if (t.state === 'failed') entry.failed++;
+        taskCountMap.set(t.agent_id, entry);
+      }
+    }
+  }
+
+  const enriched = (agents || []).map((a: any) => {
+    const tasks = taskCountMap.get(a.id) || { completed: 0, failed: 0, total: 0 };
+    return {
+      ...a,
+      tenant_name: tenantMap.get(a.tenant_id) || 'Unknown',
+      tasks,
+      success_rate: tasks.total > 0 ? Math.round((tasks.completed / tasks.total) * 100) : 0,
+    };
+  });
+
+  // Sort by completed tasks descending (leaderboard)
+  enriched.sort((a: any, b: any) => b.tasks.completed - a.tasks.completed);
+
+  return c.json({
+    data: enriched,
+    pagination: {
+      page,
+      limit,
+      total: count || 0,
+      totalPages: Math.ceil((count || 0) / limit),
+    },
+  });
+});
+
+// ============================================
+// GET /admin/beta/agents/:id - Agent detail
+// ============================================
+betaAdmin.get('/agents/:id', async (c) => {
+  const supabase = createClient();
+  const id = c.req.param('id');
+
+  const [agentResult, tenantLookup, skillsResult, walletResult, tasksResult] = await Promise.all([
+    (supabase.from('agents') as any)
+      .select('id, name, description, status, kya_tier, kya_status, kya_verified_at, discoverable, endpoint_url, endpoint_type, endpoint_enabled, total_volume, total_transactions, wallet_address, permissions, metadata, type, x402_enabled, processing_mode, created_at, updated_at, tenant_id, parent_account_id')
+      .eq('id', id)
+      .single(),
+    // We'll look up tenant name after we have tenant_id
+    null,
+    (supabase.from('agent_skills') as any)
+      .select('skill_id, name, description, tags, base_price, currency, total_invocations, total_fees_collected, status, handler_type')
+      .eq('agent_id', id)
+      .order('total_invocations', { ascending: false }),
+    (supabase.from('wallets') as any)
+      .select('id, balance, currency, wallet_address, network, status, wallet_type, custody_type, provider, created_at')
+      .eq('managed_by_agent_id', id)
+      .limit(5),
+    (supabase.from('a2a_tasks') as any)
+      .select('id, state, status_message, direction, created_at, updated_at, processing_duration_ms')
+      .eq('agent_id', id)
+      .order('created_at', { ascending: false })
+      .limit(20),
+  ]);
+
+  if (agentResult.error || !agentResult.data) {
+    return c.json({ error: 'Agent not found' }, 404);
+  }
+
+  const agent = agentResult.data;
+
+  // Fetch tenant name
+  const { data: tenant } = await (supabase.from('tenants') as any)
+    .select('id, name')
+    .eq('id', agent.tenant_id)
+    .single();
+
+  // Fetch parent account name
+  let parentAccount = null;
+  if (agent.parent_account_id) {
+    const { data } = await (supabase.from('accounts') as any)
+      .select('id, name')
+      .eq('id', agent.parent_account_id)
+      .single();
+    parentAccount = data;
+  }
+
+  // Compute task stats
+  const tasks = tasksResult.data || [];
+  const taskStats = {
+    total: tasks.length,
+    completed: tasks.filter((t: any) => t.state === 'completed').length,
+    failed: tasks.filter((t: any) => t.state === 'failed').length,
+    working: tasks.filter((t: any) => t.state === 'working').length,
+    avgDurationMs: 0,
+  };
+  const completedWithDuration = tasks.filter((t: any) => t.state === 'completed' && t.processing_duration_ms);
+  if (completedWithDuration.length) {
+    taskStats.avgDurationMs = Math.round(
+      completedWithDuration.reduce((s: number, t: any) => s + t.processing_duration_ms, 0) / completedWithDuration.length
+    );
+  }
+
+  return c.json({
+    agent: {
+      ...agent,
+      tenant_name: tenant?.name || 'Unknown',
+      parent_account_name: parentAccount?.name || null,
+    },
+    skills: skillsResult.data || [],
+    wallets: walletResult.data || [],
+    recentTasks: tasks,
+    taskStats,
+  });
+});
+
 export default betaAdmin;

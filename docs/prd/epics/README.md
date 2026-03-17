@@ -106,6 +106,8 @@ Every story must meet these criteria before completion:
 - [Epic 58: A2A Task Processor Worker](./epic-58-a2a-task-processor.md) ⚙️ ✅ - Background worker for processing A2A tasks with tool registry, payment gating, custom tools, audit trail
 - [Epic 60: A2A Agent Onboarding Skills](./epic-60-a2a-agent-onboarding-skills.md) 🎫 ✅ - Register, update, and inspect agents via A2A message/send
 - [Epic 68: Flexible Skill Pricing](./epic-68-flexible-skill-pricing.md) 💰 - Per-skill pricing: KYA-tiered rates, per-caller overrides, dynamic quotes, negotiated pricing via A2A
+- [Epic 69: A2A Result Acceptance & Quality Feedback](./epic-69-a2a-result-acceptance.md) ✋ - Acceptance gate, quality feedback, partial settlement for A2A tasks
+- [Epic 70: Universal Agent Discovery](./epic-70-universal-agent-discovery.md) 🔍 - Tri-ecosystem access: public registry REST API, MCP search tool, OpenAPI spec for Gemini/Claude/ChatGPT
 
 ### Agent Contracting Governance ⭐ NEW
 - [Epic 18: Agent Wallets & Contract Policies](./epic-18-agent-wallets-contract-policies.md) 🤖 - Contract policy engine, per-counterparty exposure, negotiation guardrails (expanded from 23→35 pts)
@@ -185,11 +187,13 @@ Strategic explorations before committing to implementation:
 | Epic 29: Workflow Engine | P0 | 52 | Multi-step workflows (expanded for contracting) |
 | Epic 41: On-Ramp | P1 | 110 | Non-crypto customers |
 | Epic 18: Agent Wallets & Contract Policies | P0 | 35 | Expanded: contract policies, counterparty exposure |
-| Epic 62: Escrow Orchestration | P0 | 38 | Agent contract escrow with governance |
-| Epic 63: External Reputation Bridge | P0 | 25 | Unified trust score aggregation |
+| Epic 62: Escrow Orchestration | P0 | 41 | Agent contract escrow with governance |
+| Epic 63: External Reputation Bridge | P0 | 28 | Unified trust score aggregation |
 | Epic 64: OpenClaw Governance Skill | P1 | 10 | ClawHub skill for governed contracting |
 | Epic 66: Email Notification System | P1 | 35 | Tier 1 done (10 emails), preferences + unsubscribe remaining |
 | Epic 68: Flexible Skill Pricing | P1 | 52 | KYA-tiered, per-caller, dynamic, negotiated pricing |
+| Epic 69: A2A Result Acceptance | P1 | 29 | Acceptance gate, quality feedback, partial settlement |
+| Epic 70: Universal Agent Discovery | P0 | 47 | Tri-ecosystem: visibility model, public registry, MCP search, OpenAPI |
 
 ### Planned (P0/P1) 📋
 
@@ -225,17 +229,45 @@ Strategic explorations before committing to implementation:
 ### Points Summary
 
 - **Completed:** ~992 points
-- **Current Focus:** ~359 points (58, 55, 29, 41, 68)
+- **Current Focus:** ~441 points (58, 55, 29, 41, 68, 69, 70)
 - **P0/P1 Planned:** ~124 points (including Epic 67 at 88 pts)
 - **P2 Planned:** ~153 points
 - **P3 Future:** ~205 points
-- **Total Defined:** ~1,724 points
+- **Total Defined:** ~1,806 points
 
 ---
 
 ## Recent Changes
 
 ### March 16, 2026
+- **Epic 70: Universal Agent Discovery — Tri-Ecosystem Access** — UPDATED (42 → 47 points, 12 → 13 stories, P0)
+  - **NEW Story 70.0: Agent Visibility Model** (5 pts, [SLY-476](https://linear.app/sly-ai/issue/SLY-476)) — formalize public vs private agents using existing `discoverable` column. Private agents hidden from registry, A2A discovery, and public card endpoints. Guards added to `fetchAgentCard()` and per-agent A2A task endpoint.
+  - Phase 1 renamed: "Agent Visibility + Public Registry REST API" (13 → 18 pts)
+  - Updated dependency graph: 70.0 is now the root — blocks 70.1, 70.2, 70.4
+  - Stories 70.1, 70.2, 70.4 updated to reference visibility model as blocker and include private-agent test cases
+  - Public agent registry REST API: `GET /v1/registry/agents` with search, tag filter, skill filter, pagination
+  - Extract shared `searchAgents()` service from `gateway-handler.ts` to power all three discovery paths
+  - MCP `search_agents` tool closes Claude gap — discover agents before sending tasks
+  - OpenAPI 3.1 spec at `/openapi.json` enables ChatGPT GPTs/Connectors integration
+  - SDK `sly.registry` module with `search()` and `getAgent()`
+  - Public registry browse page in Next.js app
+  - 13 stories across 5 phases: Visibility + REST API (18 pts), MCP + SDK (9 pts), OpenAPI (7 pts), Dashboard (5 pts), Testing + Docs (8 pts)
+  - Subsumes SLY-249 (Agent Registry API) and SLY-252 (Agent Discovery Dashboard) from Epic 20
+- **Epic 69: A2A Result Acceptance & Quality Feedback** — NEW (29 points, P1)
+  - Acceptance gate pauses mandate resolution for caller review before payment
+  - Quality feedback: satisfaction rating + numeric score stored in `a2a_task_feedback` table
+  - Partial settlement: proportional payment for partial work (provider opt-in)
+  - Review timeout worker auto-fails unreviewed tasks (refund to caller)
+  - 7 stories across 3 phases: Core Acceptance (13 pts), Feedback & Partial Settlement (13 pts), Query & Testing (8 pts)
+  - Linear issues: SLY-455 through SLY-461
+- **Epic 62: Escrow Orchestration** — ENRICHED (38 → 41 points, 9 → 10 stories)
+  - Story 62.10: Escrow outcome reputation signals — emits `reputation_relevant: true` events on terminal escrow states
+  - Bridges Epic 62 → Epic 63 explicitly (escrow history as reputation source)
+  - Linear issue: SLY-462
+- **Epic 63: External Reputation Bridge** — ENRICHED (25 → 28 points, 7 → 8 stories)
+  - Story 63.8: A2A feedback ingestion for trust score — adds "Service Quality" as 5th scoring dimension (15% weight)
+  - Reads from `a2a_task_feedback` table (Epic 69.4), aggregates per-agent quality metrics
+  - Linear issue: SLY-463
 - **Epic 68: Flexible Skill Pricing** — NEW (52 points, P1)
   - Four pricing models: KYA-tiered rates, per-caller overrides, dynamic quotes, negotiated pricing
   - Price resolution layer between skill lookup and settlement mandate creation
@@ -480,6 +512,7 @@ Sly supports **FIVE** agentic payment and communication protocols:
 | `payos.cards.visa` | Visa VIC operations | `createInstruction()`, `getCredentials()` |
 | `payos.cards.mastercard` | Mastercard Agent Pay | `registerAgent()`, `createToken()`, `getDTVC()` |
 | `payos.a2a` | A2A protocol operations | `discover()`, `sendTask()`, `getTask()`, `getAgentCard()` |
+| `payos.registry` | Agent discovery & search | `search()`, `getAgent()` |
 
 ---
 

@@ -3,8 +3,8 @@
 **Status:** Pending
 **Phase:** 5.3 (Agent Contracting)
 **Priority:** P0 — Trustless Payment for Agent Contracts
-**Estimated Points:** 38
-**Stories:** 9 (0 complete)
+**Estimated Points:** 41
+**Stories:** 10 (0 complete)
 **Dependencies:** Epic 18 (Agent Wallets), Epic 29 (Workflow Engine), Epic 40 (Circle Sandbox ✅)
 **Created:** March 1, 2026
 
@@ -382,13 +382,53 @@ sly.escrows = {
 
 ---
 
+### Phase 3: Cross-Epic Integration
+
+---
+
+### Story 62.10: Escrow Outcome Reputation Signals
+
+**Points:** 3
+**Priority:** Medium
+
+**Description:**
+When an escrow reaches a terminal state (released, disputed, expired), emit a structured reputation event to the `escrow_events` table with `reputation_relevant: true`. This is the "write side" that Epic 63 Story 63.5 reads from — making the implicit link between escrow outcomes and reputation scoring explicit.
+
+**Event payload:**
+```json
+{
+  "event_type": "escrow_terminal",
+  "reputation_relevant": true,
+  "outcome": "released | disputed | expired",
+  "counterparty_ids": { "depositor": "agent_id", "beneficiary": "agent_id" },
+  "amount_usdc": 500.00,
+  "duration_seconds": 86400,
+  "dispute_reason": null
+}
+```
+
+**Files:**
+- Modify: `apps/api/src/services/escrow/lifecycle-monitor.ts`
+- Modify: `apps/api/src/services/escrow/protocol-service.ts`
+
+**Acceptance Criteria:**
+- [ ] Terminal state events (released, disputed, expired) include `reputation_relevant: true`
+- [ ] Event metadata includes outcome, counterparty IDs, amount, duration
+- [ ] Disputed escrows include `dispute_reason` if available
+- [ ] Epic 63 Story 63.5 can query `escrow_events WHERE reputation_relevant = true`
+- [ ] No new tables — extends existing `escrow_events` with metadata fields
+- [ ] Frozen → released transitions also emit reputation event
+
+---
+
 ## Points Summary
 
 | Phase | Stories | Points |
 |-------|---------|--------|
 | Phase 1: Foundation | 62.1–62.6 | 26 |
 | Phase 2: Settlement & UI | 62.7–62.9 | 12 |
-| **Total** | **9** | **38** |
+| Phase 3: Cross-Epic Integration | 62.10 | 3 |
+| **Total** | **10** | **41** |
 
 ---
 
@@ -402,6 +442,8 @@ Phase 1: Foundation (62.1-62.6)
                                               └── 62.6 (kill switch)
     ↓
 Phase 2: Settlement & UI (62.7-62.9)    ← Depends on Phase 1
+    ↓
+Phase 3: Cross-Epic Integration (62.10)  ← Depends on 62.4 (lifecycle monitor)
 ```
 
 ---

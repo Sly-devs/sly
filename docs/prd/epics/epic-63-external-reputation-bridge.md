@@ -3,8 +3,8 @@
 **Status:** Pending
 **Phase:** 5.3 (Agent Contracting)
 **Priority:** P0 — Trust Layer for Agent Contracts
-**Estimated Points:** 25
-**Stories:** 7 (0 complete)
+**Estimated Points:** 28
+**Stories:** 8 (0 complete)
 **Dependencies:** None (can start immediately)
 **Created:** March 1, 2026
 
@@ -303,13 +303,48 @@ Counterparty profile card for the dashboard showing trust breakdown when reviewi
 
 ---
 
+### Phase 3: Cross-Epic Integration
+
+---
+
+### Story 63.8: A2A Feedback Ingestion for Trust Score
+
+**Points:** 3
+**Priority:** Medium
+**Blocked by:** Epic 69 Story 69.4 (creates `a2a_task_feedback` table)
+
+**Description:**
+Add `a2a_task_feedback` as a reputation signal source alongside ERC-8004, Mnemom, Vouched, and escrow history. Aggregate feedback scores per agent into a new "Service Quality" dimension in the unified trust score calculator.
+
+**Integration:**
+- Read from `a2a_task_feedback` table (created in Epic 69.4)
+- Calculate per-agent metrics: average satisfaction score, feedback count, rejection rate
+- Add "Service Quality" as a 5th dimension with 15% weight
+- Redistribute existing weights proportionally: Identity 22%, Payment Reliability 25%, Capability Trust 22%, Community Signal 16%, Service Quality 15%
+
+**Files:**
+- New: `apps/api/src/services/reputation/sources/a2a-feedback.ts`
+- Modify: `apps/api/src/services/reputation/trust-score-calculator.ts`
+
+**Acceptance Criteria:**
+- [ ] New source adapter reads from `a2a_task_feedback` table
+- [ ] Calculates: avg score (0-100 mapped to 0-1000), feedback count, rejection rate
+- [ ] "Service Quality" dimension added with 15% weight
+- [ ] Existing dimension weights redistributed proportionally (total still 100%)
+- [ ] Agents with no A2A feedback: dimension excluded, weight redistributed (graceful degradation)
+- [ ] Minimum 3 feedback entries required for `confidence: 'medium'` on this dimension
+- [ ] Per-tenant weight override still works (can adjust Service Quality weight)
+
+---
+
 ## Points Summary
 
 | Phase | Stories | Points |
 |-------|---------|--------|
 | Phase 1: Core Infrastructure | 63.1–63.5 | 17 |
 | Phase 2: Aggregation & UI | 63.6–63.7 | 8 |
-| **Total** | **7** | **25** |
+| Phase 3: Cross-Epic Integration | 63.8 | 3 |
+| **Total** | **8** | **28** |
 
 ---
 
@@ -325,9 +360,13 @@ Phase 1: Core Infrastructure
     ↓
 Phase 2: Aggregation & UI
     63.6 (calculator, depends on at least 63.2 + 63.5) → 63.7 (dashboard widget)
+    ↓
+Phase 3: Cross-Epic Integration
+    63.8 (A2A feedback ingestion, depends on 63.6 + Epic 69.4)
 ```
 
 All four source integrations (63.2–63.5) can be developed in parallel after the data model lands.
+Story 63.8 requires Epic 69 Story 69.4 to be complete (creates the `a2a_task_feedback` table).
 
 ---
 

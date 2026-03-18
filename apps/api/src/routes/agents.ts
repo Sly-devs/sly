@@ -2660,7 +2660,7 @@ agentCardRouter.get('/:id/card.json', async (c) => {
   }
   endpoints.push({ name: 'API', endpoint: `${baseUrl}/v1/agents/${id}` });
 
-  const registryContract = process.env.ERC8004_REGISTRY_CONTRACT || '0x7177a6867296406881E20d6647232314736Dd09A';
+  const registryContract = process.env.ERC8004_REGISTRY_CONTRACT || '0x13b52042ef3e0e84d7ad49fdc1b71848b187a89c';
   const network = process.env.PAYOS_ENVIRONMENT === 'production' ? 'base' : 'base-sepolia';
   const explorerBase = network === 'base' ? 'https://basescan.org' : 'https://sepolia.basescan.org';
 

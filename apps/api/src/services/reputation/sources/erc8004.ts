@@ -12,7 +12,7 @@ import { base, baseSepolia } from 'viem/chains';
 import type { ReputationSource, ReputationSourceResult } from '../types.js';
 
 // Testnet (Base Sepolia)
-const TESTNET_IDENTITY_REGISTRY = '0x7177a6867296406881E20d6647232314736Dd09A';
+const TESTNET_IDENTITY_REGISTRY = '0x13b52042ef3e0e84d7ad49fdc1b71848b187a89c';
 const TESTNET_REPUTATION_REGISTRY = '0xB5048e3ef1DA4E04deB6f7d0423D06F63869e322';
 
 // Mainnet (Base)

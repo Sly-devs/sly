@@ -11,7 +11,7 @@ import { getWalletClient, getPublicClient, getChainConfig } from '../../config/b
 import { createClient } from '../../db/client.js';
 
 // Contract addresses (same as in reputation source)
-const TESTNET_IDENTITY_REGISTRY = '0x7177a6867296406881E20d6647232314736Dd09A';
+const TESTNET_IDENTITY_REGISTRY = '0x13b52042ef3e0e84d7ad49fdc1b71848b187a89c';
 const MAINNET_IDENTITY_REGISTRY = '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432';
 
 function isTestnet(): boolean {

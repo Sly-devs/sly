@@ -609,7 +609,7 @@ function OverviewTab({ agent, limits }: { agent: Agent; limits: AgentLimits | nu
               <dd className="flex items-center gap-2">
                 <span className="font-mono text-sm text-gray-900 dark:text-white">#{(agent as any).erc8004AgentId}</span>
                 <a
-                  href={`https://sepolia.basescan.org/nft/0x7177a6867296406881E20d6647232314736Dd09A/${(agent as any).erc8004AgentId}`}
+                  href={`https://sepolia.basescan.org/nft/0x13b52042ef3e0e84d7ad49fdc1b71848b187a89c/${(agent as any).erc8004AgentId}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-indigo-600 dark:text-indigo-400 hover:underline text-xs"

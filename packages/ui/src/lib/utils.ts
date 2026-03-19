@@ -12,6 +12,7 @@ const CRYPTO_SYMBOLS: Record<string, string> = {
   'USDT': '$',
   'DAI': '$',
   'BUSD': '$',
+  'pathUSD': '$',
   // Supertokens (Superfluid wrapped tokens)
   'USDCx': '$',
   'fUSDCx': '$', // Fake USDC on testnet

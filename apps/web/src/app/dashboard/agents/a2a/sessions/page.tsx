@@ -89,6 +89,10 @@ export default function A2ASessionsPage() {
   const activeSessions = sessions.filter((s) => activeStates.includes(s.latestState)).length;
   const totalMessages = sessions.reduce((sum, s) => sum + (s.messageCount || 0), 0);
   const totalCost = sessions.reduce((sum, s) => sum + (s.totalCost || 0), 0);
+  const currencies = sessions.map((s: any) => s.totalCostCurrency).filter(Boolean) as string[];
+  const dominantCurrency = currencies.length > 0
+    ? currencies.sort((a, b) => currencies.filter(c => c === b).length - currencies.filter(c => c === a).length)[0]
+    : 'USDC';
 
   // Client-side search filter
   const filteredSessions = search
@@ -151,7 +155,7 @@ export default function A2ASessionsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">Total Cost</p>
-                <p className="text-2xl font-bold mt-1">{formatCurrency(totalCost, 'USDC')}</p>
+                <p className="text-2xl font-bold mt-1">{formatCurrency(totalCost, dominantCurrency)}</p>
               </div>
               <DollarSign className="h-8 w-8 text-blue-500" />
             </div>
@@ -272,7 +276,7 @@ export default function A2ASessionsPage() {
                       </TableCell>
                       <TableCell>
                         {session.totalCost > 0 ? (
-                          <span className="text-sm font-medium">{formatCurrency(session.totalCost, 'USDC')}</span>
+                          <span className="text-sm font-medium">{formatCurrency(session.totalCost, session.totalCostCurrency || 'USDC')}</span>
                         ) : (
                           <span className="text-muted-foreground">--</span>
                         )}

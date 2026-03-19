@@ -176,7 +176,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ contex
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">Total Cost</p>
-                <p className="text-2xl font-bold mt-1">{formatCurrency(summary?.totalCost || 0, 'USDC')}</p>
+                <p className="text-2xl font-bold mt-1">{formatCurrency(summary?.totalCost || 0, summary?.totalCostCurrency || 'USDC')}</p>
               </div>
               <DollarSign className="h-8 w-8 text-blue-500" />
             </div>

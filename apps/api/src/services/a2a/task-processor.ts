@@ -251,7 +251,20 @@ export class A2ATaskProcessor {
     // --- Routing: Sly-native vs agent forwarding ---
     const msgMetadata = lastUserMsg.metadata;
     const explicitSkillId = msgMetadata?.skillId as string | undefined;
-    const slyFirst = opts?.slyFirst === true;
+
+    // Auto-detect processing_mode from DB so callers don't need to pass the flag
+    let slyFirst = opts?.slyFirst === true;
+    if (!slyFirst) {
+      const { data: agentRow } = await this.supabase
+        .from('agents')
+        .select('processing_mode')
+        .eq('id', agentCtx.agentId)
+        .eq('tenant_id', this.tenantId)
+        .single();
+      if (agentRow?.processing_mode === 'managed') {
+        slyFirst = true;
+      }
+    }
 
     if (slyFirst) {
       // Managed mode: Sly handles payment intents directly, forwards unmatched to webhook
@@ -489,7 +502,7 @@ export class A2ATaskProcessor {
     }
 
     // Create transfer record for the service fee
-    await this.supabase
+    const { data: transferRecord } = await this.supabase
       .from('transfers')
       .insert({
         tenant_id: this.tenantId,
@@ -511,7 +524,26 @@ export class A2ATaskProcessor {
         initiated_by_name: 'Agent',
         completed_at: new Date().toISOString(),
         protocol_metadata: { protocol: 'a2a', serviceFee: true, skillId },
-      });
+      })
+      .select('id')
+      .single();
+
+    // Emit payment audit event for timeline visibility
+    await this.supabase.from('a2a_audit_events').insert({
+      tenant_id: this.tenantId,
+      task_id: taskId,
+      agent_id: agentCtx.agentId,
+      event_type: 'payment',
+      actor_type: 'system',
+      data: {
+        type: 'service_fee_charged',
+        skill_id: skillId,
+        amount: fee,
+        currency,
+        transfer_id: transferRecord?.id,
+        wallet_id: agentCtx.walletId,
+      },
+    });
 
     // Increment usage stats on the skill row (best-effort)
     if (skill) {

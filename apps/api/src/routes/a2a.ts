@@ -1671,14 +1671,41 @@ a2aRouter.get('/stats', async (c) => {
     .filter(Boolean) as string[];
 
   let totalCost = 0;
+  const curCounts = new Map<string, number>();
   if (transferIds.length > 0) {
     const { data: transfers } = await supabase
       .from('transfers')
-      .select('amount')
+      .select('amount, currency')
       .in('id', transferIds)
       .eq('tenant_id', ctx.tenantId);
     totalCost = (transfers || []).reduce((sum: number, t: any) => sum + (Number(t.amount) || 0), 0);
+    for (const t of transfers || []) {
+      if (t.currency) curCounts.set(t.currency, (curCounts.get(t.currency) || 0) + 1);
+    }
   }
+
+  // Also sum costs from payment audit events (for tasks without transfer_id)
+  const tasksWithoutTransfer = rows.filter((r: any) => !r.transfer_id).map((r: any) => r.id);
+  if (tasksWithoutTransfer.length > 0) {
+    const { data: paymentEvents } = await supabase
+      .from('a2a_audit_events')
+      .select('task_id, data')
+      .in('task_id', tasksWithoutTransfer.slice(0, 500))
+      .eq('tenant_id', ctx.tenantId)
+      .eq('event_type', 'payment')
+      .limit(10000);
+    for (const e of paymentEvents || []) {
+      const d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+      if (d?.amount && d?.currency) {
+        totalCost += Number(d.amount) || 0;
+        curCounts.set(d.currency, (curCounts.get(d.currency) || 0) + 1);
+      }
+    }
+  }
+
+  const totalCostCurrency = curCounts.size > 0
+    ? [...curCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    : 'USDC';
 
   return c.json({
     data: {
@@ -1688,6 +1715,7 @@ a2aRouter.get('/stats', async (c) => {
       inbound: rows.filter((r: any) => r.direction === 'inbound').length,
       outbound: rows.filter((r: any) => r.direction === 'outbound').length,
       totalCost,
+      totalCostCurrency,
       transferCount: transferIds.length,
     },
   });
@@ -1741,7 +1769,7 @@ a2aRouter.get('/sessions/:contextId', async (c) => {
       if (transferIds.length === 0) return Promise.resolve({ data: [] });
       return supabase
         .from('transfers')
-        .select('id, amount')
+        .select('id, amount, currency')
         .in('id', transferIds)
         .eq('tenant_id', ctx.tenantId);
     })(),
@@ -1759,10 +1787,12 @@ a2aRouter.get('/sessions/:contextId', async (c) => {
   const transfers = transfersResult.data || [];
   const auditEvents = eventsResult.data || [];
 
-  // Build transfer amount map
+  // Build transfer amount + currency maps
   const transferAmounts = new Map<string, number>();
+  const transferCurrencies = new Map<string, string>();
   for (const t of transfers) {
     transferAmounts.set(t.id, Number(t.amount) || 0);
+    if (t.currency) transferCurrencies.set(t.id, t.currency);
   }
 
   // Resolve caller agent names (client_agent_id is VARCHAR, not FK — batch lookup)
@@ -1823,10 +1853,41 @@ a2aRouter.get('/sessions/:contextId', async (c) => {
     createdAt: e.created_at,
   }));
 
-  // 4. Compute summary
+  // 4. Compute summary (with currency detection)
+  // Extract cost from payment audit events (for tasks where transfer_id is not set on the task row)
+  const auditPaymentsByTask = new Map<string, { amount: number; currency: string }>();
+  for (const e of auditEvents as any[]) {
+    if (e.event_type === 'payment' && e.data) {
+      const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+      if (data.amount && data.currency) {
+        const existing = auditPaymentsByTask.get(e.task_id);
+        auditPaymentsByTask.set(e.task_id, {
+          amount: (existing?.amount || 0) + (Number(data.amount) || 0),
+          currency: data.currency,
+        });
+      }
+    }
+  }
+
   const totalCost = taskRows.reduce((sum: number, r: any) => {
-    return sum + (r.transfer_id ? (transferAmounts.get(r.transfer_id) || 0) : 0);
+    if (r.transfer_id) return sum + (transferAmounts.get(r.transfer_id) || 0);
+    const auditPay = auditPaymentsByTask.get(r.id);
+    return sum + (auditPay?.amount || 0);
   }, 0);
+  // Determine dominant currency from transfers + audit payment events
+  const currencyCounts = new Map<string, number>();
+  for (const r of taskRows as any[]) {
+    if (r.transfer_id) {
+      const cur = transferCurrencies.get(r.transfer_id);
+      if (cur) currencyCounts.set(cur, (currencyCounts.get(cur) || 0) + 1);
+    } else {
+      const auditPay = auditPaymentsByTask.get(r.id);
+      if (auditPay?.currency) currencyCounts.set(auditPay.currency, (currencyCounts.get(auditPay.currency) || 0) + 1);
+    }
+  }
+  const totalCostCurrency = currencyCounts.size > 0
+    ? [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    : 'USDC';
 
   const allTimestamps = [
     ...messages.map((m: any) => m.created_at),
@@ -1858,6 +1919,7 @@ a2aRouter.get('/sessions/:contextId', async (c) => {
       messageCount: messages.length,
       eventCount: auditEvents.length,
       totalCost,
+      totalCostCurrency,
       firstActivity: allTimestamps[0] || null,
       lastActivity: allTimestamps[allTimestamps.length - 1] || null,
     },
@@ -1901,6 +1963,7 @@ a2aRouter.get('/sessions', async (c) => {
     .map((r: any) => r.transfer_id)
     .filter(Boolean) as string[];
   const transferAmounts = new Map<string, number>();
+  const transferCurrencies = new Map<string, string>();
   if (allTransferIds.length > 0) {
     const T_CHUNK = 100;
     const tChunks: string[][] = [];
@@ -1911,7 +1974,7 @@ a2aRouter.get('/sessions', async (c) => {
       tChunks.map(chunk =>
         supabase
           .from('transfers')
-          .select('id, amount')
+          .select('id, amount, currency')
           .in('id', chunk)
           .eq('tenant_id', ctx.tenantId)
       )
@@ -1919,6 +1982,7 @@ a2aRouter.get('/sessions', async (c) => {
     for (const { data: transfers } of tResults) {
       for (const t of transfers || []) {
         transferAmounts.set(t.id, Number(t.amount) || 0);
+        if (t.currency) transferCurrencies.set(t.id, t.currency);
       }
     }
   }
@@ -1951,6 +2015,40 @@ a2aRouter.get('/sessions', async (c) => {
     }
   }
 
+  // Batch fetch payment audit events for tasks without transfer_id
+  const tasksWithoutTransfer = rows.filter((r: any) => !r.transfer_id).map((r: any) => r.id);
+  const auditPaymentsByTask = new Map<string, { amount: number; currency: string }>();
+  if (tasksWithoutTransfer.length > 0) {
+    const A_CHUNK = 100;
+    const aChunks: string[][] = [];
+    for (let i = 0; i < tasksWithoutTransfer.length; i += A_CHUNK) {
+      aChunks.push(tasksWithoutTransfer.slice(i, i + A_CHUNK));
+    }
+    const aResults = await Promise.all(
+      aChunks.map(chunk =>
+        supabase
+          .from('a2a_audit_events')
+          .select('task_id, data')
+          .in('task_id', chunk)
+          .eq('tenant_id', ctx.tenantId)
+          .eq('event_type', 'payment')
+          .limit(10000)
+      )
+    );
+    for (const { data: events } of aResults) {
+      for (const e of events || []) {
+        const d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+        if (d?.amount && d?.currency) {
+          const existing = auditPaymentsByTask.get(e.task_id);
+          auditPaymentsByTask.set(e.task_id, {
+            amount: (existing?.amount || 0) + (Number(d.amount) || 0),
+            currency: d.currency,
+          });
+        }
+      }
+    }
+  }
+
   // Resolve caller agent names (client_agent_id is VARCHAR, not FK)
   const allCallerIds = [...new Set(
     rows.map((r: any) => r.client_agent_id).filter(Boolean)
@@ -1973,7 +2071,26 @@ a2aRouter.get('/sessions', async (c) => {
     const directions = [...new Set(taskRows.map((r: any) => r.direction))];
     const latestTask = taskRows[0]; // already sorted desc
     const transferIds = taskRows.map((r: any) => r.transfer_id).filter(Boolean);
-    const totalCost = transferIds.reduce((sum: number, tid: string) => sum + (transferAmounts.get(tid) || 0), 0);
+    // Sum costs from transfer_id links + fallback to audit payment events
+    const totalCost = taskRows.reduce((sum: number, r: any) => {
+      if (r.transfer_id) return sum + (transferAmounts.get(r.transfer_id) || 0);
+      const auditPay = auditPaymentsByTask.get(r.id);
+      return sum + (auditPay?.amount || 0);
+    }, 0);
+    // Determine dominant currency for this session's transfers + audit payments
+    const sessionCurrencyCounts = new Map<string, number>();
+    for (const r of taskRows as any[]) {
+      if (r.transfer_id) {
+        const cur = transferCurrencies.get(r.transfer_id);
+        if (cur) sessionCurrencyCounts.set(cur, (sessionCurrencyCounts.get(cur) || 0) + 1);
+      } else {
+        const auditPay = auditPaymentsByTask.get(r.id);
+        if (auditPay?.currency) sessionCurrencyCounts.set(auditPay.currency, (sessionCurrencyCounts.get(auditPay.currency) || 0) + 1);
+      }
+    }
+    const totalCostCurrency = sessionCurrencyCounts.size > 0
+      ? [...sessionCurrencyCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+      : 'USDC';
     const msgCount = taskRows.reduce((sum: number, r: any) => sum + (messageCounts.get(r.id) || 0), 0);
 
     // Collect unique agents involved (both callers and callees)
@@ -1995,6 +2112,7 @@ a2aRouter.get('/sessions', async (c) => {
       directions,
       latestState: latestTask.state,
       totalCost,
+      totalCostCurrency,
       transferCount: transferIds.length,
       firstTaskAt: taskRows[taskRows.length - 1].created_at,
       lastTaskAt: latestTask.updated_at,

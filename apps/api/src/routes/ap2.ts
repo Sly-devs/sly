@@ -649,17 +649,39 @@ ap2.post('/mandates/:id/execute', async (c) => {
   // Wallet deduction (settle funds from agent wallet)
   // ============================================
   let walletDeduction: { walletId: string; previousBalance: number; newBalance: number; transferId?: string } | null = null;
+  let settlementTxHash: string | undefined;
+  let settlementNetwork: string | undefined;
 
-  // Find wallet managed by this agent or owned by the mandate's account
-  const { data: wallet } = !skipWalletDeduction ? await supabase
-    .from('wallets')
-    .select('id, balance, currency, owner_account_id, status')
-    .eq('tenant_id', ctx.tenantId)
-    .or(`managed_by_agent_id.eq.${mandate.agent_id},owner_account_id.eq.${mandate.account_id}`)
-    .eq('status', 'active')
-    .order('managed_by_agent_id', { ascending: false, nullsFirst: false })
-    .limit(1)
-    .single() : { data: null };
+  // Find wallet: prefer the mandate agent's wallet, fall back to account-owned wallet
+  let wallet: any = null;
+  if (!skipWalletDeduction) {
+    // First try: wallet managed by the mandate's agent, preferring currency match
+    const mandateCurrency = currency || mandate.currency;
+    const { data: agentWallets } = await supabase
+      .from('wallets')
+      .select('id, balance, currency, owner_account_id, status')
+      .eq('tenant_id', ctx.tenantId)
+      .eq('managed_by_agent_id', mandate.agent_id)
+      .eq('status', 'active');
+
+    if (agentWallets && agentWallets.length > 0) {
+      // Prefer wallet matching mandate currency, fall back to first available
+      wallet = agentWallets.find(w => w.currency === mandateCurrency) || agentWallets[0];
+    } else {
+      // Fallback: wallet owned by the mandate's account, preferring currency match
+      const { data: accountWallets } = await supabase
+        .from('wallets')
+        .select('id, balance, currency, owner_account_id, status')
+        .eq('tenant_id', ctx.tenantId)
+        .eq('owner_account_id', mandate.account_id)
+        .eq('status', 'active')
+        .order('managed_by_agent_id', { ascending: false, nullsFirst: false });
+
+      if (accountWallets && accountWallets.length > 0) {
+        wallet = accountWallets.find(w => w.currency === mandateCurrency) || accountWallets[0];
+      }
+    }
+  }
 
   if (wallet) {
     const currentBalance = Number(wallet.balance);
@@ -738,6 +760,133 @@ ap2.post('/mandates/:id/execute', async (c) => {
           .insert(transferInsert)
           .select('id')
           .single();
+
+        // ============================================
+        // On-chain Tempo settlement (if wallet has private key)
+        // ============================================
+
+        const walletMeta = await supabase
+          .from('wallets')
+          .select('provider_metadata, wallet_address, network')
+          .eq('id', wallet.id)
+          .single();
+
+        const encryptedKey = walletMeta.data?.provider_metadata?.encrypted_private_key;
+        if (encryptedKey && walletMeta.data?.network?.startsWith('tempo')) {
+          try {
+            // Resolve recipient wallet address (counterparty agent)
+            const recipientAgentId = mandate.metadata?.recipientAgentId
+              || mandate.mandate_data?.recipient_agent_id
+              || mandate.metadata?.providerAgentId
+              || mandate.mandate_data?.provider_agent_id;
+
+            // Find recipient agent's wallet address
+            const { data: recipientWallet } = await supabase
+              .from('wallets')
+              .select('wallet_address, network')
+              .eq('managed_by_agent_id', recipientAgentId)
+              .eq('tenant_id', ctx.tenantId)
+              .like('network', 'tempo-%')
+              .eq('status', 'active')
+              .limit(1)
+              .single();
+
+            const recipientAddress = recipientWallet?.wallet_address
+              || mandate.metadata?.recipientAddress
+              || mandate.mandate_data?.recipient_address;
+
+            if (recipientAddress) {
+              const isTestnet = walletMeta.data.network === 'tempo-testnet';
+              const rpcUrl = isTestnet
+                ? 'https://rpc.moderato.tempo.xyz'
+                : 'https://rpc.tempo.xyz';
+              const tokenContract = isTestnet
+                ? '0x20c0000000000000000000000000000000000000'
+                : '0x20C000000000000000000000b9537d11c60E8b50';
+              const chainId = isTestnet ? 42431 : 4217;
+
+              // Use viem directly for ERC20 token transfer
+              const { privateKeyToAccount } = await import('viem/accounts');
+              const { createPublicClient, createWalletClient, http, defineChain } = await import('viem');
+
+              const tempoChain = defineChain({
+                id: chainId,
+                name: isTestnet ? 'Tempo Testnet' : 'Tempo',
+                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+                rpcUrls: { default: { http: [rpcUrl] } },
+              });
+
+              const senderAccount = privateKeyToAccount(encryptedKey as `0x${string}`);
+              const walletClient = createWalletClient({
+                account: senderAccount,
+                chain: tempoChain,
+                transport: http(rpcUrl),
+              });
+              const publicClient = createPublicClient({
+                chain: tempoChain,
+                transport: http(rpcUrl),
+              });
+
+              // Convert amount to token units (6 decimals for pathUSD/USDC)
+              const amountUnits = BigInt(Math.round(execAmount * 1e6));
+
+              const txHash = await walletClient.writeContract({
+                address: tokenContract as `0x${string}`,
+                abi: [{
+                  name: 'transfer',
+                  type: 'function',
+                  inputs: [
+                    { name: 'to', type: 'address' },
+                    { name: 'amount', type: 'uint256' },
+                  ],
+                  outputs: [{ name: 'success', type: 'bool' }],
+                  stateMutability: 'nonpayable',
+                }],
+                functionName: 'transfer',
+                args: [recipientAddress as `0x${string}`, amountUnits],
+              });
+
+              // Wait for confirmation
+              await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+              settlementTxHash = txHash;
+              settlementNetwork = walletMeta.data.network;
+
+              console.log(`[AP2] On-chain settlement: ${txHash} on ${settlementNetwork}`);
+
+              // Update transfer record with tx hash
+              if (transfer?.id) {
+                await supabase
+                  .from('transfers')
+                  .update({
+                    tx_hash: txHash,
+                    settlement_network: settlementNetwork,
+                    protocol_metadata: {
+                      ...transferInsert.protocol_metadata,
+                      settlement: 'on_chain',
+                      settlement_network: settlementNetwork,
+                      settlement_tx_hash: txHash,
+                    },
+                  })
+                  .eq('id', transfer.id);
+              }
+
+              // Update execution record with settlement tx hash
+              await supabase
+                .from('ap2_mandate_executions')
+                .update({
+                  authorization_proof: txHash,
+                  settlement_tx_hash: txHash,
+                  settlement_network: settlementNetwork,
+                })
+                .eq('mandate_id', mandate.id)
+                .eq('execution_index', newExecIndex);
+            }
+          } catch (settlementError: any) {
+            console.warn('[AP2] On-chain settlement failed (ledger deduction still applied):', settlementError.message);
+            // Settlement failure is non-fatal — ledger deduction already succeeded
+          }
+        }
 
         walletDeduction = {
           walletId: wallet.id,
@@ -855,6 +1004,8 @@ ap2.post('/mandates/:id/execute', async (c) => {
     wallet_deduction: walletDeduction,
     funding_source_charge: fundingSourceCharge,
     settlement_rail: mandate.settlement_rail || null,
+    settlement_tx_hash: settlementTxHash || undefined,
+    settlement_network: settlementNetwork || undefined,
   };
 
   // Record successful mandate execution telemetry

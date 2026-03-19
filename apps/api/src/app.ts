@@ -91,6 +91,7 @@ import betaAdminRouter from './routes/beta-admin.js';
 import reputationRouter from './routes/reputation.js';
 import mppRouter from './routes/mpp.js';
 import compositionRouter from './routes/composition.js';
+import mcpRouter from './routes/mcp.js';
 
 const app = new Hono();
 
@@ -242,6 +243,10 @@ app.route('/.well-known/agent.json', wellKnownA2aRouter);
 // A2A public routes (agent card discovery + JSON-RPC endpoint)
 // Epic 57: Google A2A Protocol Integration
 app.route('/a2a', a2aPublicRouter);
+
+// Remote MCP endpoint (Streamable HTTP transport, bearer token auth inside route)
+// Enables external MCP clients (e.g., Intercom Fin) to connect
+app.route('/mcp', mcpRouter);
 
 // UCP Schemas (public - for capability discovery)
 // Story 43.2: UCP Capability Definitions

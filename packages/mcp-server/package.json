@@ -1,16 +1,30 @@
 {
   "name": "@sly/mcp-server",
   "version": "0.1.0",
-  "description": "Model Context Protocol (MCP) server for Sly - enables Claude Desktop integration",
+  "description": "Model Context Protocol (MCP) server for Sly - enables Claude Desktop integration and remote HTTP access",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./tools": {
+      "import": "./dist/tools.js",
+      "types": "./dist/tools.d.ts"
+    },
+    "./server-factory": {
+      "import": "./dist/server-factory.js",
+      "types": "./dist/server-factory.d.ts"
+    }
+  },
   "bin": {
     "sly-mcp-server": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --shims",
-    "dev": "tsup src/index.ts --format esm --dts --watch --shims",
+    "build": "tsup src/index.ts src/tools.ts src/server-factory.ts --format esm --dts --shims",
+    "dev": "tsup src/index.ts src/tools.ts src/server-factory.ts --format esm --dts --watch --shims",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -35,4 +49,3 @@
     "ai"
   ]
 }
-

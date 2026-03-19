@@ -55,12 +55,18 @@ importers:
       '@hono/node-server':
         specifier: ^1.13.7
         version: 1.19.7(hono@4.10.8)
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.25.1
+        version: 1.27.1(zod@3.25.76)
       '@sly/cards':
         specifier: workspace:*
         version: link:../../packages/cards
       '@sly/mcp-server':
         specifier: workspace:*
         version: link:../../packages/mcp-server
+      '@sly/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@sly/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -6134,7 +6140,6 @@ snapshots:
       zod-to-json-schema: 3.25.1(zod@3.25.76)
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   '@modelcontextprotocol/sdk@1.27.1(zod@4.3.6)':
     dependencies:

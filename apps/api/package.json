@@ -32,7 +32,9 @@
   "dependencies": {
     "@hono/node-server": "^1.13.7",
     "@sly/cards": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.25.1",
     "@sly/mcp-server": "workspace:*",
+    "@sly/sdk": "workspace:*",
     "@sly/types": "workspace:*",
     "@sly/utils": "workspace:*",
     "@solana/spl-token": "^0.4.14",

@@ -224,7 +224,7 @@ streams.post('/', async (c) => {
   
   // If agent is creating, check limits
   if (ctx.actorType === 'agent') {
-    const limitService = createLimitService(supabase);
+    const limitService = createLimitService(supabase, getEnv(ctx) as 'test' | 'live');
     const limitCheck = await limitService.checkStreamLimit(ctx.actorId, flowRatePerMonth);
     
     if (!limitCheck.allowed) {
@@ -297,7 +297,7 @@ streams.post('/', async (c) => {
   
   // Update agent stream stats if applicable
   if (ctx.actorType === 'agent') {
-    const limitService = createLimitService(supabase);
+    const limitService = createLimitService(supabase, getEnv(ctx) as 'test' | 'live');
     await limitService.updateAgentStreamStats(ctx.actorId, 1, flowRatePerMonth);
   }
   
@@ -596,7 +596,7 @@ streams.post('/:id/cancel', async (c) => {
   
   // Update agent stream stats if applicable
   if (stream.managed_by_type === 'agent') {
-    const limitService = createLimitService(supabase);
+    const limitService = createLimitService(supabase, getEnv(ctx) as 'test' | 'live');
     await limitService.updateAgentStreamStats(
       stream.managed_by_id,
       -1,

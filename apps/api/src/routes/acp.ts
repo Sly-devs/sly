@@ -926,7 +926,7 @@ app.post('/checkouts/:id/complete', async (c) => {
 
     // Record agent daily usage when payment completed
     if (paymentStatus === 'completed' && checkout.agent_id) {
-      const limitService = createLimitService(supabase);
+      const limitService = createLimitService(supabase, getEnv(ctx) as 'test' | 'live');
       await limitService.recordUsage(checkout.agent_id, parseFloat(checkout.total_amount));
     }
 
@@ -1082,7 +1082,7 @@ app.patch('/checkouts/:id', async (c) => {
 
     // Record agent usage when status changes to completed
     if (updates.status === 'completed' && checkout.agent_id && checkout.total_amount) {
-      const limitService = createLimitService(supabase);
+      const limitService = createLimitService(supabase, getEnv(ctx) as 'test' | 'live');
       await limitService.recordUsage(checkout.agent_id, parseFloat(checkout.total_amount));
     }
 

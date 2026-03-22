@@ -1141,9 +1141,9 @@ agents.get('/:id/limits', async (c) => {
     throw new NotFoundError('Agent', id);
   }
 
-  const limitService = createLimitService(supabase);
+  const limitService = createLimitService(supabase, getEnv(ctx) as 'test' | 'live');
   const stats = await limitService.getUsageStats(id);
-  
+
   return c.json({ data: stats });
 });
 
@@ -1900,7 +1900,7 @@ agents.post('/:id/sign-request', async (c) => {
 
   // Check spending limits if payment info provided
   if (payment && payment.amount) {
-    const limitService = createLimitService(supabase);
+    const limitService = createLimitService(supabase, getEnv(ctx) as 'test' | 'live');
     const limitCheck = await limitService.checkTransactionLimit(id, payment.amount);
 
     if (!limitCheck.allowed) {

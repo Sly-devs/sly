@@ -5,6 +5,7 @@ import { createLimitService } from '../services/limits.js';
 import {
   logAudit,
   isValidUUID,
+  getEnv,
 } from '../utils/helpers.js';
 import { ValidationError, NotFoundError } from '../middleware/error.js';
 import { ErrorCode, ERROR_METADATA } from '@sly/types';
@@ -113,7 +114,7 @@ support.get('/explain-rejection', async (c) => {
       throw new ValidationError('Invalid agent_id format');
     }
     try {
-      const limitService = createLimitService(supabase);
+      const limitService = createLimitService(supabase, getEnv(ctx) as 'test' | 'live');
       usageStats = await limitService.getUsageStats(agentId);
     } catch {
       // Agent not found or stats unavailable — continue without

@@ -5,6 +5,7 @@
 
 import { Hono } from 'hono';
 import { createClient } from '../db/client.js';
+import { getEnv } from '../utils/helpers.js';
 import {
   getProtocolDistribution,
   getProtocolActivity,

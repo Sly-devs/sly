@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Rocket, CheckCircle, ChevronRight, X, Sparkles, PartyPopper } from 'lucide-react';
 import { useApiConfig, useApiFetch, type ApiFetchFn } from '@/lib/api-client';
+import { useEnvironment } from '@/lib/environment-context';
 import { cn } from '@sly/ui';
 import Link from 'next/link';
 
@@ -43,6 +44,7 @@ interface OnboardingStep {
 
 export function OnboardingBanner() {
   const { authToken, isConfigured, apiEnvironment } = useApiConfig();
+  const { environment } = useEnvironment();
   const apiFetch = useApiFetch();
   const [dismissed, setDismissed] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
@@ -194,9 +196,9 @@ export function OnboardingBanner() {
             <div className="flex items-center gap-2 text-sm text-blue-100">
               <Sparkles className="w-4 h-4" />
               <span>
-                {onboardingState.sandbox_mode
+                {environment === 'sandbox'
                   ? 'Sandbox mode active - test without real payments'
-                  : 'Production mode'}
+                  : 'Production mode - transactions use real funds'}
               </span>
             </div>
             <Link

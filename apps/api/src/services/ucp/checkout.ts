@@ -238,7 +238,8 @@ function requiresShipping(metadata: Record<string, unknown>): boolean {
 export async function createCheckout(
   tenantId: string,
   request: CreateCheckoutRequest,
-  supabase?: SupabaseClient
+  supabase?: SupabaseClient,
+  environment: 'test' | 'live' = 'test',
 ): Promise<UCPCheckoutSession> {
   const id = generateCheckoutId();
   const now = new Date();
@@ -353,6 +354,7 @@ export async function createCheckout(
     const { data, error } = await supabase.from('ucp_checkout_sessions').insert({
       id,
       tenant_id: tenantId,
+      environment,
       status: stored.status,
       currency: stored.currency,
       line_items: stored.line_items,
@@ -400,7 +402,8 @@ export async function createCheckout(
 export async function getCheckout(
   tenantId: string,
   checkoutId: string,
-  supabase?: SupabaseClient
+  supabase?: SupabaseClient,
+  environment: 'test' | 'live' = 'test',
 ): Promise<UCPCheckoutSession | null> {
   // If supabase client provided, query database
   if (supabase) {
@@ -409,6 +412,7 @@ export async function getCheckout(
       .select('*')
       .eq('id', checkoutId)
       .eq('tenant_id', tenantId)
+      .eq('environment', environment)
       .single();
 
     if (error || !data) {
@@ -450,11 +454,12 @@ export async function updateCheckout(
   tenantId: string,
   checkoutId: string,
   request: UpdateCheckoutRequest,
-  supabase?: SupabaseClient
+  supabase?: SupabaseClient,
+  environment: 'test' | 'live' = 'test',
 ): Promise<UCPCheckoutSession> {
   // Try Supabase path first
   if (supabase) {
-    const existing = await getCheckout(tenantId, checkoutId, supabase);
+    const existing = await getCheckout(tenantId, checkoutId, supabase, environment);
     if (!existing) {
       throw new Error('Checkout not found');
     }
@@ -655,11 +660,12 @@ export async function updateCheckout(
 export async function completeCheckout(
   tenantId: string,
   checkoutId: string,
-  supabase?: SupabaseClient
+  supabase?: SupabaseClient,
+  environment: 'test' | 'live' = 'test',
 ): Promise<UCPCheckoutSession> {
   // Try Supabase path first
   if (supabase) {
-    const existing = await getCheckout(tenantId, checkoutId, supabase);
+    const existing = await getCheckout(tenantId, checkoutId, supabase, environment);
     if (!existing) {
       throw new Error('Checkout not found');
     }
@@ -775,6 +781,7 @@ export async function completeCheckout(
           .from('ap2_mandate_executions')
           .insert({
             tenant_id: tenantId,
+            environment,
             mandate_id: resolvedMandate.id,
             execution_index: newExecIndex,
             amount: amountInDollars,
@@ -828,6 +835,7 @@ export async function completeCheckout(
                   .from('transfers')
                   .insert({
                     tenant_id: tenantId,
+                    environment,
                     from_account_id: wallet.owner_account_id,
                     to_account_id: wallet.owner_account_id,
                     amount: amountInDollars,
@@ -910,7 +918,7 @@ export async function completeCheckout(
           console.log(`[UCP Checkout] Incremented agent ${agentId} counters: +$${usdAmount} volume, +1 txn`);
 
           // Record daily/monthly usage for limit tracking
-          const limitService = new LimitService(supabase);
+          const limitService = new LimitService(supabase, environment);
           await limitService.recordUsage(agentId, usdAmount);
           console.log(`[UCP Checkout] Recorded agent ${agentId} daily usage: +$${usdAmount}`);
         } catch (agentErr: any) {
@@ -1011,11 +1019,12 @@ export async function completeCheckout(
 export async function cancelCheckout(
   tenantId: string,
   checkoutId: string,
-  supabase?: SupabaseClient
+  supabase?: SupabaseClient,
+  environment: 'test' | 'live' = 'test',
 ): Promise<UCPCheckoutSession> {
   // Try Supabase path first
   if (supabase) {
-    const existing = await getCheckout(tenantId, checkoutId, supabase);
+    const existing = await getCheckout(tenantId, checkoutId, supabase, environment);
     if (!existing) {
       throw new Error('Checkout not found');
     }
@@ -1079,7 +1088,8 @@ export async function listCheckouts(
     limit?: number;
     offset?: number;
   } = {},
-  supabase?: SupabaseClient
+  supabase?: SupabaseClient,
+  environment: 'test' | 'live' = 'test',
 ): Promise<{ data: UCPCheckoutSession[]; total: number }> {
   const { status, agent_id, limit = 20, offset = 0 } = options;
 
@@ -1089,6 +1099,7 @@ export async function listCheckouts(
       .from('ucp_checkout_sessions')
       .select('*', { count: 'exact' })
       .eq('tenant_id', tenantId)
+      .eq('environment', environment)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -1174,11 +1185,12 @@ export async function addPaymentInstrument(
   tenantId: string,
   checkoutId: string,
   instrument: Omit<UCPPaymentInstrument, 'created_at'>,
-  supabase?: SupabaseClient
+  supabase?: SupabaseClient,
+  environment: 'test' | 'live' = 'test',
 ): Promise<UCPCheckoutSession> {
   // Try Supabase path first
   if (supabase) {
-    const existing = await getCheckout(tenantId, checkoutId, supabase);
+    const existing = await getCheckout(tenantId, checkoutId, supabase, environment);
     if (!existing) {
       throw new Error('Checkout not found');
     }
@@ -1278,11 +1290,12 @@ export async function selectPaymentInstrument(
   tenantId: string,
   checkoutId: string,
   instrumentId: string,
-  supabase?: SupabaseClient
+  supabase?: SupabaseClient,
+  environment: 'test' | 'live' = 'test',
 ): Promise<UCPCheckoutSession> {
   // Try Supabase path first
   if (supabase) {
-    const existing = await getCheckout(tenantId, checkoutId, supabase);
+    const existing = await getCheckout(tenantId, checkoutId, supabase, environment);
     if (!existing) {
       throw new Error('Checkout not found');
     }

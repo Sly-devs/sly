@@ -10,18 +10,37 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import type { Sly } from '@sly/sdk';
+import { Sly } from '@sly/sdk';
 import { tools } from './tools.js';
 
 /**
- * Create an MCP Server with all Sly tools registered.
- *
- * @param sly - Authenticated Sly SDK instance
- * @param apiUrl - Base API URL for direct fetch calls (batch operations)
- * @param apiKey - API key for direct fetch Authorization headers
- * @returns Configured MCP Server (not yet connected to a transport)
+ * Mutable runtime context for the MCP server.
+ * Allows switching environments (sandbox ↔ production) without restart.
  */
-export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Server {
+export interface McpContext {
+  sly: Sly;
+  apiUrl: string;
+  apiKey: string;
+  environment: string;
+  keys: Record<string, string>;
+}
+
+/**
+ * Create an MCP Server with all Sly tools registered.
+ */
+export function createMcpServer(
+  sly: Sly,
+  apiUrl: string,
+  apiKey: string,
+  keys?: Record<string, string>,
+): Server {
+  const ctx: McpContext = {
+    sly,
+    apiUrl,
+    apiKey,
+    environment: apiKey.startsWith('pk_live_') ? 'production' : 'sandbox',
+    keys: keys || {},
+  };
   const server = new Server(
     {
       name: '@sly/mcp-server',
@@ -52,7 +71,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
     try {
     switch (name) {
       case 'get_settlement_quote': {
-        const quote = await sly.getSettlementQuote(args as any);
+        const quote = await ctx.sly.getSettlementQuote(args as any);
         return {
           content: [
             {
@@ -64,7 +83,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
       }
 
       case 'create_settlement': {
-        const settlement = await sly.createSettlement(args as any);
+        const settlement = await ctx.sly.createSettlement(args as any);
         return {
           content: [
             {
@@ -77,7 +96,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'get_settlement_status': {
         const { settlementId } = args as { settlementId: string };
-        const settlement = await sly.getSettlement(settlementId);
+        const settlement = await ctx.sly.getSettlement(settlementId);
         return {
           content: [
             {
@@ -94,7 +113,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'ucp_discover': {
         const { merchantUrl } = args as { merchantUrl: string };
-        const profile = await sly.ucp.discover(merchantUrl);
+        const profile = await ctx.sly.ucp.discover(merchantUrl);
         return {
           content: [
             {
@@ -124,7 +143,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (payment_instruments) body.payment_instruments = payment_instruments;
         if (checkout_type) body.checkout_type = checkout_type;
         if (agent_id) body.agent_id = agent_id;
-        const result = await sly.request('/v1/ucp/checkouts', {
+        const result = await ctx.sly.request('/v1/ucp/checkouts', {
           method: 'POST',
           body: JSON.stringify(body),
         });
@@ -140,7 +159,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'ucp_get_checkout': {
         const { checkoutId } = args as { checkoutId: string };
-        const result = await sly.request(`/v1/ucp/checkouts/${checkoutId}`);
+        const result = await ctx.sly.request(`/v1/ucp/checkouts/${checkoutId}`);
         return {
           content: [
             {
@@ -158,7 +177,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (args && (args as any).page) params.set('page', String((args as any).page));
         if (args && (args as any).limit) params.set('limit', String((args as any).limit));
         const query = params.toString();
-        const result = await sly.request(`/v1/ucp/checkouts${query ? `?${query}` : ''}`);
+        const result = await ctx.sly.request(`/v1/ucp/checkouts${query ? `?${query}` : ''}`);
         return {
           content: [
             {
@@ -178,7 +197,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           billing_address?: any;
           metadata?: any;
         };
-        const result = await sly.request(`/v1/ucp/checkouts/${checkoutId}`, {
+        const result = await ctx.sly.request(`/v1/ucp/checkouts/${checkoutId}`, {
           method: 'PUT',
           body: JSON.stringify(updates),
         });
@@ -194,7 +213,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'ucp_complete_checkout': {
         const { checkoutId } = args as { checkoutId: string };
-        const result = await sly.request(`/v1/ucp/checkouts/${checkoutId}/complete`, {
+        const result = await ctx.sly.request(`/v1/ucp/checkouts/${checkoutId}/complete`, {
           method: 'POST',
         });
         return {
@@ -209,7 +228,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'ucp_cancel_checkout': {
         const { checkoutId } = args as { checkoutId: string };
-        const result = await sly.request(`/v1/ucp/checkouts/${checkoutId}/cancel`, {
+        const result = await ctx.sly.request(`/v1/ucp/checkouts/${checkoutId}/cancel`, {
           method: 'POST',
         });
         return {
@@ -232,7 +251,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           brand?: string;
           metadata?: Record<string, any>;
         };
-        const result = await sly.request(`/v1/ucp/checkouts/${checkoutId}/instruments`, {
+        const result = await ctx.sly.request(`/v1/ucp/checkouts/${checkoutId}/instruments`, {
           method: 'POST',
           body: JSON.stringify({ id: instrumentId, handler, type: instrumentType, last4, brand, metadata }),
         });
@@ -261,11 +280,12 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         };
 
         // Single API call to batch create + auto-complete
-        const batchRes = await fetch(`${apiUrl}/v1/ucp/checkouts/batch`, {
+        const batchRes = await fetch(`${ctx.apiUrl}/v1/ucp/checkouts/batch`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${apiKey}`,
+            'Authorization': `Bearer ${ctx.apiKey}`,
             'Content-Type': 'application/json',
+            'X-Environment': ctx.apiKey.startsWith('pk_live_') ? 'live' : 'test',
           },
           body: JSON.stringify({
             checkouts,
@@ -291,11 +311,12 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           default_payment_instrument: { id: string; handler: string; type: string };
         };
 
-        const batchRes = await fetch(`${apiUrl}/v1/ucp/checkouts/batch-complete`, {
+        const batchRes = await fetch(`${ctx.apiUrl}/v1/ucp/checkouts/batch-complete`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${apiKey}`,
+            'Authorization': `Bearer ${ctx.apiKey}`,
             'Content-Type': 'application/json',
+            'X-Environment': ctx.apiKey.startsWith('pk_live_') ? 'live' : 'test',
           },
           body: JSON.stringify({ checkout_ids, default_payment_instrument }),
         });
@@ -319,7 +340,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (args && (args as any).page) params.set('page', String((args as any).page));
         if (args && (args as any).limit) params.set('limit', String((args as any).limit));
         const query = params.toString();
-        const result = await sly.request(`/v1/ucp/orders${query ? `?${query}` : ''}`);
+        const result = await ctx.sly.request(`/v1/ucp/orders${query ? `?${query}` : ''}`);
         return {
           content: [
             {
@@ -332,7 +353,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'ucp_get_order': {
         const { orderId } = args as { orderId: string };
-        const result = await sly.request(`/v1/ucp/orders/${orderId}`);
+        const result = await ctx.sly.request(`/v1/ucp/orders/${orderId}`);
         return {
           content: [
             {
@@ -345,7 +366,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'ucp_update_order_status': {
         const { orderId, status } = args as { orderId: string; status: string };
-        const result = await sly.request(`/v1/ucp/orders/${orderId}/status`, {
+        const result = await ctx.sly.request(`/v1/ucp/orders/${orderId}/status`, {
           method: 'PUT',
           body: JSON.stringify({ status }),
         });
@@ -361,7 +382,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'ucp_cancel_order': {
         const { orderId, reason } = args as { orderId: string; reason?: string };
-        const result = await sly.request(`/v1/ucp/orders/${orderId}/cancel`, {
+        const result = await ctx.sly.request(`/v1/ucp/orders/${orderId}/cancel`, {
           method: 'POST',
           body: JSON.stringify({ reason }),
         });
@@ -383,7 +404,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           tracking_number?: string;
           carrier?: string;
         };
-        const result = await sly.request(`/v1/ucp/orders/${orderId}/events`, {
+        const result = await ctx.sly.request(`/v1/ucp/orders/${orderId}/events`, {
           method: 'POST',
           body: JSON.stringify({ type: eventType, description, tracking_number, carrier }),
         });
@@ -408,7 +429,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (args && (args as any).search) params.set('search', (args as any).search);
         if (args && (args as any).limit) params.set('limit', String((args as any).limit));
         const query = params.toString();
-        const result = await sly.request(`/v1/ucp/merchants${query ? `?${query}` : ''}`);
+        const result = await ctx.sly.request(`/v1/ucp/merchants${query ? `?${query}` : ''}`);
         return {
           content: [
             {
@@ -421,7 +442,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'get_merchant': {
         const { merchantId } = args as { merchantId: string };
-        const result = await sly.request(`/v1/ucp/merchants/${merchantId}`);
+        const result = await ctx.sly.request(`/v1/ucp/merchants/${merchantId}`);
         return {
           content: [
             {
@@ -441,7 +462,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (args && (args as any).type) params.set('type', (args as any).type);
         if (args && (args as any).status) params.set('status', (args as any).status);
         const query = params.toString();
-        const result = await sly.request(`/v1/accounts${query ? `?${query}` : ''}`);
+        const result = await ctx.sly.request(`/v1/accounts${query ? `?${query}` : ''}`);
         return {
           content: [
             {
@@ -462,7 +483,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         const body: any = { type, name: accountName };
         if (email) body.email = email;
         if (metadata) body.metadata = metadata;
-        const result = await sly.request('/v1/accounts', {
+        const result = await ctx.sly.request('/v1/accounts', {
           method: 'POST',
           body: JSON.stringify(body),
         });
@@ -492,7 +513,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (accountName !== undefined) body.name = accountName;
         if (email !== undefined) body.email = email;
         if (metadata !== undefined) body.metadata = metadata;
-        const result = await sly.request(`/v1/accounts/${accountId}`, {
+        const result = await ctx.sly.request(`/v1/accounts/${accountId}`, {
           method: 'PATCH',
           body: JSON.stringify(body),
         });
@@ -507,7 +528,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
       }
 
       case 'get_tenant_info': {
-        const result = await sly.request('/v1/context/whoami');
+        const result = await ctx.sly.request('/v1/context/whoami');
         return {
           content: [
             {
@@ -524,7 +545,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           name: string;
           description?: string;
         };
-        const result = await sly.request('/v1/agents', {
+        const result = await ctx.sly.request('/v1/agents', {
           method: 'POST',
           body: JSON.stringify({
             accountId,
@@ -544,7 +565,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'verify_agent': {
         const { agentId, tier } = args as { agentId: string; tier: number };
-        const result = await sly.request(`/v1/agents/${agentId}/verify`, {
+        const result = await ctx.sly.request(`/v1/agents/${agentId}/verify`, {
           method: 'POST',
           body: JSON.stringify({ tier }),
         });
@@ -560,7 +581,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'get_agent': {
         const { agentId } = args as { agentId: string };
-        const result = await sly.request(`/v1/agents/${agentId}`);
+        const result = await ctx.sly.request(`/v1/agents/${agentId}`);
         return {
           content: [
             {
@@ -573,7 +594,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'get_agent_limits': {
         const { agentId } = args as { agentId: string };
-        const result = await sly.request(`/v1/agents/${agentId}/limits`);
+        const result = await ctx.sly.request(`/v1/agents/${agentId}/limits`);
         return {
           content: [
             {
@@ -598,7 +619,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (from) params.set('from', from);
         if (to) params.set('to', to);
         const query = params.toString();
-        const result = await sly.request(`/v1/agents/${agentId}/transactions${query ? `?${query}` : ''}`);
+        const result = await ctx.sly.request(`/v1/agents/${agentId}/transactions${query ? `?${query}` : ''}`);
         return {
           content: [
             {
@@ -611,7 +632,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'delete_agent': {
         const { agentId } = args as { agentId: string };
-        const result = await sly.request(`/v1/agents/${agentId}`, {
+        const result = await ctx.sly.request(`/v1/agents/${agentId}`, {
           method: 'DELETE',
         });
         return {
@@ -630,7 +651,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'ap2_cancel_mandate': {
         const { mandateId } = args as { mandateId: string };
-        const result = await sly.request(`/v1/ap2/mandates/${mandateId}/cancel`, {
+        const result = await ctx.sly.request(`/v1/ap2/mandates/${mandateId}/cancel`, {
           method: 'PATCH',
           body: JSON.stringify({}),
         });
@@ -668,7 +689,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           metadata?: object;
           mandate_data?: object;
         };
-        const result = await sly.ap2.createMandate({
+        const result = await ctx.sly.ap2.createMandate({
           mandate_id,
           agent_id,
           account_id,
@@ -691,7 +712,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'ap2_get_mandate': {
         const { mandateId } = args as { mandateId: string };
-        const result = await sly.ap2.getMandate(mandateId);
+        const result = await ctx.sly.ap2.getMandate(mandateId);
         return {
           content: [
             {
@@ -710,7 +731,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           description?: string;
           order_ids?: string[];
         };
-        const result = await sly.ap2.executeMandate(mandateId, {
+        const result = await ctx.sly.ap2.executeMandate(mandateId, {
           amount,
           currency,
           description,
@@ -733,7 +754,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           account_id?: string;
           limit?: number;
         };
-        const result = await sly.ap2.listMandates({
+        const result = await ctx.sly.ap2.listMandates({
           status,
           agent_id,
           account_id,
@@ -759,7 +780,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           mandate_data?: object;
           description?: string;
         };
-        const result = await sly.request(`/v1/ap2/mandates/${mandateId}`, {
+        const result = await ctx.sly.request(`/v1/ap2/mandates/${mandateId}`, {
           method: 'PATCH',
           body: JSON.stringify(updateFields),
         });
@@ -805,7 +826,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           payment_method?: string;
           checkout_data?: Record<string, any>;
         };
-        const result = await sly.acp.createCheckout({
+        const result = await ctx.sly.acp.createCheckout({
           checkout_id,
           agent_id,
           account_id: account_id || '',
@@ -828,7 +849,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'acp_get_checkout': {
         const { checkoutId } = args as { checkoutId: string };
-        const result = await sly.acp.getCheckout(checkoutId);
+        const result = await ctx.sly.acp.getCheckout(checkoutId);
         return {
           content: [
             {
@@ -846,7 +867,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           payment_method?: string;
         };
         const token = shared_payment_token || `spt_test_${Date.now()}`;
-        const result = await sly.acp.completeCheckout(checkoutId, {
+        const result = await ctx.sly.acp.completeCheckout(checkoutId, {
           shared_payment_token: token,
           payment_method,
         });
@@ -867,7 +888,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           merchant_id?: string;
           limit?: number;
         };
-        const result = await sly.acp.listCheckouts({
+        const result = await ctx.sly.acp.listCheckouts({
           status: status as any,
           agent_id,
           merchant_id,
@@ -899,11 +920,12 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           }>;
         };
 
-        const batchRes = await fetch(`${apiUrl}/v1/acp/checkouts/batch`, {
+        const batchRes = await fetch(`${ctx.apiUrl}/v1/acp/checkouts/batch`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${apiKey}`,
+            'Authorization': `Bearer ${ctx.apiKey}`,
             'Content-Type': 'application/json',
+            'X-Environment': ctx.apiKey.startsWith('pk_live_') ? 'live' : 'test',
           },
           body: JSON.stringify({ checkouts }),
         });
@@ -932,7 +954,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (args && (args as any).page) params.set('page', String((args as any).page));
         if (args && (args as any).limit) params.set('limit', String((args as any).limit));
         const query = params.toString();
-        const result = await sly.request(`/v1/wallets${query ? `?${query}` : ''}`);
+        const result = await ctx.sly.request(`/v1/wallets${query ? `?${query}` : ''}`);
         return {
           content: [
             {
@@ -963,7 +985,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           managedByAgentId?: string;
           purpose?: string;
         };
-        const result = await sly.request('/v1/wallets', {
+        const result = await ctx.sly.request('/v1/wallets', {
           method: 'POST',
           body: JSON.stringify({
             accountId,
@@ -988,7 +1010,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'get_wallet': {
         const { walletId } = args as { walletId: string };
-        const result = await sly.request(`/v1/wallets/${walletId}`);
+        const result = await ctx.sly.request(`/v1/wallets/${walletId}`);
         return {
           content: [
             {
@@ -1001,7 +1023,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'get_wallet_balance': {
         const { walletId } = args as { walletId: string };
-        const result = await sly.request(`/v1/wallets/${walletId}/balance`);
+        const result = await ctx.sly.request(`/v1/wallets/${walletId}/balance`);
         return {
           content: [
             {
@@ -1019,7 +1041,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           fromAccountId: string;
           reference?: string;
         };
-        const result = await sly.request(`/v1/wallets/${walletId}/deposit`, {
+        const result = await ctx.sly.request(`/v1/wallets/${walletId}/deposit`, {
           method: 'POST',
           body: JSON.stringify({ amount, fromAccountId, reference }),
         });
@@ -1040,7 +1062,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           destinationAccountId: string;
           reference?: string;
         };
-        const result = await sly.request(`/v1/wallets/${walletId}/withdraw`, {
+        const result = await ctx.sly.request(`/v1/wallets/${walletId}/withdraw`, {
           method: 'POST',
           body: JSON.stringify({ amount, destinationAccountId, reference }),
         });
@@ -1061,7 +1083,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           currency?: string;
           reference?: string;
         };
-        const result = await sly.request(`/v1/wallets/${walletId}/test-fund`, {
+        const result = await ctx.sly.request(`/v1/wallets/${walletId}/test-fund`, {
           method: 'POST',
           body: JSON.stringify({ amount, currency, reference }),
         });
@@ -1090,7 +1112,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
             counterparty_agent_id?: string;
             counterparty_address?: string;
           };
-        const result = await sly.request(`/v1/agents/${agentId}/wallet/policy/evaluate`, {
+        const result = await ctx.sly.request(`/v1/agents/${agentId}/wallet/policy/evaluate`, {
           method: 'POST',
           body: JSON.stringify({
             amount,
@@ -1108,7 +1130,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'agent_wallet_get_exposures': {
         const { agentId } = args as { agentId: string };
-        const result = await sly.request(`/v1/agents/${agentId}/wallet/exposures`);
+        const result = await ctx.sly.request(`/v1/agents/${agentId}/wallet/exposures`);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -1120,7 +1142,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (page) params.set('page', String(page));
         if (limit) params.set('limit', String(limit));
         const qs = params.toString();
-        const result = await sly.request(`/v1/agents/${agentId}/wallet/policy/evaluations${qs ? `?${qs}` : ''}`);
+        const result = await ctx.sly.request(`/v1/agents/${agentId}/wallet/policy/evaluations${qs ? `?${qs}` : ''}`);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -1128,7 +1150,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'agent_wallet_get': {
         const { agentId } = args as { agentId: string };
-        const result = await sly.request(`/v1/agents/${agentId}/wallet`);
+        const result = await ctx.sly.request(`/v1/agents/${agentId}/wallet`);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -1136,7 +1158,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'agent_wallet_freeze': {
         const { agentId } = args as { agentId: string };
-        const result = await sly.request(`/v1/agents/${agentId}/wallet/freeze`, {
+        const result = await ctx.sly.request(`/v1/agents/${agentId}/wallet/freeze`, {
           method: 'POST',
         });
         return {
@@ -1146,7 +1168,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'agent_wallet_unfreeze': {
         const { agentId } = args as { agentId: string };
-        const result = await sly.request(`/v1/agents/${agentId}/wallet/unfreeze`, {
+        const result = await ctx.sly.request(`/v1/agents/${agentId}/wallet/unfreeze`, {
           method: 'POST',
         });
         return {
@@ -1163,7 +1185,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           approvedVendors?: string[];
           contractPolicy?: Record<string, unknown>;
         };
-        const result = await sly.request(`/v1/agents/${agentId}/wallet/policy`, {
+        const result = await ctx.sly.request(`/v1/agents/${agentId}/wallet/policy`, {
           method: 'PUT',
           body: JSON.stringify(policyFields),
         });
@@ -1198,7 +1220,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           volumeDiscounts?: Array<{ minCalls: number; discountPercent: number }>;
           webhookUrl?: string;
         };
-        const result = await sly.request('/v1/x402/endpoints', {
+        const result = await ctx.sly.request('/v1/x402/endpoints', {
           method: 'POST',
           body: JSON.stringify({
             name: endpointName,
@@ -1229,7 +1251,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (args && (args as any).page) params.set('page', String((args as any).page));
         if (args && (args as any).limit) params.set('limit', String((args as any).limit));
         const query = params.toString();
-        const result = await sly.request(`/v1/x402/endpoints${query ? `?${query}` : ''}`);
+        const result = await ctx.sly.request(`/v1/x402/endpoints${query ? `?${query}` : ''}`);
         return {
           content: [
             {
@@ -1242,7 +1264,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'x402_get_endpoint': {
         const { endpointId } = args as { endpointId: string };
-        const result = await sly.request(`/v1/x402/endpoints/${endpointId}`);
+        const result = await ctx.sly.request(`/v1/x402/endpoints/${endpointId}`);
         return {
           content: [
             {
@@ -1263,7 +1285,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           path: string;
         };
         const requestId = crypto.randomUUID();
-        const result = await sly.request('/v1/x402/pay', {
+        const result = await ctx.sly.request('/v1/x402/pay', {
           method: 'POST',
           body: JSON.stringify({
             endpointId,
@@ -1292,7 +1314,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           requestId?: string;
           transferId?: string;
         };
-        const result = await sly.request('/v1/x402/verify', {
+        const result = await ctx.sly.request('/v1/x402/verify', {
           method: 'POST',
           body: JSON.stringify({ jwt, requestId, transferId }),
         });
@@ -1311,7 +1333,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
       // ====================================================================
       case 'a2a_discover_agent': {
         const { url } = args as { url: string };
-        const result = await sly.request('/v1/a2a/discover', {
+        const result = await ctx.sly.request('/v1/a2a/discover', {
           method: 'POST',
           body: JSON.stringify({ url }),
         });
@@ -1332,7 +1354,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           message: string;
           context_id?: string;
         };
-        const result = await sly.request('/v1/a2a/tasks', {
+        const result = await ctx.sly.request('/v1/a2a/tasks', {
           method: 'POST',
           body: JSON.stringify({
             agent_id,
@@ -1355,7 +1377,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'a2a_get_task': {
         const { task_id } = args as { task_id: string };
-        const result = await sly.request(`/v1/a2a/tasks/${task_id}`, {
+        const result = await ctx.sly.request(`/v1/a2a/tasks/${task_id}`, {
           method: 'GET',
         });
         return {
@@ -1383,7 +1405,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (limit) params.set('limit', String(limit));
         if (page) params.set('page', String(page));
         const query = params.toString();
-        const result = await sly.request(`/v1/a2a/tasks${query ? `?${query}` : ''}`, {
+        const result = await ctx.sly.request(`/v1/a2a/tasks${query ? `?${query}` : ''}`, {
           method: 'GET',
         });
         return {
@@ -1409,7 +1431,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           agent_id: string;
           wallet_id?: string;
         };
-        const result = await sly.request('/v1/mpp/pay', {
+        const result = await ctx.sly.request('/v1/mpp/pay', {
           method: 'POST',
           body: JSON.stringify({ service_url, amount, currency, intent, agent_id, wallet_id }),
         });
@@ -1427,7 +1449,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           wallet_id: string;
           currency?: string;
         };
-        const result = await sly.request('/v1/mpp/sessions', {
+        const result = await ctx.sly.request('/v1/mpp/sessions', {
           method: 'POST',
           body: JSON.stringify({ service_url, deposit_amount, max_budget, agent_id, wallet_id, currency }),
         });
@@ -1438,7 +1460,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'mpp_get_session': {
         const { session_id } = args as { session_id: string };
-        const result = await sly.request(`/v1/mpp/sessions/${session_id}`);
+        const result = await ctx.sly.request(`/v1/mpp/sessions/${session_id}`);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -1457,7 +1479,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (limit) params.set('limit', String(limit));
         if (offset) params.set('offset', String(offset));
         const query = params.toString();
-        const result = await sly.request(`/v1/mpp/sessions${query ? `?${query}` : ''}`);
+        const result = await ctx.sly.request(`/v1/mpp/sessions${query ? `?${query}` : ''}`);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -1465,7 +1487,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'mpp_close_session': {
         const { session_id } = args as { session_id: string };
-        const result = await sly.request(`/v1/mpp/sessions/${session_id}/close`, {
+        const result = await ctx.sly.request(`/v1/mpp/sessions/${session_id}/close`, {
           method: 'POST',
         });
         return {
@@ -1486,7 +1508,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (limit) params.set('limit', String(limit));
         if (offset) params.set('offset', String(offset));
         const query = params.toString();
-        const result = await sly.request(`/v1/mpp/transfers${query ? `?${query}` : ''}`);
+        const result = await ctx.sly.request(`/v1/mpp/transfers${query ? `?${query}` : ''}`);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -1494,7 +1516,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
 
       case 'mpp_verify_receipt': {
         const { receipt_id } = args as { receipt_id: string };
-        const result = await sly.request('/v1/mpp/receipts/verify', {
+        const result = await ctx.sly.request('/v1/mpp/receipts/verify', {
           method: 'POST',
           body: JSON.stringify({ receipt_id }),
         });
@@ -1517,7 +1539,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         if (transaction_id) params.set('transaction_id', transaction_id);
         if (agent_id) params.set('agent_id', agent_id);
         const query = params.toString();
-        const result = await sly.request(`/v1/support/explain-rejection${query ? `?${query}` : ''}`, {
+        const result = await ctx.sly.request(`/v1/support/explain-rejection${query ? `?${query}` : ''}`, {
           method: 'GET',
         });
         return {
@@ -1535,7 +1557,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         };
         const body: Record<string, any> = { agent_id, limit_type, requested_amount, reason };
         if (duration) body.duration = duration;
-        const result = await sly.request('/v1/support/limit-requests', {
+        const result = await ctx.sly.request('/v1/support/limit-requests', {
           method: 'POST',
           body: JSON.stringify(body),
         });
@@ -1557,7 +1579,7 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
           description,
         };
         if (requested_resolution) body.requestedResolution = requested_resolution;
-        const result = await sly.request('/v1/disputes', {
+        const result = await ctx.sly.request('/v1/disputes', {
           method: 'POST',
           body: JSON.stringify(body),
         });
@@ -1576,13 +1598,43 @@ export function createMcpServer(sly: Sly, apiUrl: string, apiKey: string): Serve
         const body: Record<string, any> = { reason, summary };
         if (agent_id) body.agent_id = agent_id;
         if (priority) body.priority = priority;
-        const result = await sly.request('/v1/support/escalations', {
+        const result = await ctx.sly.request('/v1/support/escalations', {
           method: 'POST',
           body: JSON.stringify(body),
         });
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
+      }
+
+      // ======================================================================
+      // Environment Management Tools
+      // ======================================================================
+
+      case 'get_environment': {
+        const masked = ctx.apiKey.slice(0, 12) + '***';
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ environment: ctx.environment, apiKeyPrefix: masked, availableEnvironments: Object.keys(ctx.keys) }, null, 2),
+          }],
+        };
+      }
+
+      case 'switch_environment': {
+        const { environment: targetEnv } = args as { environment: 'sandbox' | 'production' };
+        if (targetEnv === ctx.environment) {
+          return { content: [{ type: 'text', text: JSON.stringify({ message: `Already in ${targetEnv} environment`, environment: ctx.environment, apiKeyPrefix: ctx.apiKey.slice(0, 12) + '***' }, null, 2) }] };
+        }
+        const targetKey = ctx.keys[targetEnv];
+        if (!targetKey) {
+          const hint = targetEnv === 'production' ? 'Set SLY_API_KEY_LIVE in your MCP server config (.mcp.json)' : 'Set SLY_API_KEY in your MCP server config (.mcp.json)';
+          return { content: [{ type: 'text', text: `Error: No API key configured for "${targetEnv}" environment. ${hint}` }], isError: true };
+        }
+        ctx.sly = new Sly({ apiKey: targetKey, apiUrl: ctx.apiUrl });
+        ctx.apiKey = targetKey;
+        ctx.environment = targetEnv;
+        return { content: [{ type: 'text', text: JSON.stringify({ message: `Switched to ${targetEnv} environment`, environment: ctx.environment, apiKeyPrefix: ctx.apiKey.slice(0, 12) + '***' }, null, 2) }] };
       }
 
       default:

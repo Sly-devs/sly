@@ -25,7 +25,7 @@ import { createCounterpartyExposureService } from '../services/counterparty-expo
 import { negotiationEvaluateRequestSchema, contractPolicySchema } from '../schemas/contract-policy.schema.js';
 import { invalidatePolicyCache } from '../services/spending-policy.js';
 import { ValidationError, NotFoundError } from '../middleware/error.js';
-import { isValidUUID, getPaginationParams, paginationResponse } from '../utils/helpers.js';
+import { isValidUUID, getPaginationParams, paginationResponse, getEnv } from '../utils/helpers.js';
 
 function mapWalletFromDb(row: any) {
   return {
@@ -53,12 +53,16 @@ const agentWallets = new Hono();
 // Helper: find agent's managed wallet
 // ============================================
 
-async function getAgentWallet(supabase: any, agentId: string, tenantId: string, requireActive = false) {
+async function getAgentWallet(supabase: any, agentId: string, tenantId: string, environment?: string, requireActive = false) {
   let query = supabase
     .from('wallets')
     .select('*')
     .eq('managed_by_agent_id', agentId)
     .eq('tenant_id', tenantId);
+
+  if (environment) {
+    query = query.eq('environment', environment);
+  }
 
   if (requireActive) {
     query = query.eq('status', 'active');
@@ -83,7 +87,7 @@ agentWallets.get('/:agentId/wallet', async (c) => {
   }
 
   const supabase = createClient();
-  const wallet = await getAgentWallet(supabase, agentId, ctx.tenantId);
+  const wallet = await getAgentWallet(supabase, agentId, ctx.tenantId, getEnv(ctx));
 
   if (!wallet) {
     throw new NotFoundError('Agent does not have a wallet');
@@ -106,7 +110,7 @@ agentWallets.post('/:agentId/wallet/freeze', async (c) => {
   }
 
   const supabase = createClient();
-  const wallet = await getAgentWallet(supabase, agentId, ctx.tenantId);
+  const wallet = await getAgentWallet(supabase, agentId, ctx.tenantId, getEnv(ctx));
 
   if (!wallet) {
     throw new NotFoundError('Agent does not have a wallet');
@@ -142,7 +146,7 @@ agentWallets.post('/:agentId/wallet/unfreeze', async (c) => {
   }
 
   const supabase = createClient();
-  const wallet = await getAgentWallet(supabase, agentId, ctx.tenantId);
+  const wallet = await getAgentWallet(supabase, agentId, ctx.tenantId, getEnv(ctx));
 
   if (!wallet) {
     throw new NotFoundError('Agent does not have a wallet');
@@ -194,7 +198,7 @@ agentWallets.put('/:agentId/wallet/policy', async (c) => {
   }
 
   const supabase = createClient();
-  const wallet = await getAgentWallet(supabase, agentId, ctx.tenantId);
+  const wallet = await getAgentWallet(supabase, agentId, ctx.tenantId, getEnv(ctx));
 
   if (!wallet) {
     throw new NotFoundError('Agent does not have a wallet');
@@ -260,6 +264,7 @@ agentWallets.post('/:agentId/wallet/policy/evaluate', async (c) => {
     .select('id')
     .eq('managed_by_agent_id', agentId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('status', 'active')
     .maybeSingle();
 
@@ -314,6 +319,7 @@ agentWallets.get('/:agentId/wallet/exposures', async (c) => {
     .select('id')
     .eq('managed_by_agent_id', agentId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('status', 'active')
     .maybeSingle();
 
@@ -364,6 +370,7 @@ agentWallets.get('/:agentId/wallet/policy/evaluations', async (c) => {
     .select('id')
     .eq('managed_by_agent_id', agentId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .maybeSingle();
 
   if (!wallet) {

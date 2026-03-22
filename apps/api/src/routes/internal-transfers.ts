@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createClient } from '../db/client.js';
-import { 
+import {
   mapTransferFromDb,
   logAudit,
+  getEnv,
 } from '../utils/helpers.js';
 import { createBalanceService } from '../services/balances.js';
 import { ValidationError, NotFoundError, InsufficientBalanceError } from '../middleware/error.js';
@@ -40,6 +41,7 @@ internalTransfers.post('/', async (c) => {
       .from('transfers')
       .select('*')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('idempotency_key', idempotencyKey)
       .single();
     
@@ -78,11 +80,15 @@ internalTransfers.post('/', async (c) => {
       .from('accounts')
       .select('id, name, balance_available, tenant_id')
       .eq('id', fromAccountId)
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single(),
     supabase
       .from('accounts')
       .select('id, name, tenant_id')
       .eq('id', toAccountId)
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single(),
   ]);
   
@@ -112,6 +118,7 @@ internalTransfers.post('/', async (c) => {
     .from('transfers')
     .insert({
       tenant_id: ctx.tenantId,
+      environment: getEnv(ctx),
       type: 'internal',
       status: 'completed',
       from_account_id: fromAccountId,

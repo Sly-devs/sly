@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createClient } from '../db/client.js';
-import { 
+import {
   logAudit,
   isValidUUID,
   getPaginationParams,
   paginationResponse,
+  getEnv,
 } from '../utils/helpers.js';
 import { createBalanceService } from '../services/balances.js';
 import { 
@@ -46,6 +47,7 @@ refunds.get('/', async (c) => {
     .from('refunds')
     .select('*', { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
   
@@ -87,6 +89,7 @@ refunds.post('/', async (c) => {
       .from('refunds')
       .select('*')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('idempotency_key', idempotencyKey)
       .single();
     
@@ -115,6 +118,7 @@ refunds.post('/', async (c) => {
     .select('*')
     .eq('id', originalTransferId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('status', 'completed')
     .single();
   
@@ -156,6 +160,8 @@ refunds.post('/', async (c) => {
     .from('refunds')
     .select('amount')
     .eq('original_transfer_id', originalTransferId)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('status', 'completed');
   
   const totalRefunded = existingRefunds?.reduce((sum, r) => sum + parseFloat(r.amount), 0) || 0;
@@ -195,6 +201,7 @@ refunds.post('/', async (c) => {
     .from('refunds')
     .insert({
       tenant_id: ctx.tenantId,
+      environment: getEnv(ctx),
       original_transfer_id: originalTransferId,
       amount: refundAmount,
       currency: transfer.currency,
@@ -306,6 +313,7 @@ refunds.get('/:id', async (c) => {
     .select('*')
     .eq('id', refundId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
   
   if (error || !refund) {

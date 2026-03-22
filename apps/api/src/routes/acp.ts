@@ -24,6 +24,7 @@ import { createLimitService } from '../services/limits.js';
 import { createCheckoutTelemetryService, extractMerchantDomain } from '../services/telemetry/checkout-telemetry.js';
 import { trackOp } from '../services/ops/track-op.js';
 import { OpType } from '../services/ops/operation-types.js';
+import { getEnv } from '../utils/helpers.js';
 
 const app = new Hono();
 
@@ -97,6 +98,7 @@ app.post('/checkouts', async (c) => {
       .from('acp_checkouts')
       .select('id')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('checkout_id', validated.checkout_id)
       .single();
 
@@ -110,6 +112,7 @@ app.post('/checkouts', async (c) => {
       .select('id')
       .eq('id', validated.account_id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (accountError || !account) {
@@ -138,6 +141,7 @@ app.post('/checkouts', async (c) => {
       .from('acp_checkouts')
       .insert({
         tenant_id: ctx.tenantId,
+        environment: getEnv(ctx),
         checkout_id: validated.checkout_id,
         session_id: validated.session_id,
         agent_id: validated.agent_id,
@@ -283,6 +287,7 @@ app.post('/checkouts/batch', async (c) => {
       .from('accounts')
       .select('id')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .in('id', uniqueAccountIds);
     const validAccountSet = new Set((validAccounts || []).map(a => a.id));
 
@@ -303,6 +308,7 @@ app.post('/checkouts/batch', async (c) => {
           .from('acp_checkouts')
           .select('id')
           .eq('tenant_id', ctx.tenantId)
+          .eq('environment', getEnv(ctx))
           .eq('checkout_id', spec.checkout_id)
           .single();
 
@@ -324,6 +330,7 @@ app.post('/checkouts/batch', async (c) => {
           .from('acp_checkouts')
           .insert({
             tenant_id: ctx.tenantId,
+            environment: getEnv(ctx),
             checkout_id: spec.checkout_id,
             session_id: spec.session_id,
             agent_id: spec.agent_id,
@@ -449,6 +456,7 @@ app.get('/checkouts', async (c) => {
       .from('acp_checkouts')
       .select('*', { count: 'exact' })
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -523,6 +531,7 @@ app.get('/checkouts/:id', async (c) => {
       .select('*')
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (checkoutError || !checkout) {
@@ -610,6 +619,7 @@ app.post('/checkouts/:id/complete', async (c) => {
       .select('*')
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (checkoutError || !checkout) {
@@ -650,6 +660,7 @@ app.post('/checkouts/:id/complete', async (c) => {
         .select('id')
         .eq('name', checkout.agent_id)
         .eq('tenant_id', ctx.tenantId)
+        .eq('environment', getEnv(ctx))
         .single();
 
       if (agent) {
@@ -659,6 +670,7 @@ app.post('/checkouts/:id/complete', async (c) => {
           .select('id')
           .eq('managed_by_agent_id', agent.id)
           .eq('tenant_id', ctx.tenantId)
+          .eq('environment', getEnv(ctx))
           .eq('status', 'active')
           .single();
 
@@ -846,6 +858,7 @@ app.post('/checkouts/:id/complete', async (c) => {
       .from('transfers')
       .insert({
         tenant_id: ctx.tenantId,
+        environment: getEnv(ctx),
         from_account_id: checkout.account_id,
         to_account_id: checkout.account_id, // TODO: Determine recipient from merchant
         amount: checkout.total_amount,
@@ -981,6 +994,7 @@ app.patch('/checkouts/:id/cancel', async (c) => {
       })
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .select('id, status, cancelled_at')
       .single();
 
@@ -1053,6 +1067,7 @@ app.patch('/checkouts/:id', async (c) => {
       .update(updates)
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .select('*')
       .single();
 
@@ -1098,6 +1113,7 @@ app.delete('/checkouts/:id', async (c) => {
       .select('id, transfer_id')
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (fetchErr || !checkout) {
@@ -1119,7 +1135,8 @@ app.delete('/checkouts/:id', async (c) => {
       .from('acp_checkouts')
       .delete()
       .eq('id', id)
-      .eq('tenant_id', ctx.tenantId);
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx));
 
     if (deleteErr) {
       console.error('[ACP] Delete checkout error:', deleteErr);
@@ -1131,7 +1148,7 @@ app.delete('/checkouts/:id', async (c) => {
       // Delete ledger entries and refunds first (they FK → transfers)
       await supabase.from('ledger_entries').delete().eq('reference_id', transferId).eq('tenant_id', ctx.tenantId);
       await supabase.from('refunds').delete().eq('transfer_id', transferId).eq('tenant_id', ctx.tenantId);
-      await supabase.from('transfers').delete().eq('id', transferId).eq('tenant_id', ctx.tenantId);
+      await supabase.from('transfers').delete().eq('id', transferId).eq('tenant_id', ctx.tenantId).eq('environment', getEnv(ctx));
     }
 
     return c.json({ success: true });
@@ -1167,6 +1184,7 @@ app.get('/analytics', async (c) => {
       .from('transfers')
       .select('id, amount, fee_amount, created_at, protocol_metadata')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('type', 'acp')
       .eq('status', 'completed')
       .gte('created_at', start.toISOString())
@@ -1176,7 +1194,8 @@ app.get('/analytics', async (c) => {
     const { data: checkouts } = await supabase
       .from('acp_checkouts')
       .select('*')
-      .eq('tenant_id', ctx.tenantId);
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx));
 
     const revenue = transfers?.reduce((sum, t) => sum + parseFloat(t.amount), 0) || 0;
     const fees = transfers?.reduce((sum, t) => sum + parseFloat(t.fee_amount || '0'), 0) || 0;

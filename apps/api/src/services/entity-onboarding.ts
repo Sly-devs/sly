@@ -151,7 +151,8 @@ function validateClabe(clabe: string): { valid: boolean; error?: string; details
 export async function onboardEntity(
   tenantId: string,
   input: OnboardingInput,
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  environment: 'test' | 'live' = 'test'
 ): Promise<OnboardingResult> {
   const accountId = randomUUID();
   const now = new Date();
@@ -192,6 +193,7 @@ export async function onboardEntity(
     .insert({
       id: accountId,
       tenant_id: tenantId,
+      environment,
       type: input.type,
       name,
       email: input.email || null,
@@ -300,7 +302,8 @@ export async function onboardEntity(
         },
       })
       .eq('id', accountId)
-      .eq('tenant_id', tenantId);
+      .eq('tenant_id', tenantId)
+      .eq('environment', environment);
   }
 
   // If documents were provided, create verification request (mock)

@@ -185,9 +185,11 @@ export interface FloatAllocation {
 
 export class TreasuryService {
   private supabase: SupabaseClient;
+  private environment: 'test' | 'live';
 
-  constructor() {
+  constructor(environment: 'test' | 'live' = 'test') {
     this.supabase = createClient();
+    this.environment = environment;
   }
 
   // ============================================
@@ -214,6 +216,7 @@ export class TreasuryService {
       .from('treasury_accounts')
       .select('*')
       .eq('tenant_id', tenantId)
+      .eq('environment', this.environment)
       .eq('rail', rail)
       .eq('currency', currency)
       .single();
@@ -227,6 +230,7 @@ export class TreasuryService {
       .from('treasury_accounts')
       .insert({
         tenant_id: tenantId,
+        environment: this.environment,
         rail,
         currency,
         external_account_id: options?.externalAccountId,
@@ -253,6 +257,7 @@ export class TreasuryService {
       .from('treasury_accounts')
       .select('*')
       .eq('tenant_id', tenantId)
+      .eq('environment', this.environment)
       .eq('status', 'active')
       .order('rail', { ascending: true });
 

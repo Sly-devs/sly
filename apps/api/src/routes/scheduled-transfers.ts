@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createClient } from '../db/client.js';
-import { 
+import {
   logAudit,
   isValidUUID,
   getPaginationParams,
   paginationResponse,
+  getEnv,
 } from '../utils/helpers.js';
 import { ValidationError, NotFoundError } from '../middleware/error.js';
 import { getScheduledTransferWorker } from '../workers/scheduled-transfers.js';
@@ -95,6 +96,7 @@ scheduledTransfers.get('/', async (c) => {
     .from('transfer_schedules')
     .select('*', { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
   
@@ -164,18 +166,20 @@ scheduledTransfers.post('/', async (c) => {
     .select('id, name')
     .eq('id', fromAccountId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fromError || !fromAccount) {
     throw new NotFoundError('Source account', fromAccountId);
   }
-  
+
   if (toAccountId) {
     const { data: toAccount, error: toError } = await supabase
       .from('accounts')
       .select('id, name')
       .eq('id', toAccountId)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
     
     if (toError || !toAccount) {
@@ -199,6 +203,7 @@ scheduledTransfers.post('/', async (c) => {
     .from('transfer_schedules')
     .insert({
       tenant_id: ctx.tenantId,
+      environment: getEnv(ctx),
       from_account_id: fromAccountId,
       to_account_id: toAccountId || null,
       to_payment_method_id: toPaymentMethodId || null,
@@ -266,17 +271,20 @@ scheduledTransfers.get('/:id', async (c) => {
     .select('*')
     .eq('id', scheduleId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (error || !schedule) {
     throw new NotFoundError('Schedule', scheduleId);
   }
-  
+
   // Get execution history (transfers created by this schedule)
   const { data: executions } = await supabase
     .from('transfers')
     .select('*')
     .eq('schedule_id', scheduleId)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false })
     .limit(50);
   
@@ -305,12 +313,13 @@ scheduledTransfers.post('/:id/pause', async (c) => {
     .select('*')
     .eq('id', scheduleId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !schedule) {
     throw new NotFoundError('Schedule', scheduleId);
   }
-  
+
   if (schedule.status !== 'active') {
     throw new ValidationError(`Cannot pause schedule with status: ${schedule.status}`);
   }
@@ -322,9 +331,10 @@ scheduledTransfers.post('/:id/pause', async (c) => {
       updated_at: new Date().toISOString(),
     })
     .eq('id', scheduleId)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (updateError) {
     console.error('Error pausing schedule:', updateError);
     return c.json({ error: 'Failed to pause schedule' }, 500);
@@ -360,12 +370,13 @@ scheduledTransfers.post('/:id/resume', async (c) => {
     .select('*')
     .eq('id', scheduleId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !schedule) {
     throw new NotFoundError('Schedule', scheduleId);
   }
-  
+
   if (schedule.status !== 'paused') {
     throw new ValidationError(`Cannot resume schedule with status: ${schedule.status}`);
   }
@@ -393,9 +404,10 @@ scheduledTransfers.post('/:id/resume', async (c) => {
       updated_at: new Date().toISOString(),
     })
     .eq('id', scheduleId)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (updateError) {
     console.error('Error resuming schedule:', updateError);
     return c.json({ error: 'Failed to resume schedule' }, 500);
@@ -431,12 +443,13 @@ scheduledTransfers.post('/:id/cancel', async (c) => {
     .select('*')
     .eq('id', scheduleId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !schedule) {
     throw new NotFoundError('Schedule', scheduleId);
   }
-  
+
   if (schedule.status === 'cancelled' || schedule.status === 'completed') {
     throw new ValidationError(`Cannot cancel schedule with status: ${schedule.status}`);
   }
@@ -448,9 +461,10 @@ scheduledTransfers.post('/:id/cancel', async (c) => {
       updated_at: new Date().toISOString(),
     })
     .eq('id', scheduleId)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (updateError) {
     console.error('Error cancelling schedule:', updateError);
     return c.json({ error: 'Failed to cancel schedule' }, 500);
@@ -487,12 +501,13 @@ scheduledTransfers.post('/:id/execute-now', async (c) => {
     .select('*')
     .eq('id', scheduleId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !schedule) {
     throw new NotFoundError('Schedule', scheduleId);
   }
-  
+
   if (schedule.status !== 'active' && schedule.status !== 'paused') {
     throw new ValidationError(`Cannot execute schedule with status: ${schedule.status}`);
   }

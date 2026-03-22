@@ -1,12 +1,13 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createClient } from '../db/client.js';
-import { 
+import {
   mapStreamFromDb,
   logAudit,
   isValidUUID,
   getPaginationParams,
   paginationResponse,
+  getEnv,
 } from '../utils/helpers.js';
 import { createBalanceService } from '../services/balances.js';
 import { createLimitService } from '../services/limits.js';
@@ -60,6 +61,7 @@ streams.get('/', async (c) => {
     .from('streams')
     .select('*', { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false });
   
   if (status) {
@@ -137,6 +139,7 @@ streams.post('/', async (c) => {
       .from('streams')
       .select('*')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('idempotency_key', idempotencyKey)
       .single();
     
@@ -171,11 +174,13 @@ streams.post('/', async (c) => {
       .from('accounts')
       .select('id, name, balance_available, tenant_id')
       .eq('id', senderAccountId)
+      .eq('environment', getEnv(ctx))
       .single(),
     supabase
       .from('accounts')
       .select('id, name, tenant_id')
       .eq('id', receiverAccountId)
+      .eq('environment', getEnv(ctx))
       .single(),
   ]);
   
@@ -241,6 +246,7 @@ streams.post('/', async (c) => {
     .from('streams')
     .insert({
       tenant_id: ctx.tenantId,
+      environment: getEnv(ctx),
       status: 'active',
       sender_account_id: senderAccountId,
       sender_account_name: sender.name,
@@ -285,7 +291,7 @@ streams.post('/', async (c) => {
     await balanceService.holdForStream(senderAccountId, stream.id, actualFunding, bufferAmount);
   } catch (error: any) {
     // Rollback stream creation
-    await supabase.from('streams').delete().eq('id', stream.id);
+    await supabase.from('streams').delete().eq('id', stream.id).eq('environment', getEnv(ctx));
     throw error;
   }
   
@@ -343,14 +349,15 @@ streams.get('/:id', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (error || !data) {
     throw new NotFoundError('Stream', id);
   }
-  
+
   const stream = mapStreamFromDb(data);
-  
+
   // Calculate real-time state
   if (data.status === 'active') {
     const calculation = calculateStreamState({
@@ -397,12 +404,13 @@ streams.post('/:id/pause', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !stream) {
     throw new NotFoundError('Stream', id);
   }
-  
+
   if (stream.status !== 'active') {
     throw new ValidationError(`Cannot pause stream with status: ${stream.status}`);
   }
@@ -435,9 +443,10 @@ streams.post('/:id/pause', async (c) => {
       total_streamed: calculation.balance.total,
     })
     .eq('id', id)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (error) {
     console.error('Error pausing stream:', error);
     return c.json({ error: 'Failed to pause stream' }, 500);
@@ -470,12 +479,13 @@ streams.post('/:id/resume', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !stream) {
     throw new NotFoundError('Stream', id);
   }
-  
+
   if (stream.status !== 'paused') {
     throw new ValidationError(`Cannot resume stream with status: ${stream.status}`);
   }
@@ -494,9 +504,10 @@ streams.post('/:id/resume', async (c) => {
       total_paused_seconds: totalPausedSeconds,
     })
     .eq('id', id)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (error) {
     console.error('Error resuming stream:', error);
     return c.json({ error: 'Failed to resume stream' }, 500);
@@ -529,12 +540,13 @@ streams.post('/:id/cancel', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !stream) {
     throw new NotFoundError('Stream', id);
   }
-  
+
   if (stream.status === 'cancelled') {
     throw new ValidationError('Stream is already cancelled');
   }
@@ -563,9 +575,10 @@ streams.post('/:id/cancel', async (c) => {
       total_streamed: calculation.balance.total,
     })
     .eq('id', id)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (error) {
     console.error('Error cancelling stream:', error);
     return c.json({ error: 'Failed to cancel stream' }, 500);
@@ -648,12 +661,13 @@ streams.post('/:id/top-up', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !stream) {
     throw new NotFoundError('Stream', id);
   }
-  
+
   if (stream.status === 'cancelled') {
     throw new ValidationError('Cannot top-up cancelled stream');
   }
@@ -663,6 +677,7 @@ streams.post('/:id/top-up', async (c) => {
     .from('accounts')
     .select('balance_available')
     .eq('id', stream.sender_account_id)
+    .eq('environment', getEnv(ctx))
     .single();
   
   const availableBalance = parseFloat(sender?.balance_available) || 0;
@@ -698,9 +713,10 @@ streams.post('/:id/top-up', async (c) => {
       health: newRunwaySeconds > 7 * 24 * 60 * 60 ? 'healthy' : newRunwaySeconds > 24 * 60 * 60 ? 'warning' : 'critical',
     })
     .eq('id', id)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (error) {
     console.error('Error updating stream:', error);
     return c.json({ error: 'Failed to top-up stream' }, 500);
@@ -749,12 +765,13 @@ streams.post('/:id/withdraw', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !stream) {
     throw new NotFoundError('Stream', id);
   }
-  
+
   // Calculate current available balance
   const calculation = calculateStreamState({
     status: stream.status,
@@ -793,6 +810,7 @@ streams.post('/:id/withdraw', async (c) => {
       total_streamed: calculation.balance.total, // Update with current calculation
     })
     .eq('id', id)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
   
@@ -850,6 +868,7 @@ streams.get('/:id/events', async (c) => {
     .select('id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
   
   if (!stream) {
@@ -894,7 +913,8 @@ streams.get('/stats', async (c) => {
   const { data: streams } = await supabase
     .from('streams')
     .select('status, flow_rate_per_month, funded_amount, total_streamed')
-    .eq('tenant_id', ctx.tenantId);
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
   
   const stats = {
     total: streams?.length || 0,

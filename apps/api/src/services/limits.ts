@@ -25,7 +25,10 @@ export interface StreamLimits {
 }
 
 export class LimitService {
-  constructor(private supabase: SupabaseClient) {}
+  constructor(
+    private supabase: SupabaseClient,
+    private environment: 'test' | 'live' = 'test',
+  ) {}
 
   /**
    * Get agent with limits and parent account info
@@ -43,6 +46,7 @@ export class LimitService {
         active_streams_count, total_stream_outflow
       `)
       .eq('id', agentId)
+      .eq('environment', this.environment)
       .single();
 
     if (agentError || !agent) {
@@ -56,6 +60,7 @@ export class LimitService {
         .from('accounts')
         .select('id, name, verification_tier, verification_status')
         .eq('id', agent.parent_account_id)
+        .eq('environment', this.environment)
         .single();
       
       if (accountError) {
@@ -366,6 +371,7 @@ export class LimitService {
       .from('agents')
       .select('tenant_id')
       .eq('id', agentId)
+      .eq('environment', this.environment)
       .single();
 
     if (agentError || !agent) {
@@ -498,7 +504,7 @@ export class LimitService {
 /**
  * Create a limit service instance
  */
-export function createLimitService(supabase: SupabaseClient): LimitService {
-  return new LimitService(supabase);
+export function createLimitService(supabase: SupabaseClient, environment: 'test' | 'live' = 'test'): LimitService {
+  return new LimitService(supabase, environment);
 }
 

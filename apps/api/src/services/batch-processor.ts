@@ -62,6 +62,7 @@ export interface CreateBatchRequest {
     id?: string;
     name?: string;
   };
+  environment?: 'test' | 'live';
 }
 
 export interface BatchResponse {
@@ -165,6 +166,7 @@ export class BatchProcessor {
       .from('transfer_batches')
       .insert({
         tenant_id: request.tenantId,
+        environment: request.environment || 'test',
         name: request.name,
         description: request.description,
         type: request.type || 'payout',
@@ -190,6 +192,7 @@ export class BatchProcessor {
     const items = request.items.map((item, index) => ({
       batch_id: batch.id,
       tenant_id: request.tenantId,
+      environment: request.environment || 'test',
       sequence_number: index + 1,
       from_account_id: item.fromAccountId,
       to_account_id: item.toAccountId,

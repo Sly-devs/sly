@@ -38,6 +38,7 @@ export class A2ATaskService {
   constructor(
     private supabase: SupabaseClient,
     private tenantId: string,
+    private environment: 'test' | 'live' = 'test',
   ) {}
 
   /**
@@ -59,6 +60,7 @@ export class A2ATaskService {
       .from('a2a_tasks')
       .insert({
         tenant_id: this.tenantId,
+        environment: this.environment,
         agent_id: agentId,
         context_id: contextId || crypto.randomUUID(),
         state: 'submitted',
@@ -81,6 +83,7 @@ export class A2ATaskService {
       .from('a2a_messages')
       .insert({
         tenant_id: this.tenantId,
+        environment: this.environment,
         task_id: taskRow.id,
         role: message.role || 'user',
         parts: normalizeParts(message.parts),
@@ -109,6 +112,7 @@ export class A2ATaskService {
       .select('*')
       .eq('id', taskId)
       .eq('tenant_id', this.tenantId)
+      .eq('environment', this.environment)
       .single();
 
     if (taskError || !taskRow) return null;
@@ -124,6 +128,7 @@ export class A2ATaskService {
         .select('max_context_messages')
         .eq('id', taskRow.agent_id)
         .eq('tenant_id', this.tenantId)
+        .eq('environment', this.environment)
         .maybeSingle();
       effectiveLimit = agentRow?.max_context_messages || DEFAULT_MAX_CONTEXT_MESSAGES;
     }
@@ -172,6 +177,7 @@ export class A2ATaskService {
       .select('state, metadata')
       .eq('id', taskId)
       .eq('tenant_id', this.tenantId)
+      .eq('environment', this.environment)
       .single();
 
     const previousState = currentRow?.state !== state ? currentRow?.state : undefined;
@@ -193,7 +199,8 @@ export class A2ATaskService {
       .from('a2a_tasks')
       .update(updateData)
       .eq('id', taskId)
-      .eq('tenant_id', this.tenantId);
+      .eq('tenant_id', this.tenantId)
+      .eq('environment', this.environment);
 
     // If transitioning to a terminal state, guard against already-terminal
     if (terminalStates.includes(state)) {
@@ -233,6 +240,7 @@ export class A2ATaskService {
       .from('a2a_messages')
       .insert({
         tenant_id: this.tenantId,
+        environment: this.environment,
         task_id: taskId,
         role,
         parts: normalizeParts(parts),
@@ -253,6 +261,7 @@ export class A2ATaskService {
       .select('agent_id')
       .eq('id', taskId)
       .eq('tenant_id', this.tenantId)
+      .eq('environment', this.environment)
       .maybeSingle();
 
     taskEventBus.emitTask(taskId, {
@@ -281,6 +290,7 @@ export class A2ATaskService {
       .from('a2a_artifacts')
       .insert({
         tenant_id: this.tenantId,
+        environment: this.environment,
         task_id: taskId,
         label: artifact.name || null,
         mime_type: artifact.mediaType || 'text/plain',
@@ -302,6 +312,7 @@ export class A2ATaskService {
       .select('agent_id')
       .eq('id', taskId)
       .eq('tenant_id', this.tenantId)
+      .eq('environment', this.environment)
       .maybeSingle();
 
     taskEventBus.emitTask(taskId, {
@@ -444,6 +455,7 @@ export class A2ATaskService {
       .eq('agent_id', agentId)
       .eq('context_id', contextId)
       .eq('tenant_id', this.tenantId)
+      .eq('environment', this.environment)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -464,6 +476,7 @@ export class A2ATaskService {
       .eq('agent_id', agentId)
       .eq('client_agent_id', callerAgentId)
       .eq('tenant_id', this.tenantId)
+      .eq('environment', this.environment)
       .not('context_id', 'is', null)
       .gte('updated_at', cutoff)
       .order('updated_at', { ascending: false })
@@ -488,7 +501,8 @@ export class A2ATaskService {
       .from('a2a_tasks')
       .update(update)
       .eq('id', taskId)
-      .eq('tenant_id', this.tenantId);
+      .eq('tenant_id', this.tenantId)
+      .eq('environment', this.environment);
   }
 
   // ==========================================================================

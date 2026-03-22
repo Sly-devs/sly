@@ -31,6 +31,7 @@ export interface OpenSessionOptions {
   maxBudget?: number;
   currency?: string;
   correlationId?: string;
+  environment?: 'test' | 'live';
 }
 
 export interface OpenSessionResult {
@@ -45,6 +46,7 @@ export interface SignVoucherOptions {
   tenantId: string;
   amount: number;
   correlationId?: string;
+  environment?: 'test' | 'live';
 }
 
 export interface SignVoucherResult {
@@ -85,7 +87,7 @@ export class MppSessionManager {
    * Open a new streaming session with governance checks.
    */
   async openSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
-    const { tenantId, agentId, walletId, serviceUrl, depositAmount, maxBudget, correlationId } = options;
+    const { tenantId, agentId, walletId, serviceUrl, depositAmount, maxBudget, correlationId, environment = 'test' } = options;
 
     // 1. Check spending policy for the deposit amount
     const policyContext: PolicyContext = {
@@ -116,7 +118,7 @@ export class MppSessionManager {
     }
 
     // 2. Check concurrent session limits
-    const concurrentCount = await this.getActiveSessionCount(tenantId, agentId);
+    const concurrentCount = await this.getActiveSessionCount(tenantId, agentId, environment);
     const maxConcurrent = 10; // Default; Story 71.9 adds policy-driven limits
     if (concurrentCount >= maxConcurrent) {
       return {
@@ -133,6 +135,7 @@ export class MppSessionManager {
         .select('provider_metadata, currency')
         .eq('id', walletId)
         .eq('tenant_id', tenantId)
+        .eq('environment', environment)
         .single();
       const encryptedKey = walletRow?.provider_metadata?.encrypted_private_key;
       if (encryptedKey) {
@@ -168,6 +171,7 @@ export class MppSessionManager {
       .insert({
         id: sessionId,
         tenant_id: tenantId,
+        environment,
         agent_id: agentId,
         wallet_id: walletId,
         service_url: serviceUrl,
@@ -214,10 +218,10 @@ export class MppSessionManager {
    * Checks per-voucher policy and cumulative budget.
    */
   async signVoucher(options: SignVoucherOptions): Promise<SignVoucherResult> {
-    const { sessionId, tenantId, amount, correlationId } = options;
+    const { sessionId, tenantId, amount, correlationId, environment = 'test' } = options;
 
     // Fetch session
-    const session = await this.getSession(sessionId, tenantId);
+    const session = await this.getSession(sessionId, tenantId, environment);
     if (!session) {
       return { success: false, deniedReason: 'Session not found' };
     }
@@ -261,7 +265,8 @@ export class MppSessionManager {
         updated_at: now,
       })
       .eq('id', sessionId)
-      .eq('tenant_id', tenantId);
+      .eq('tenant_id', tenantId)
+      .eq('environment', environment);
 
     // Resolve wallet currency for accurate recording
     let walletCurrency = 'USDC';
@@ -270,6 +275,7 @@ export class MppSessionManager {
         .from('wallets')
         .select('currency')
         .eq('id', session.walletId)
+        .eq('environment', environment)
         .single();
       if (walletRow?.currency) walletCurrency = walletRow.currency;
     } catch { /* fall back to USDC */ }
@@ -285,6 +291,7 @@ export class MppSessionManager {
       amount,
       currency: walletCurrency,
       paymentMethod: 'tempo',
+      environment,
     });
 
     trackOp({
@@ -312,9 +319,10 @@ export class MppSessionManager {
   async closeSession(
     sessionId: string,
     tenantId: string,
-    correlationId?: string
+    correlationId?: string,
+    environment: 'test' | 'live' = 'test'
   ): Promise<CloseSessionResult> {
-    const session = await this.getSession(sessionId, tenantId);
+    const session = await this.getSession(sessionId, tenantId, environment);
     if (!session) {
       return { success: false, error: 'Session not found' };
     }
@@ -335,6 +343,7 @@ export class MppSessionManager {
       })
       .eq('id', sessionId)
       .eq('tenant_id', tenantId)
+      .eq('environment', environment)
       .select()
       .single();
 
@@ -366,13 +375,14 @@ export class MppSessionManager {
   /**
    * Get a session by ID.
    */
-  async getSession(sessionId: string, tenantId: string): Promise<MppSession | null> {
-    const { data, error } = await this.supabase
+  async getSession(sessionId: string, tenantId: string, environment?: 'test' | 'live'): Promise<MppSession | null> {
+    let query = this.supabase
       .from('mpp_sessions')
       .select('*')
       .eq('id', sessionId)
-      .eq('tenant_id', tenantId)
-      .single();
+      .eq('tenant_id', tenantId);
+    if (environment) query = query.eq('environment', environment);
+    const { data, error } = await query.single();
 
     if (error || !data) return null;
     return this.mapFromDb(data);
@@ -383,12 +393,13 @@ export class MppSessionManager {
    */
   async listSessions(
     tenantId: string,
-    options?: { agentId?: string; status?: MppSessionStatus; limit?: number; offset?: number }
+    options?: { agentId?: string; status?: MppSessionStatus; limit?: number; offset?: number; environment?: 'test' | 'live' }
   ): Promise<{ data: MppSession[]; total: number }> {
     let query = this.supabase
       .from('mpp_sessions')
       .select('*', { count: 'exact' })
       .eq('tenant_id', tenantId)
+      .eq('environment', options?.environment || 'test')
       .order('created_at', { ascending: false });
 
     if (options?.agentId) query = query.eq('agent_id', options.agentId);
@@ -414,12 +425,13 @@ export class MppSessionManager {
   /**
    * Get count of active sessions for an agent.
    */
-  private async getActiveSessionCount(tenantId: string, agentId: string): Promise<number> {
+  private async getActiveSessionCount(tenantId: string, agentId: string, environment: 'test' | 'live' = 'test'): Promise<number> {
     const { count } = await this.supabase
       .from('mpp_sessions')
       .select('id', { count: 'exact', head: true })
       .eq('tenant_id', tenantId)
       .eq('agent_id', agentId)
+      .eq('environment', environment)
       .in('status', ['open', 'active']);
 
     return count || 0;

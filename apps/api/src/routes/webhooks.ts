@@ -18,6 +18,7 @@ import { z } from 'zod';
 import crypto from 'crypto';
 import { createClient } from '../db/client.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { getEnv } from '../utils/helpers.js';
 
 const app = new Hono();
 
@@ -74,6 +75,7 @@ app.get('/stats', async (c) => {
       .from('webhook_deliveries')
       .select('status')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .gte('created_at', startDate);
 
     if (statusError) {
@@ -117,6 +119,7 @@ app.get('/stats', async (c) => {
       .from('webhook_deliveries')
       .select('id, endpoint_url, event_type, last_response_code, last_response_body, last_attempt_at, attempts, status')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .in('status', ['failed', 'dlq'])
       .order('last_attempt_at', { ascending: false })
       .limit(10);
@@ -223,7 +226,8 @@ app.post('/replay', async (c) => {
     let query = supabase
       .from('webhook_deliveries')
       .select('id, endpoint_id, endpoint_url, event_type, event_id, payload')
-      .eq('tenant_id', ctx.tenantId);
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx));
     
     // Filter by specific delivery IDs
     if (validated.deliveryIds && validated.deliveryIds.length > 0) {
@@ -272,6 +276,7 @@ app.post('/replay', async (c) => {
     for (const delivery of deliveries) {
       const newDelivery = {
         tenant_id: ctx.tenantId,
+        environment: getEnv(ctx),
         endpoint_id: delivery.endpoint_id,
         endpoint_url: delivery.endpoint_url,
         event_type: delivery.event_type,
@@ -332,6 +337,7 @@ app.get('/deliveries/dlq', async (c) => {
       .from('webhook_deliveries')
       .select('*', { count: 'exact' })
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('status', 'dlq')
       .order('dlq_at', { ascending: false })
       .range(offset, offset + limit - 1);
@@ -372,6 +378,7 @@ app.delete('/deliveries/dlq', async (c) => {
       .from('webhook_deliveries')
       .delete()
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('status', 'dlq')
       .lt('dlq_at', cutoff)
       .select('id');
@@ -615,6 +622,7 @@ app.post('/:id/test', async (c) => {
       .from('webhook_deliveries')
       .insert({
         tenant_id: ctx.tenantId,
+        environment: getEnv(ctx),
         endpoint_id: endpoint.id,
         endpoint_url: endpoint.url,
         event_type: 'webhook.test',
@@ -670,6 +678,7 @@ app.get('/:id/deliveries', async (c) => {
       .select('*', { count: 'exact' })
       .eq('endpoint_id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -712,6 +721,7 @@ app.post('/deliveries/:id/retry', async (c) => {
       })
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .in('status', ['failed', 'dlq'])
       .select()
       .single();
@@ -764,6 +774,7 @@ app.get('/:id/health', async (c) => {
       .select('status, last_response_code, last_response_time_ms, created_at')
       .eq('endpoint_id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .gte('created_at', startDate);
     
     if (deliveryError) {

@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createClient } from '../db/client.js';
-import { 
+import {
   logAudit,
   isValidUUID,
   getPaginationParams,
   paginationResponse,
+  getEnv,
 } from '../utils/helpers.js';
 import { ValidationError, NotFoundError } from '../middleware/error.js';
 import { ErrorCode } from '@sly/types';
@@ -80,6 +81,7 @@ disputes.get('/', async (c) => {
     .from('disputes')
     .select('*', { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
   
@@ -177,6 +179,7 @@ disputes.post('/', async (c) => {
     .select('*')
     .eq('id', transferId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
   
   if (transferError || !transfer) {
@@ -227,6 +230,8 @@ disputes.post('/', async (c) => {
     .from('disputes')
     .select('id, status, due_date')
     .eq('transfer_id', transferId)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .in('status', ['open', 'under_review'])
     .single();
   
@@ -270,6 +275,7 @@ disputes.post('/', async (c) => {
     .from('disputes')
     .insert({
       tenant_id: ctx.tenantId,
+      environment: getEnv(ctx),
       transfer_id: transferId,
       status: 'open',
       reason,
@@ -372,12 +378,13 @@ disputes.get('/:id', async (c) => {
     .select('*')
     .eq('id', disputeId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (error || !dispute) {
     throw new NotFoundError('Dispute', disputeId);
   }
-  
+
   // Get timeline events from audit log
   const { data: timeline } = await supabase
     .from('audit_log')
@@ -443,12 +450,13 @@ disputes.post('/:id/respond', async (c) => {
     .select('*')
     .eq('id', disputeId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !dispute) {
     throw new NotFoundError('Dispute', disputeId);
   }
-  
+
   // Check if dispute is open for responses
   if (dispute.status !== 'open') {
     throw new ValidationError('Dispute is not open for responses');
@@ -496,9 +504,10 @@ disputes.post('/:id/respond', async (c) => {
     .from('disputes')
     .update(updates)
     .eq('id', disputeId)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (updateError) {
     console.error('Error updating dispute:', updateError);
     return c.json({ error: 'Failed to submit response' }, 500);
@@ -547,12 +556,13 @@ disputes.post('/:id/resolve', async (c) => {
     .select('*')
     .eq('id', disputeId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !dispute) {
     throw new NotFoundError('Dispute', disputeId);
   }
-  
+
   // Check if dispute can be resolved
   if (dispute.status === 'resolved') {
     throw new ValidationError('Dispute is already resolved');
@@ -609,6 +619,7 @@ disputes.post('/:id/resolve', async (c) => {
         .from('refunds')
         .insert({
           tenant_id: ctx.tenantId,
+          environment: getEnv(ctx),
           original_transfer_id: dispute.transfer_id,
           amount: resolutionAmount,
           currency: transfer.currency,
@@ -633,9 +644,10 @@ disputes.post('/:id/resolve', async (c) => {
     .from('disputes')
     .update(updates)
     .eq('id', disputeId)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (updateError) {
     console.error('Error resolving dispute:', updateError);
     return c.json({ error: 'Failed to resolve dispute' }, 500);
@@ -686,12 +698,13 @@ disputes.post('/:id/escalate', async (c) => {
     .select('*')
     .eq('id', disputeId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !dispute) {
     throw new NotFoundError('Dispute', disputeId);
   }
-  
+
   if (dispute.status === 'resolved') {
     throw new ValidationError('Cannot escalate a resolved dispute');
   }
@@ -708,9 +721,10 @@ disputes.post('/:id/escalate', async (c) => {
       updated_at: new Date().toISOString(),
     })
     .eq('id', disputeId)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (updateError) {
     console.error('Error escalating dispute:', updateError);
     return c.json({ error: 'Failed to escalate dispute' }, 500);
@@ -746,7 +760,8 @@ disputes.get('/stats/summary', async (c) => {
   const { data: allDisputes, error } = await supabase
     .from('disputes')
     .select('status, reason, amount_disputed, resolution, created_at, resolved_at')
-    .eq('tenant_id', ctx.tenantId);
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
   
   if (error) {
     console.error('Error fetching dispute stats:', error);

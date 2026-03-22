@@ -91,6 +91,7 @@ export interface OnChainTransferParams {
   destinationAddress: string;
   amount: number;
   tenantId?: string;
+  environment?: 'test' | 'live';
 }
 
 export interface OnChainTransferResult {
@@ -108,6 +109,7 @@ export interface SettleWalletTransferParams {
   amount: number;
   transferId: string;
   protocolMetadata?: Record<string, unknown>;
+  environment?: 'test' | 'live';
 }
 
 export interface SettleWalletTransferResult {
@@ -133,10 +135,10 @@ export function isOnChainCapable(
   destinationAddress: string | null | undefined,
 ): boolean {
   const srcType = sourceWallet.wallet_type || 'internal';
-  const isSandbox = process.env.PAYOS_ENVIRONMENT === 'sandbox';
+  const payosEnv = process.env.PAYOS_ENVIRONMENT || 'mock';
   const hasValidDest = !!destinationAddress && !destinationAddress.startsWith('internal://');
 
-  if (!isSandbox || !hasValidDest) return false;
+  if (payosEnv === 'mock' || !hasValidDest) return false;
 
   if (srcType === 'circle_custodial' && sourceWallet.provider_wallet_id) return true;
   if (srcType === 'external') return true;
@@ -184,11 +186,13 @@ export async function executeOnChainTransfer(
   params: OnChainTransferParams,
 ): Promise<OnChainTransferResult> {
   const { sourceWallet, destinationAddress, amount, tenantId } = params;
+  const env = params.environment || 'test';
   const srcType = sourceWallet.wallet_type || 'internal';
-  const isSandbox = process.env.PAYOS_ENVIRONMENT === 'sandbox';
+  const payosEnv = process.env.PAYOS_ENVIRONMENT || 'mock';
   const startTime = Date.now();
 
-  if (!isSandbox) {
+  // Allow on-chain transfers in sandbox and production, not mock
+  if (payosEnv === 'mock' && env !== 'live') {
     return { success: false, path: 'skipped' };
   }
 
@@ -258,8 +262,8 @@ export async function executeOnChainTransfer(
 
     // Circle custodial path
     if (srcType === 'circle_custodial' && sourceWallet.provider_wallet_id) {
-      const { getCircleClient } = await import('./circle/client.js');
-      const circle = getCircleClient();
+      const { getCircleClient, getCircleLiveClient } = await import('./circle/client.js');
+      const circle = env === 'live' ? getCircleLiveClient() : getCircleClient();
 
       // Resolve the correct USDC token ID for this wallet's chain
       // Each blockchain has a different Circle token ID for USDC
@@ -286,25 +290,30 @@ export async function executeOnChainTransfer(
         'MEDIUM',
       );
 
-      // Poll for completion (max 30s, 2s interval)
-      // Circle uses CONFIRMED as terminal success state (COMPLETE also accepted for compatibility)
+      // Poll for completion (max 60s, 3s interval)
       const isTerminal = (s: string) => s === 'CONFIRMED' || s === 'COMPLETE' || s === 'FAILED' || s === 'CANCELLED' || s === 'DENIED';
       const isSuccess = (s: string) => s === 'CONFIRMED' || s === 'COMPLETE';
 
-      const deadline = Date.now() + 30_000;
+      const deadline = Date.now() + 60_000;
       let finalTx = circleTx;
       while (!isTerminal(finalTx.state) && Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 3000));
         finalTx = await circle.getTransaction(circleTx.id);
       }
 
-      if (!isSuccess(finalTx.state)) {
-        const reason = finalTx.state === 'FAILED' ? 'failed' : isTerminal(finalTx.state) ? finalTx.state.toLowerCase() : 'timed out';
-        return withMetric({ success: false, path: 'circle', error: `Circle transfer ${reason}: ${circleTx.id}` });
+      if (isSuccess(finalTx.state)) {
+        const txHash = (finalTx as any).txHash || circleTx.id;
+        return withMetric({ success: true, txHash, path: 'circle' });
       }
 
-      const txHash = (finalTx as any).txHash || circleTx.id;
-      return withMetric({ success: true, txHash, path: 'circle' });
+      if (isTerminal(finalTx.state)) {
+        return withMetric({ success: false, path: 'circle', error: `Circle transfer ${finalTx.state.toLowerCase()}: ${circleTx.id}` });
+      }
+
+      // Not terminal after 60s — transfer is still processing on Circle's side.
+      // Return success so the ledger settles. Circle webhooks will confirm later.
+      console.warn(`[Settlement] Circle transfer ${circleTx.id} still pending after 60s — marking as processing`);
+      return withMetric({ success: true, txHash: circleTx.id, path: 'circle' });
     }
 
     // External wallet path — detect chain from destination address format
@@ -461,6 +470,7 @@ export async function settleWalletTransfer(
   params: SettleWalletTransferParams,
 ): Promise<SettleWalletTransferResult> {
   const { supabase, tenantId, sourceWallet, destinationWallet, amount, transferId, protocolMetadata } = params;
+  const env = params.environment || 'test';
   const destAddress = destinationWallet?.wallet_address || '';
 
   let txHash: string | undefined;
@@ -489,6 +499,7 @@ export async function settleWalletTransfer(
       destinationAddress: destAddress,
       amount,
       tenantId,
+      environment: env,
     });
 
     if (onChainResult.success && onChainResult.txHash) {
@@ -511,8 +522,8 @@ export async function settleWalletTransfer(
   if (settlementType === 'on_chain' && (isCircleSrc || isCircleDest)) {
     // Circle is source of truth — sync balances from Circle API after on-chain settlement
     try {
-      const { getCircleClient } = await import('./circle/client.js');
-      const circle = getCircleClient();
+      const { getCircleClient, getCircleLiveClient } = await import('./circle/client.js');
+      const circle = env === 'live' ? getCircleLiveClient() : getCircleClient();
 
       if (isCircleSrc && sourceWallet.provider_wallet_id) {
         const bal = await circle.getUsdcBalance(sourceWallet.provider_wallet_id);

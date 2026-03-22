@@ -11,6 +11,7 @@ import {
   getPaginationParams,
   paginationResponse,
   sanitizeSearchInput,
+  getEnv,
 } from '../utils/helpers.js';
 import { ValidationError, NotFoundError } from '../middleware/error.js';
 import { ErrorCode } from '@sly/types';
@@ -57,6 +58,7 @@ accounts.get('/', async (c) => {
     .from('accounts')
     .select('*', { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
   
@@ -87,7 +89,8 @@ accounts.get('/', async (c) => {
     const { data: agentData } = await supabase
       .from('agents')
       .select('parent_account_id, status')
-      .in('parent_account_id', accountIds);
+      .in('parent_account_id', accountIds)
+      .eq('environment', getEnv(ctx));
     
     if (agentData) {
       for (const agent of agentData) {
@@ -140,6 +143,7 @@ accounts.post('/', async (c) => {
       .from('accounts')
       .select('id')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('email', email)
       .single();
     
@@ -153,6 +157,7 @@ accounts.post('/', async (c) => {
     .from('accounts')
     .insert({
       tenant_id: ctx.tenantId,
+      environment: getEnv(ctx),
       type,
       name,
       email: email || null,
@@ -241,17 +246,19 @@ accounts.get('/:id', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (error || !data) {
     throw new NotFoundError('Account', id);
   }
-  
+
   // Get agent counts
   const { data: agentData } = await supabase
     .from('agents')
     .select('status')
-    .eq('parent_account_id', id);
+    .eq('parent_account_id', id)
+    .eq('environment', getEnv(ctx));
   
   const agentCount = agentData?.length || 0;
   const activeAgentCount = agentData?.filter(a => a.status === 'active').length || 0;
@@ -290,12 +297,13 @@ accounts.patch('/:id', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !existing) {
     throw new NotFoundError('Account', id);
   }
-  
+
   // Parse and validate body
   let body;
   try {
@@ -303,27 +311,28 @@ accounts.patch('/:id', async (c) => {
   } catch {
     throw new ValidationError('Invalid JSON body');
   }
-  
+
   const parsed = updateAccountSchema.safeParse(body);
   if (!parsed.success) {
     throw new ValidationError('Validation failed', parsed.error.flatten());
   }
-  
+
   const updates: Record<string, any> = {};
   if (parsed.data.name !== undefined) updates.name = parsed.data.name;
   if (parsed.data.email !== undefined) updates.email = parsed.data.email;
   if (parsed.data.metadata !== undefined) updates.metadata = parsed.data.metadata;
-  
+
   if (Object.keys(updates).length === 0) {
     return c.json({ data: mapAccountFromDb(existing) });
   }
-  
+
   // Check for duplicate email if updating
   if (updates.email && updates.email !== existing.email) {
     const { data: duplicate } = await supabase
       .from('accounts')
       .select('id')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('email', updates.email)
       .neq('id', id)
       .single();
@@ -339,14 +348,15 @@ accounts.patch('/:id', async (c) => {
     .update(updates)
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
-  
+
   if (error) {
     console.error('Error updating account:', error);
     throw new Error('Failed to update account in database');
   }
-  
+
   // Audit log
   await logAudit(supabase, {
     tenantId: ctx.tenantId,
@@ -404,12 +414,13 @@ accounts.delete('/:id', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !existing) {
     throw new NotFoundError('Account', id);
   }
-  
+
   // Check for non-zero balance
   const balance = parseFloat(existing.balance_total) || 0;
   if (balance > 0) {
@@ -418,40 +429,43 @@ accounts.delete('/:id', async (c) => {
       message: 'Transfer all funds before deleting',
     });
   }
-  
+
   // Check for active streams
   const { count: streamCount } = await supabase
     .from('streams')
     .select('*', { count: 'exact', head: true })
+    .eq('environment', getEnv(ctx))
     .eq('status', 'active')
     .or(`sender_account_id.eq.${id},receiver_account_id.eq.${id}`);
-  
+
   if (streamCount && streamCount > 0) {
     throw new ValidationError('Cannot delete account with active streams', {
       activeStreams: streamCount,
       message: 'Cancel all streams before deleting',
     });
   }
-  
+
   // Check for agents
   const { count: agentCount } = await supabase
     .from('agents')
     .select('*', { count: 'exact', head: true })
-    .eq('parent_account_id', id);
-  
+    .eq('parent_account_id', id)
+    .eq('environment', getEnv(ctx));
+
   if (agentCount && agentCount > 0) {
     throw new ValidationError('Cannot delete account with registered agents', {
       agentCount,
       message: 'Delete all agents before deleting account',
     });
   }
-  
+
   // Delete account (cascades to ledger_entries)
   const { error } = await supabase
     .from('accounts')
     .delete()
     .eq('id', id)
-    .eq('tenant_id', ctx.tenantId);
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
   
   if (error) {
     console.error('Error deleting account:', error);
@@ -490,16 +504,18 @@ accounts.get('/:id/balances', async (c) => {
     .select('id, name, balance_total, balance_available, balance_in_streams, balance_buffer')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (error || !data) {
     throw new NotFoundError('Account', id);
   }
-  
+
   // Get stream counts
   const { data: streams } = await supabase
     .from('streams')
     .select('id, status, flow_rate_per_month, sender_account_id, receiver_account_id')
+    .eq('environment', getEnv(ctx))
     .eq('status', 'active')
     .or(`sender_account_id.eq.${id},receiver_account_id.eq.${id}`);
   
@@ -576,18 +592,20 @@ accounts.get('/:id/agents', async (c) => {
     .select('id, name, type, verification_tier')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (accountError || !account) {
     throw new NotFoundError('Account', id);
   }
-  
+
   // Get agents
   const { data, error } = await supabase
     .from('agents')
     .select('*')
     .eq('parent_account_id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false });
   
   if (error) {
@@ -627,22 +645,24 @@ accounts.get('/:id/streams', async (c) => {
     .select('id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (accountError || !account) {
     throw new NotFoundError('Account', id);
   }
-  
+
   // Parse query params
   const query = c.req.query();
   const status = query.status;
   const direction = query.direction as 'incoming' | 'outgoing' | undefined;
-  
+
   // Get streams where account is sender or receiver
   let dbQuery = supabase
     .from('streams')
     .select('*')
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false });
   
   if (direction === 'outgoing') {
@@ -687,12 +707,13 @@ accounts.get('/:id/transactions', async (c) => {
     .select('id, name')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (accountError || !account) {
     throw new NotFoundError('Account', id);
   }
-  
+
   // Parse query params
   const query = c.req.query();
   const { page, limit } = getPaginationParams(query);
@@ -752,25 +773,27 @@ accounts.get('/:id/transfers', async (c) => {
     .select('id, name')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (accountError || !account) {
     throw new NotFoundError('Account', id);
   }
-  
+
   // Parse query params
   const query = c.req.query();
   const { page, limit } = getPaginationParams(query);
   const type = query.type; // Optional filter by transfer type
   const status = query.status; // Optional filter by status
   const direction = query.direction; // 'sent' | 'received' | 'all' (default: 'all')
-  
+
   // Build query - get transfers where account is sender OR receiver
   // Filter in SQL for performance (not client-side)
   let dbQuery = supabase
     .from('transfers')
     .select('*', { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
   
@@ -868,15 +891,16 @@ accounts.post('/:id/verify', async (c) => {
     .select('id, name, type, verification_tier, verification_status, tenant_id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !existing) {
     throw new NotFoundError('Account', id);
   }
-  
+
   // Determine verification type based on account type
   const verificationType = existing.type === 'business' ? 'kyb' : 'kyc';
-  
+
   // Update verification status
   const { data, error } = await supabase
     .from('accounts')
@@ -893,6 +917,7 @@ accounts.post('/:id/verify', async (c) => {
     })
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .select('*')
     .single();
 
@@ -900,14 +925,15 @@ accounts.post('/:id/verify', async (c) => {
     console.error('Error verifying account:', error);
     throw new Error('Failed to verify account in database');
   }
-  
+
   // Update effective limits for all agents under this account
   // This triggers the calculate_agent_effective_limits function
   await supabase
     .from('agents')
     .update({ updated_at: new Date().toISOString() })
     .eq('parent_account_id', id)
-    .eq('tenant_id', ctx.tenantId);
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
   
   // Audit log
   await logAudit(supabase, {
@@ -963,18 +989,20 @@ accounts.post('/:id/suspend', async (c) => {
     .select('id, name, verification_status, tenant_id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !existing) {
     throw new NotFoundError('Account', id);
   }
-  
+
   // Update account status
   const { error: updateError } = await supabase
     .from('accounts')
     .update({ verification_status: 'suspended' })
     .eq('id', id)
-    .eq('tenant_id', ctx.tenantId);
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
 
   if (updateError) {
     console.error('Error suspending account:', updateError);
@@ -987,6 +1015,7 @@ accounts.post('/:id/suspend', async (c) => {
     .update({ status: 'suspended' })
     .eq('parent_account_id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('status', 'active')
     .select('id, name');
   
@@ -1036,24 +1065,26 @@ accounts.post('/:id/activate', async (c) => {
     .select('id, name, verification_tier, verification_status, tenant_id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !existing) {
     throw new NotFoundError('Account', id);
   }
-  
+
   if (existing.verification_status !== 'suspended') {
     throw new ValidationError('Account is not suspended');
   }
-  
+
   // Restore status based on verification tier
   const newStatus = existing.verification_tier > 0 ? 'verified' : 'unverified';
-  
+
   const { error: updateError } = await supabase
     .from('accounts')
     .update({ verification_status: newStatus })
     .eq('id', id)
-    .eq('tenant_id', ctx.tenantId);
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
 
   if (updateError) {
     console.error('Error activating account:', updateError);

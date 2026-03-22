@@ -1,12 +1,13 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createClient } from '../db/client.js';
-import { 
+import {
   mapTransferFromDb,
   logAudit,
   isValidUUID,
   getPaginationParams,
   paginationResponse,
+  getEnv,
 } from '../utils/helpers.js';
 import { createBalanceService } from '../services/balances.js';
 import {
@@ -74,6 +75,7 @@ transfers.get('/', async (c) => {
     .from('transfers')
     .select('*', { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
   
@@ -125,6 +127,7 @@ transfers.get('/', async (c) => {
       .select('id')
       .eq('id', walletId)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (!wallet) {
@@ -152,8 +155,8 @@ transfers.get('/', async (c) => {
   const agentWalletMap = new Map<string, string>();
   if (agentInitiatedIds.length > 0) {
     const [{ data: agents }, { data: wallets }] = await Promise.all([
-      supabase.from('agents').select('id, erc8004_agent_id').in('id', agentInitiatedIds),
-      supabase.from('wallets').select('managed_by_agent_id, wallet_address').in('managed_by_agent_id', agentInitiatedIds).like('wallet_address', '0x%'),
+      supabase.from('agents').select('id, erc8004_agent_id').in('id', agentInitiatedIds).eq('environment', getEnv(ctx)),
+      supabase.from('wallets').select('managed_by_agent_id, wallet_address').in('managed_by_agent_id', agentInitiatedIds).eq('environment', getEnv(ctx)).like('wallet_address', '0x%'),
     ]);
     for (const a of agents || []) {
       if (a.erc8004_agent_id) agentOnChainMap.set(a.id, a.erc8004_agent_id);
@@ -195,6 +198,7 @@ transfers.post('/', async (c) => {
       .from('transfers')
       .select('*')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('idempotency_key', idempotencyKey)
       .single();
     
@@ -225,17 +229,19 @@ transfers.post('/', async (c) => {
     .select('id, name, balance_available, verification_status')
     .eq('id', fromAccountId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fromError || !fromAccount) {
     throw new NotFoundError('Source account', fromAccountId);
   }
-  
+
   const { data: toAccount, error: toError } = await supabase
     .from('accounts')
     .select('id, name, verification_status')
     .eq('id', toAccountId)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
   
   if (toError || !toAccount) {
@@ -302,6 +308,7 @@ transfers.post('/', async (c) => {
     .from('transfers')
     .insert({
       tenant_id: ctx.tenantId,
+      environment: getEnv(ctx),
       type: transferType,
       status: isInternal ? 'completed' : 'processing', // Internal transfers complete instantly
       from_account_id: fromAccountId,
@@ -352,7 +359,8 @@ transfers.post('/', async (c) => {
           failed_at: new Date().toISOString(),
           failure_reason: error.message,
         })
-        .eq('id', transfer.id);
+        .eq('id', transfer.id)
+        .eq('environment', getEnv(ctx));
 
       // Notify tenant admins of failure (fire-and-forget)
       getNotificationRecipients(ctx.tenantId).then(emails => {
@@ -486,19 +494,20 @@ transfers.get('/:id', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (error || !data) {
     throw new NotFoundError('Transfer', id);
   }
 
   // Enrich missing account names
   if (!data.from_account_name && data.from_account_id) {
-    const { data: fromAcct } = await supabase.from('accounts').select('name').eq('id', data.from_account_id).single();
+    const { data: fromAcct } = await supabase.from('accounts').select('name').eq('id', data.from_account_id).eq('environment', getEnv(ctx)).single();
     if (fromAcct?.name) data.from_account_name = fromAcct.name;
   }
   if (!data.to_account_name && data.to_account_id) {
-    const { data: toAcct } = await supabase.from('accounts').select('name').eq('id', data.to_account_id).single();
+    const { data: toAcct } = await supabase.from('accounts').select('name').eq('id', data.to_account_id).eq('environment', getEnv(ctx)).single();
     if (toAcct?.name) data.to_account_name = toAcct.name;
   }
 
@@ -508,6 +517,7 @@ transfers.get('/:id', async (c) => {
       .from('agents')
       .select('erc8004_agent_id')
       .eq('id', data.initiated_by_id)
+      .eq('environment', getEnv(ctx))
       .single();
     if (agent?.erc8004_agent_id) {
       data.initiator_erc8004_agent_id = agent.erc8004_agent_id;
@@ -516,6 +526,7 @@ transfers.get('/:id', async (c) => {
       .from('wallets')
       .select('wallet_address')
       .eq('managed_by_agent_id', data.initiated_by_id)
+      .eq('environment', getEnv(ctx))
       .like('wallet_address', '0x%')
       .limit(1)
       .single();
@@ -580,12 +591,13 @@ transfers.post('/:id/cancel', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !transfer) {
     throw new NotFoundError('Transfer', id);
   }
-  
+
   // Can only cancel pending transfers
   if (transfer.status !== 'pending') {
     const error: any = new ValidationError(`Cannot cancel transfer with status: ${transfer.status}`);
@@ -606,6 +618,7 @@ transfers.post('/:id/cancel', async (c) => {
       failure_reason: 'Cancelled by user',
     })
     .eq('id', id)
+    .eq('environment', getEnv(ctx))
     .select()
     .single();
   

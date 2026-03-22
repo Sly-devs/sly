@@ -35,6 +35,7 @@ export interface RecordPaymentParams {
   settlementTxHash?: string;
   fromAccountId?: string;
   toAccountId?: string;
+  environment?: 'test' | 'live';
 }
 
 export interface RecordSessionVoucherParams {
@@ -49,6 +50,7 @@ export interface RecordSessionVoucherParams {
   paymentMethod: MppPaymentMethod;
   receiptId?: string;
   receiptData?: Record<string, unknown>;
+  environment?: 'test' | 'live';
 }
 
 // ============================================
@@ -65,6 +67,7 @@ export class MppTransferRecorder {
   async recordPayment(params: RecordPaymentParams): Promise<string> {
     const transferId = randomUUID();
     const now = new Date().toISOString();
+    const env = params.environment || 'test';
 
     // Look up agent name for display fields
     let agentName = 'Unknown Agent';
@@ -73,6 +76,7 @@ export class MppTransferRecorder {
       .select('name')
       .eq('id', params.agentId)
       .eq('tenant_id', params.tenantId)
+      .eq('environment', env)
       .single();
     if (agentRow?.name) agentName = agentRow.name;
 
@@ -97,6 +101,7 @@ export class MppTransferRecorder {
       .insert({
         id: transferId,
         tenant_id: params.tenantId,
+        environment: env,
         type: 'mpp',
         status: 'completed',
         amount: params.amount,
@@ -133,6 +138,7 @@ export class MppTransferRecorder {
   async recordSessionVoucher(params: RecordSessionVoucherParams): Promise<string> {
     const transferId = randomUUID();
     const now = new Date().toISOString();
+    const env = params.environment || 'test';
 
     // Look up agent name for display fields
     let agentName = 'Unknown Agent';
@@ -141,6 +147,7 @@ export class MppTransferRecorder {
       .select('name')
       .eq('id', params.agentId)
       .eq('tenant_id', params.tenantId)
+      .eq('environment', env)
       .single();
     if (agentRow?.name) agentName = agentRow.name;
 
@@ -160,6 +167,7 @@ export class MppTransferRecorder {
       .insert({
         id: transferId,
         tenant_id: params.tenantId,
+        environment: env,
         type: 'mpp',
         status: 'completed',
         amount: params.amount,

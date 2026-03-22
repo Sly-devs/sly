@@ -53,6 +53,7 @@ export interface BatchSettlementResult {
 export async function createBatch(
   supabase: SupabaseClient,
   tenantId: string,
+  environment: 'test' | 'live' = 'test',
 ): Promise<{ batchId: string; summary: NetPositionSummary } | null> {
   const summary = await computeNetPositions(supabase, tenantId);
 
@@ -65,6 +66,7 @@ export async function createBatch(
     .from('settlement_batches')
     .insert({
       tenant_id: tenantId,
+      environment,
       status: 'pending',
       intent_count: summary.totalIntents,
       net_transfer_count: summary.positions.filter(p => Math.abs(p.netAmount) >= 0.001).length,
@@ -91,6 +93,7 @@ export async function createBatch(
         updated_at: new Date().toISOString(),
       })
       .eq('tenant_id', tenantId)
+      .eq('environment', environment)
       .eq('status', 'authorized')
       .in('id', allIntentIds);
   }
@@ -113,6 +116,7 @@ export async function executeBatch(
   batchId: string,
   tenantId: string,
   summary: NetPositionSummary,
+  environment: 'test' | 'live' = 'test',
 ): Promise<BatchResult> {
   // Mark batch as processing
   await supabase
@@ -139,7 +143,7 @@ export async function executeBatch(
     const destId = position.netAmount > 0 ? position.walletB : position.walletA;
 
     try {
-      const result = await settleNetPosition(supabase, tenantId, sourceId, destId, absAmount, batchId);
+      const result = await settleNetPosition(supabase, tenantId, sourceId, destId, absAmount, batchId, environment);
       settlements.push({
         sourceWalletId: sourceId,
         destinationWalletId: destId,
@@ -206,13 +210,15 @@ async function settleNetPosition(
   destWalletId: string,
   amount: number,
   batchId: string,
+  environment: 'test' | 'live' = 'test',
 ): Promise<{ txHash?: string; settlementType: 'on_chain' | 'ledger'; transferId?: string }> {
   // Fetch wallet details
   const { data: wallets } = await supabase
     .from('wallets')
     .select('id, wallet_address, wallet_type, provider_wallet_id, balance, owner_account_id')
     .in('id', [sourceWalletId, destWalletId])
-    .eq('tenant_id', tenantId);
+    .eq('tenant_id', tenantId)
+    .eq('environment', environment);
 
   if (!wallets || wallets.length < 2) {
     throw new Error(`Wallets not found for net position ${sourceWalletId} → ${destWalletId}`);
@@ -230,6 +236,7 @@ async function settleNetPosition(
     .from('transfers')
     .insert({
       tenant_id: tenantId,
+      environment,
       from_account_id: srcWallet.owner_account_id,
       to_account_id: dstWallet.owner_account_id,
       amount,

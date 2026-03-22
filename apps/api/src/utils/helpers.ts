@@ -415,3 +415,15 @@ export function buildDeprecationHeader(deprecatedFields: string[]): string | nul
   return warnings.join('; ');
 }
 
+// ============================================
+// ENVIRONMENT HELPERS
+// ============================================
+
+/**
+ * Get the environment ('test' or 'live') from the request context.
+ * Used to filter queries by environment column for sandbox/production isolation.
+ */
+export function getEnv(ctx: { environment?: string; apiKeyEnvironment?: string }): 'test' | 'live' {
+  return (ctx.environment || ctx.apiKeyEnvironment || 'test') as 'test' | 'live';
+}
+

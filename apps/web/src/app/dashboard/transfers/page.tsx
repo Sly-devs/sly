@@ -425,7 +425,7 @@ export default function TransfersPage() {
                     </span>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
-                    {new Date(transfer.createdAt).toLocaleDateString()}
+                    {new Date(transfer.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
                   </td>
                 </tr>
               ))}

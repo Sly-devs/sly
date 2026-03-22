@@ -35,6 +35,7 @@ import {
   type CheckoutStatus,
 } from '../services/ucp/index.js';
 import { createClient } from '../db/client.js';
+import { getEnv } from '../utils/helpers.js';
 import { getCircleFXService } from '../services/circle/fx.js';
 import { createCheckoutTelemetryService } from '../services/telemetry/checkout-telemetry.js';
 import { trackOp } from '../services/ops/track-op.js';
@@ -229,7 +230,8 @@ router.get('/stats', async (c) => {
     const { data, error } = await supabase
       .from('ucp_checkout_sessions')
       .select('currency, totals, status')
-      .eq('tenant_id', ctx.tenantId);
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx));
 
     if (error) {
       return c.json({ error: 'Failed to fetch checkout stats' }, 500);
@@ -676,6 +678,7 @@ router.patch('/:id/edit', async (c) => {
       .update(updates)
       .eq('id', checkoutId)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .select('*')
       .single();
 

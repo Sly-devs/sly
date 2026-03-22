@@ -11,6 +11,7 @@ import {
   normalizeFields,
   buildDeprecationHeader,
   sanitizeSearchInput,
+  getEnv,
 } from '../utils/helpers.js';
 import { createLimitService } from '../services/limits.js';
 import { ValidationError, NotFoundError } from '../middleware/error.js';
@@ -158,6 +159,7 @@ agents.get('/', async (c) => {
       )
     `, { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
   
@@ -193,6 +195,7 @@ agents.get('/', async (c) => {
       .from('wallets')
       .select('managed_by_agent_id, wallet_address')
       .in('managed_by_agent_id', agentIds)
+      .eq('environment', getEnv(ctx))
       .like('wallet_address', '0x%');
     for (const w of wallets || []) {
       if (w.managed_by_agent_id && w.wallet_address) {
@@ -280,6 +283,7 @@ agents.post('/', async (c) => {
       .select('id, type, name, verification_tier')
       .eq('id', accountId)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (parentError || !pa) {
@@ -328,6 +332,7 @@ agents.post('/', async (c) => {
   // Story 59.15: parent_account_id is nullable for standalone agents
   const insertData: Record<string, any> = {
     tenant_id: ctx.tenantId,
+    environment: getEnv(ctx),
     parent_account_id: accountId || null,
     name,
     description: description || null,
@@ -366,11 +371,12 @@ agents.post('/', async (c) => {
       .select('id')
       .eq('id', wallet_id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (walletError || !wallet) {
       // Rollback agent creation
-      await supabase.from('agents').delete().eq('id', data.id);
+      await supabase.from('agents').delete().eq('id', data.id).eq('environment', getEnv(ctx));
       throw new NotFoundError('Wallet', wallet_id);
     }
 
@@ -379,7 +385,8 @@ agents.post('/', async (c) => {
       .from('wallets')
       .update({ managed_by_agent_id: data.id })
       .eq('id', wallet_id)
-      .eq('tenant_id', ctx.tenantId);
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx));
 
     assignedWalletId = wallet_id;
   } else if (auto_create_wallet !== false && accountId) {
@@ -406,6 +413,7 @@ agents.post('/', async (c) => {
             .from('wallets')
             .insert({
               tenant_id: ctx.tenantId,
+              environment: getEnv(ctx),
               owner_account_id: accountId,
               managed_by_agent_id: data.id,
               balance: 0,
@@ -441,7 +449,8 @@ agents.post('/', async (c) => {
                 wallet_verified_at: new Date().toISOString(),
               })
               .eq('id', data.id)
-              .eq('tenant_id', ctx.tenantId);
+              .eq('tenant_id', ctx.tenantId)
+              .eq('environment', getEnv(ctx));
             console.log(`[Agent] Created Circle sandbox wallet ${wallet.id} (${circleWallet.address}) for agent ${data.id}`);
           }
         }
@@ -458,6 +467,7 @@ agents.post('/', async (c) => {
         .from('wallets')
         .insert({
           tenant_id: ctx.tenantId,
+          environment: getEnv(ctx),
           owner_account_id: accountId,
           managed_by_agent_id: data.id,
           balance: 0,
@@ -570,8 +580,9 @@ agents.get('/:id', async (c) => {
     `)
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (error || !data) {
     throw new NotFoundError('Agent', id);
   }
@@ -591,6 +602,7 @@ agents.get('/:id', async (c) => {
     .from('wallets')
     .select('wallet_address')
     .eq('managed_by_agent_id', id)
+    .eq('environment', getEnv(ctx))
     .like('wallet_address', '0x%')
     .limit(1)
     .single();
@@ -645,12 +657,13 @@ agents.patch('/:id', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !existing) {
     throw new NotFoundError('Agent', id);
   }
-  
+
   // Parse and validate body
   let body;
   try {
@@ -658,7 +671,7 @@ agents.patch('/:id', async (c) => {
   } catch {
     throw new ValidationError('Invalid JSON body');
   }
-  
+
   const parsed = updateAgentSchema.safeParse(body);
   if (!parsed.success) {
     throw new ValidationError('Validation failed', parsed.error.flatten());
@@ -707,6 +720,7 @@ agents.patch('/:id', async (c) => {
         .from('accounts')
         .select('verification_tier')
         .eq('id', existing.parent_account_id)
+        .eq('environment', getEnv(ctx))
         .single();
 
       const parentTier = parentAccount?.verification_tier ?? 0;
@@ -750,6 +764,7 @@ agents.patch('/:id', async (c) => {
     .update(updates)
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .select(`
       *,
       accounts!agents_parent_account_id_fkey (
@@ -757,12 +772,12 @@ agents.patch('/:id', async (c) => {
       )
     `)
     .single();
-  
+
   if (error) {
     console.error('Error updating agent:', error);
     throw new Error('Failed to update agent in database');
   }
-  
+
   // Audit log
   await logAudit(supabase, {
     tenantId: ctx.tenantId,
@@ -820,20 +835,22 @@ agents.delete('/:id', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !existing) {
     throw new NotFoundError('Agent', id);
   }
-  
+
   // Check for active streams managed by this agent
   const { count: streamCount } = await supabase
     .from('streams')
     .select('*', { count: 'exact', head: true })
+    .eq('environment', getEnv(ctx))
     .eq('managed_by_type', 'agent')
     .eq('managed_by_id', id)
     .eq('status', 'active');
-  
+
   if (streamCount && streamCount > 0) {
     const error: any = new ValidationError('Cannot delete agent with active managed streams');
     error.details = {
@@ -849,13 +866,14 @@ agents.delete('/:id', async (c) => {
     .from('agents')
     .delete()
     .eq('id', id)
-    .eq('tenant_id', ctx.tenantId);
-  
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
+
   if (error) {
     console.error('Error deleting agent:', error);
     throw new Error('Failed to delete agent from database');
   }
-  
+
   // Audit log
   await logAudit(supabase, {
     tenantId: ctx.tenantId,
@@ -903,12 +921,13 @@ agents.post('/:id/suspend', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !existing) {
     throw new NotFoundError('Agent', id);
   }
-  
+
   if (existing.status === 'suspended') {
     const error: any = new ValidationError('Agent is already suspended');
     error.details = {
@@ -922,6 +941,7 @@ agents.post('/:id/suspend', async (c) => {
     .from('agents')
     .update({ status: 'suspended' })
     .eq('id', id)
+    .eq('environment', getEnv(ctx))
     .select(`
       *,
       accounts!agents_parent_account_id_fkey (
@@ -929,7 +949,7 @@ agents.post('/:id/suspend', async (c) => {
       )
     `)
     .single();
-  
+
   if (error) {
     console.error('Error suspending agent:', error);
     throw new Error('Failed to suspend agent in database');
@@ -982,12 +1002,13 @@ agents.post('/:id/activate', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !existing) {
     throw new NotFoundError('Agent', id);
   }
-  
+
   if (existing.status === 'active') {
     const error: any = new ValidationError('Agent is already active');
     error.details = {
@@ -1001,6 +1022,7 @@ agents.post('/:id/activate', async (c) => {
     .from('agents')
     .update({ status: 'active' })
     .eq('id', id)
+    .eq('environment', getEnv(ctx))
     .select(`
       *,
       accounts!agents_parent_account_id_fkey (
@@ -1008,7 +1030,7 @@ agents.post('/:id/activate', async (c) => {
       )
     `)
     .single();
-  
+
   if (error) {
     console.error('Error activating agent:', error);
     throw new Error('Failed to activate agent in database');
@@ -1062,17 +1084,19 @@ agents.get('/:id/streams', async (c) => {
     .select('id, name')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (agentError || !agent) {
     throw new NotFoundError('Agent', id);
   }
-  
+
   // Get streams managed by this agent
   const { data, error } = await supabase
     .from('streams')
     .select('*')
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('managed_by_type', 'agent')
     .eq('managed_by_id', id)
     .order('created_at', { ascending: false });
@@ -1110,12 +1134,13 @@ agents.get('/:id/limits', async (c) => {
     .select('id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (!agentExists) {
     throw new NotFoundError('Agent', id);
   }
-  
+
   const limitService = createLimitService(supabase);
   const stats = await limitService.getUsageStats(id);
   
@@ -1140,6 +1165,7 @@ agents.get('/:id/transactions', async (c) => {
     .select('id, name')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (!agent) {
@@ -1183,6 +1209,7 @@ agents.get('/:id/transactions', async (c) => {
     .from('transfers')
     .select('id, type, status, currency, amount, description, created_at, from_account_id, to_account_id, from_account_name, to_account_name, fee_amount, protocol_metadata', { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('initiated_by_type', 'agent')
     .eq('initiated_by_id', id)
     .not('type', 'eq', 'acp')
@@ -1200,6 +1227,7 @@ agents.get('/:id/transactions', async (c) => {
     .from('wallets')
     .select('id')
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('managed_by_agent_id', id);
 
   const agentWalletIds = (agentWallets || []).map((w: any) => w.id);
@@ -1213,6 +1241,7 @@ agents.get('/:id/transactions', async (c) => {
       .from('transfers')
       .select('id, type, status, currency, amount, description, created_at, from_account_id, to_account_id, from_account_name, to_account_name, fee_amount, protocol_metadata', { count: 'exact' })
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('type', 'x402')
       .order('created_at', { ascending: false });
 
@@ -1255,7 +1284,8 @@ agents.get('/:id/transactions', async (c) => {
       .from('transfers')
       .select('id, amount, currency')
       .in('id', a2aTransferIds)
-      .eq('tenant_id', ctx.tenantId);
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx));
     for (const t of a2aLinkedTransfers || []) {
       a2aTransferAmounts.set(t.id, { amount: Number(t.amount) || 0, currency: t.currency });
     }
@@ -1384,17 +1414,19 @@ agents.post('/:id/verify', async (c) => {
     .select('*')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
-  
+
   if (fetchError || !existing) {
     throw new NotFoundError('Agent', id);
   }
-  
+
   // Fetch parent account verification tier
   const { data: parentAccount } = await supabase
     .from('accounts')
     .select('verification_tier')
     .eq('id', existing.parent_account_id)
+    .eq('environment', getEnv(ctx))
     .single();
 
   const parentTier = parentAccount?.verification_tier ?? 0;
@@ -1418,6 +1450,7 @@ agents.post('/:id/verify', async (c) => {
       effective_limits_capped: capped,
     })
     .eq('id', id)
+    .eq('environment', getEnv(ctx))
     .select(`
       *,
       accounts!agents_parent_account_id_fkey (
@@ -1482,6 +1515,7 @@ agents.post('/:id/rotate-token', async (c) => {
     .select('id, name, tenant_id, status, auth_token_prefix')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (fetchError || !existing) {
@@ -1512,7 +1546,8 @@ agents.post('/:id/rotate-token', async (c) => {
       auth_token_prefix: newTokenPrefix,
     })
     .eq('id', id)
-    .eq('tenant_id', ctx.tenantId);
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
 
   if (updateError) {
     console.error('Error rotating token:', updateError);
@@ -1582,6 +1617,7 @@ agents.post('/:id/signing-keys', async (c) => {
     .select('id, name, status, kya_tier')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (agentError || !agent) {
@@ -1685,6 +1721,7 @@ agents.get('/:id/signing-keys', async (c) => {
     .select('id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (agentError || !agent) {
@@ -1743,6 +1780,7 @@ agents.delete('/:id/signing-keys', async (c) => {
     .select('id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (agentError || !agent) {
@@ -1831,6 +1869,7 @@ agents.post('/:id/sign-request', async (c) => {
     .select('id, name, status, kya_tier')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (agentError || !agent) {
@@ -2004,6 +2043,7 @@ agents.get('/:id/feedback/summary', async (c) => {
     .select('id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (!agent) throw new NotFoundError('Agent');
@@ -2062,6 +2102,7 @@ agents.get('/:id/feedback', async (c) => {
     .select('id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (!agent) throw new NotFoundError('Agent');
@@ -2113,6 +2154,7 @@ agents.get('/:id/skills', async (c) => {
     .select('id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (!agent) throw new NotFoundError('Agent');
@@ -2157,6 +2199,7 @@ agents.post('/:id/skills', async (c) => {
     .select('id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (!agent) throw new NotFoundError('Agent');
@@ -2279,6 +2322,7 @@ agents.put('/:id/endpoint', async (c) => {
     .select('id, name')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (!agent) throw new NotFoundError('Agent');
@@ -2294,6 +2338,7 @@ agents.put('/:id/endpoint', async (c) => {
     })
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .select('id, endpoint_url, endpoint_type, endpoint_enabled')
     .single();
 
@@ -2336,6 +2381,7 @@ agents.get('/:id/endpoint', async (c) => {
     .select('id, endpoint_url, endpoint_type, endpoint_enabled, endpoint_secret')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (error || !agent) throw new NotFoundError('Agent');
@@ -2367,6 +2413,7 @@ agents.delete('/:id/endpoint', async (c) => {
     .select('id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (!agent) throw new NotFoundError('Agent');
@@ -2381,7 +2428,8 @@ agents.delete('/:id/endpoint', async (c) => {
       processing_mode: 'manual',
     })
     .eq('id', id)
-    .eq('tenant_id', ctx.tenantId);
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
 
   if (error) throw new Error(error.message);
 
@@ -2416,6 +2464,7 @@ agents.get('/:id/wallet', async (c) => {
     .select('id, name')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (agentError || !agent) {
@@ -2428,6 +2477,7 @@ agents.get('/:id/wallet', async (c) => {
     .select('*')
     .eq('managed_by_agent_id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('status', 'active')
     .order('created_at', { ascending: false });
 
@@ -2492,6 +2542,7 @@ agents.get('/:id/wallet/exposures', async (c) => {
     .from('transfers')
     .select('to_account_id, amount, currency, created_at')
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('type', 'mpp')
     .eq('status', 'completed')
     .or(`from_account_id.eq.${id},protocol_metadata->>agent_id.eq.${id}`)
@@ -2571,6 +2622,7 @@ agents.post('/:id/wallet', async (c) => {
     .select('id, name, wallet_address, wallet_verification_status')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (agentError || !agent) {
@@ -2591,7 +2643,8 @@ agents.post('/:id/wallet', async (c) => {
       updated_at: new Date().toISOString(),
     })
     .eq('id', id)
-    .eq('tenant_id', ctx.tenantId);
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
 
   return c.json({
     data: {
@@ -2635,6 +2688,7 @@ agents.post('/:id/wallet/verify', async (c) => {
     .select('id, name, wallet_address, wallet_verification_status, tenant_id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (agentError || !agent) {
@@ -2673,7 +2727,8 @@ agents.post('/:id/wallet/verify', async (c) => {
       updated_at: now,
     })
     .eq('id', id)
-    .eq('tenant_id', ctx.tenantId);
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx));
 
   // Create or update external wallet record linked to this agent
   const { data: existingWallet } = await supabase
@@ -2681,6 +2736,7 @@ agents.post('/:id/wallet/verify', async (c) => {
     .select('id')
     .eq('managed_by_agent_id', id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('wallet_type', 'external')
     .limit(1)
     .maybeSingle();
@@ -2696,13 +2752,15 @@ agents.post('/:id/wallet/verify', async (c) => {
         updated_at: now,
       })
       .eq('id', existingWallet.id)
-      .eq('tenant_id', ctx.tenantId);
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx));
   } else {
     // Find owner account (agent's parent or first business account)
     const { data: agentFull } = await supabase
       .from('agents')
       .select('parent_account_id')
       .eq('id', id)
+      .eq('environment', getEnv(ctx))
       .single();
 
     let ownerAccountId = agentFull?.parent_account_id;
@@ -2711,6 +2769,7 @@ agents.post('/:id/wallet/verify', async (c) => {
         .from('accounts')
         .select('id')
         .eq('tenant_id', ctx.tenantId)
+        .eq('environment', getEnv(ctx))
         .eq('type', 'business')
         .limit(1);
       ownerAccountId = accounts?.[0]?.id;
@@ -2719,6 +2778,7 @@ agents.post('/:id/wallet/verify', async (c) => {
     if (ownerAccountId) {
       await supabase.from('wallets').insert({
         tenant_id: ctx.tenantId,
+        environment: getEnv(ctx),
         owner_account_id: ownerAccountId,
         managed_by_agent_id: id,
         balance: 0,

@@ -392,8 +392,8 @@ describe('isOnChainCapable()', () => {
     expect(result).toBe(false);
   });
 
-  it('should return false outside sandbox', () => {
-    process.env.PAYOS_ENVIRONMENT = 'production';
+  it('should return false in mock environment', () => {
+    process.env.PAYOS_ENVIRONMENT = 'mock';
 
     const result = isOnChainCapable(
       { wallet_type: 'circle_custodial', provider_wallet_id: 'circle-001' },
@@ -401,6 +401,20 @@ describe('isOnChainCapable()', () => {
     );
 
     expect(result).toBe(false);
+
+    // Cleanup
+    process.env.PAYOS_ENVIRONMENT = 'sandbox';
+  });
+
+  it('should return true in production environment', () => {
+    process.env.PAYOS_ENVIRONMENT = 'production';
+
+    const result = isOnChainCapable(
+      { wallet_type: 'circle_custodial', provider_wallet_id: 'circle-001' },
+      '0x1234567890abcdef',
+    );
+
+    expect(result).toBe(true);
 
     // Cleanup
     process.env.PAYOS_ENVIRONMENT = 'sandbox';

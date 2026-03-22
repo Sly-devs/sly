@@ -603,6 +603,31 @@ export function getCircleClient(): CircleClient {
 }
 
 /**
+ * Get the Circle LIVE client for production/mainnet operations.
+ * Uses CIRCLE_LIVE_API_KEY and CIRCLE_LIVE_ENTITY_SECRET env vars.
+ */
+let liveClient: CircleClient | null = null;
+export function getCircleLiveClient(): CircleClient {
+  if (!liveClient) {
+    const apiKey = process.env.CIRCLE_LIVE_API_KEY;
+
+    if (!apiKey) {
+      throw new Error(
+        'CIRCLE_LIVE_API_KEY environment variable is required for production wallet operations.'
+      );
+    }
+
+    liveClient = new CircleClient({
+      apiKey,
+      entitySecret: process.env.CIRCLE_LIVE_ENTITY_SECRET || process.env.CIRCLE_ENTITY_SECRET,
+      baseUrl: CIRCLE_W3S_URL,
+    });
+  }
+
+  return liveClient;
+}
+
+/**
  * Create a Circle client with custom configuration
  */
 export function createCircleClient(config: CircleClientConfig): CircleClient {

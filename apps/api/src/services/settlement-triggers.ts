@@ -330,7 +330,8 @@ export async function getRuleExecutions(
  * Evaluate all scheduled rules (called by cron worker)
  */
 export async function evaluateScheduledRules(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  environment: 'test' | 'live' = 'test'
 ): Promise<{ processed: number; triggered: number }> {
   // Get all enabled schedule rules
   const { data: rules, error } = await supabase
@@ -374,7 +375,8 @@ export async function evaluateThresholdRules(
   tenantId: string,
   walletId: string,
   currentBalance: number,
-  currency: string
+  currency: string,
+  environment: 'test' | 'live' = 'test'
 ): Promise<{ triggered: boolean; executions: string[] }> {
   // Use database function to find applicable threshold rules
   const { data: rules, error } = await supabase
@@ -421,7 +423,8 @@ export async function evaluateImmediateRules(
   transferType: string,
   transferId: string,
   amount: number,
-  currency: string
+  currency: string,
+  environment: 'test' | 'live' = 'test'
 ): Promise<{ triggered: boolean; execution_id?: string }> {
   // Find applicable immediate rules
   const { data: rules } = await supabase
@@ -463,7 +466,8 @@ export async function requestManualSettlement(
   tenantId: string,
   walletId: string,
   amount: number,
-  currency: string
+  currency: string,
+  environment: 'test' | 'live' = 'test'
 ): Promise<{
   success: boolean;
   execution_id?: string;
@@ -508,6 +512,7 @@ export async function requestManualSettlement(
     .select('id, balance, currency')
     .eq('id', walletId)
     .eq('tenant_id', tenantId)
+    .eq('environment', environment)
     .single();
 
   if (walletError || !wallet) {
@@ -551,7 +556,8 @@ async function executeRule(
   supabase: SupabaseClient,
   rule: SettlementRule,
   triggerReason: string,
-  triggerContext: Record<string, unknown>
+  triggerContext: Record<string, unknown>,
+  environment: 'test' | 'live' = 'test'
 ): Promise<{
   success: boolean;
   execution_id?: string;
@@ -602,6 +608,7 @@ async function executeRule(
         .select('balance, currency')
         .eq('id', walletId)
         .eq('tenant_id', rule.tenant_id)
+        .eq('environment', environment)
         .single();
 
       if (!wallet) {
@@ -636,6 +643,7 @@ async function executeRule(
       .from('transfers')
       .insert({
         tenant_id: rule.tenant_id,
+        environment,
         type: 'settlement',
         status: 'pending',
         amount: settleAmount,

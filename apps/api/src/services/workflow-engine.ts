@@ -295,7 +295,10 @@ function interpolateObject(obj: unknown, data: Record<string, unknown>): unknown
 // ============================================
 
 export class WorkflowEngine {
-  constructor(private supabase: SupabaseClient) {}
+  constructor(
+    private supabase: SupabaseClient,
+    private environment: 'test' | 'live' = 'test',
+  ) {}
 
   // ============================================
   // Template CRUD (Story 29.1)
@@ -435,6 +438,7 @@ export class WorkflowEngine {
       .from('workflow_instances')
       .insert({
         tenant_id: tenantId,
+        environment: this.environment,
         template_id: template.id,
         template_version: template.version,
         status: 'pending',
@@ -457,6 +461,7 @@ export class WorkflowEngine {
     // Create step execution records for all steps
     const stepInserts = template.steps.map((step, index) => ({
       tenant_id: tenantId,
+      environment: this.environment,
       instance_id: instance.id,
       step_index: index,
       step_type: step.type,
@@ -513,6 +518,7 @@ export class WorkflowEngine {
       .from('workflow_instances')
       .select('*', { count: 'exact' })
       .eq('tenant_id', tenantId)
+      .eq('environment', this.environment)
       .order('created_at', { ascending: false });
 
     if (options.status) query = query.eq('status', options.status);
@@ -569,13 +575,13 @@ export class WorkflowEngine {
     if (error) throw new Error(`Failed to start instance: ${error.message}`);
 
     // Execute the first step
-    await this.executeCurrentStep(tenantId, instanceId);
+    await this.executeCurrentStep(tenantId, instanceId, this.environment);
 
     // Re-fetch to get latest state
     return (await this.getInstance(tenantId, instanceId))!;
   }
 
-  private async executeCurrentStep(tenantId: string, instanceId: string): Promise<void> {
+  private async executeCurrentStep(tenantId: string, instanceId: string, environment: 'test' | 'live' = 'test'): Promise<void> {
     const instance = await this.getInstance(tenantId, instanceId);
     if (!instance || instance.status !== 'running') return;
 
@@ -1541,7 +1547,8 @@ export class WorkflowEngine {
     tenantId: string,
     instanceId: string,
     currentIndex: number,
-    stepOutput: Record<string, unknown>
+    stepOutput: Record<string, unknown>,
+    environment: 'test' | 'live' = 'test'
   ): Promise<void> {
     // Merge step output into instance context
     const instance = await this.getInstance(tenantId, instanceId);
@@ -1574,7 +1581,7 @@ export class WorkflowEngine {
       .update({ current_step_index: nextIndex, context: newContext, status: 'running' })
       .eq('id', instanceId);
 
-    await this.executeCurrentStep(tenantId, instanceId);
+    await this.executeCurrentStep(tenantId, instanceId, environment);
   }
 
   private async advanceToStep(tenantId: string, instanceId: string, targetIndex: number): Promise<void> {

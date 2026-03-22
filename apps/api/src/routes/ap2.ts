@@ -12,7 +12,7 @@ import { getAP2MandateService } from '../services/ap2/index.js';
 import { ValidationError } from '../middleware/error.js';
 import { randomUUID } from 'crypto';
 import { createClient } from '../db/client.js';
-import { sanitizeSearchInput } from '../utils/helpers.js';
+import { sanitizeSearchInput, getEnv } from '../utils/helpers.js';
 import { 
   createSpendingPolicyService,
   type PolicyContext 
@@ -96,6 +96,7 @@ ap2.post('/mandates', async (c) => {
       .select('id, status, account_id')
       .eq('id', funding_source_id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
     if (fsError || !fs) {
       throw new ValidationError('funding_source_id not found');
@@ -119,12 +120,15 @@ ap2.post('/mandates', async (c) => {
     .from('agents')
     .select('name')
     .eq('id', agent_id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   const { data: mandate, error } = await supabase
     .from('ap2_mandates')
     .insert({
       tenant_id: ctx.tenantId,
+      environment: getEnv(ctx),
       account_id,
       mandate_id,
       mandate_type,
@@ -174,6 +178,7 @@ ap2.get('/mandates/:id', async (c) => {
     .from('ap2_mandates')
     .select('*')
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq(col, id)
     .single();
 
@@ -264,6 +269,7 @@ ap2.patch('/mandates/:id', async (c) => {
     .update(updates)
     .eq(col, id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .select('*')
     .single();
 
@@ -300,6 +306,7 @@ ap2.patch('/mandates/:id/cancel', async (c) => {
     .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq(col, id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq('status', 'active')
     .select('*')
     .single();
@@ -405,6 +412,7 @@ ap2.get('/mandates', async (c) => {
     .from('ap2_mandates')
     .select('*', { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
 
@@ -469,6 +477,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
     .from('ap2_mandates')
     .select('*')
     .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .eq(col, id)
     .single();
 
@@ -535,6 +544,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
     .from('ap2_mandate_executions')
     .insert({
       tenant_id: ctx.tenantId,
+      environment: getEnv(ctx),
       mandate_id: mandate.id,
       execution_index: newExecIndex,
       amount: execAmount,
@@ -578,6 +588,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
         .select('name')
         .eq('id', destAccountId)
         .eq('tenant_id', ctx.tenantId)
+        .eq('environment', getEnv(ctx))
         .single();
       if (destAccount) destAccountName = destAccount.name;
     }
@@ -614,6 +625,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
       .select('id, status, provider, type, account_id')
       .eq('id', mandate.funding_source_id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (fs && fs.status === 'active') {
@@ -622,6 +634,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
         .from('funding_transactions')
         .insert({
           tenant_id: ctx.tenantId,
+          environment: getEnv(ctx),
           funding_source_id: fs.id,
           account_id: fs.account_id,
           amount_cents: Math.round(execAmount * 100),
@@ -661,6 +674,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
       .from('wallets')
       .select('id, balance, currency, owner_account_id, status')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('managed_by_agent_id', mandate.agent_id)
       .eq('status', 'active');
 
@@ -673,6 +687,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
         .from('wallets')
         .select('id, balance, currency, owner_account_id, status')
         .eq('tenant_id', ctx.tenantId)
+        .eq('environment', getEnv(ctx))
         .eq('owner_account_id', mandate.account_id)
         .eq('status', 'active')
         .order('managed_by_agent_id', { ascending: false, nullsFirst: false });
@@ -691,8 +706,8 @@ ap2.post('/mandates/:id/execute', async (c) => {
 
       // Look up account name and agent name for the transfer record
       const [{ data: fromAccount }, { data: agentRecord }] = await Promise.all([
-        supabase.from('accounts').select('name').eq('id', wallet.owner_account_id).eq('tenant_id', ctx.tenantId).single(),
-        supabase.from('agents').select('name').eq('id', mandate.agent_id).eq('tenant_id', ctx.tenantId).single(),
+        supabase.from('accounts').select('name').eq('id', wallet.owner_account_id).eq('tenant_id', ctx.tenantId).eq('environment', getEnv(ctx)).single(),
+        supabase.from('agents').select('name').eq('id', mandate.agent_id).eq('tenant_id', ctx.tenantId).eq('environment', getEnv(ctx)).single(),
       ]);
 
       const { error: walletUpdateError } = await supabase
@@ -712,6 +727,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
         const now = new Date().toISOString();
         const transferInsert: Record<string, any> = {
           tenant_id: ctx.tenantId,
+          environment: getEnv(ctx),
           from_account_id: wallet.owner_account_id,
           from_account_name: fromAccount?.name || '',
           amount: execAmount,
@@ -786,6 +802,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
               .select('wallet_address, network')
               .eq('managed_by_agent_id', recipientAgentId)
               .eq('tenant_id', ctx.tenantId)
+              .eq('environment', getEnv(ctx))
               .like('network', 'tempo-%')
               .eq('status', 'active')
               .limit(1)
@@ -901,6 +918,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
           .select('balance_total, balance_available')
           .eq('id', wallet.owner_account_id)
           .eq('tenant_id', ctx.tenantId)
+          .eq('environment', getEnv(ctx))
           .single();
 
         if (account) {
@@ -914,7 +932,8 @@ ap2.post('/mandates/:id/execute', async (c) => {
               updated_at: new Date().toISOString(),
             })
             .eq('id', wallet.owner_account_id)
-            .eq('tenant_id', ctx.tenantId);
+            .eq('tenant_id', ctx.tenantId)
+            .eq('environment', getEnv(ctx));
 
           // Debit ledger entry for sender
           await supabase
@@ -939,6 +958,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
             .select('balance_total, balance_available, currency')
             .eq('id', crossBorderInfo.to_account_id)
             .eq('tenant_id', ctx.tenantId)
+            .eq('environment', getEnv(ctx))
             .single();
 
           if (destAcct) {
@@ -952,7 +972,8 @@ ap2.post('/mandates/:id/execute', async (c) => {
                 updated_at: new Date().toISOString(),
               })
               .eq('id', crossBorderInfo.to_account_id)
-              .eq('tenant_id', ctx.tenantId);
+              .eq('tenant_id', ctx.tenantId)
+              .eq('environment', getEnv(ctx));
 
             // Credit ledger entry for recipient
             await supabase
@@ -1097,6 +1118,7 @@ ap2.post('/payments', async (c) => {
       .select('id')
       .eq('managed_by_agent_id', mandate.payer.agent_id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('status', 'active')
       .single();
     
@@ -1289,6 +1311,7 @@ ap2.get('/analytics', async (c) => {
       .from('transfers')
       .select('id, amount, fee_amount, created_at, protocol_metadata')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .eq('type', 'ap2')
       .eq('status', 'completed')
       .gte('created_at', start.toISOString())
@@ -1298,7 +1321,8 @@ ap2.get('/analytics', async (c) => {
     const { data: mandates } = await supabase
       .from('ap2_mandates')
       .select('*')
-      .eq('tenant_id', ctx.tenantId);
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx));
 
     // Calculate revenue and fees
     const revenue = transfers?.reduce((sum, t) => sum + parseFloat(t.amount), 0) || 0;

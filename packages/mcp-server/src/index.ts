@@ -21,9 +21,11 @@ import { createMcpServer } from './server-factory.js';
 // Re-export for external consumers (e.g., apps/api remote MCP endpoint)
 export { tools } from './tools.js';
 export { createMcpServer } from './server-factory.js';
+export type { McpContext } from './server-factory.js';
 
 // Get configuration from environment
 const SLY_API_KEY = process.env.SLY_API_KEY;
+const SLY_API_KEY_LIVE = process.env.SLY_API_KEY_LIVE;
 const SLY_ENVIRONMENT = (process.env.SLY_ENVIRONMENT as 'sandbox' | 'testnet' | 'production') || 'sandbox';
 
 if (!SLY_API_KEY) {
@@ -41,8 +43,12 @@ const sly = new Sly({
 // Derive API URL for direct fetch calls (batch operations)
 const SLY_API_URL = process.env.SLY_API_URL || getEnvironmentConfig(SLY_ENVIRONMENT).apiUrl;
 
+// Build keys map for runtime environment switching
+const keys: Record<string, string> = { sandbox: SLY_API_KEY };
+if (SLY_API_KEY_LIVE) keys.production = SLY_API_KEY_LIVE;
+
 // Create MCP server with all tools
-const server = createMcpServer(sly, SLY_API_URL, SLY_API_KEY);
+const server = createMcpServer(sly, SLY_API_URL, SLY_API_KEY, keys);
 
 /**
  * Start the server

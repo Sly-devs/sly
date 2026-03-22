@@ -20,7 +20,7 @@ import { getCircleService, USDC_CONTRACTS, EURC_CONTRACTS } from '../services/ci
 import { getCircleServiceForTenant } from '../services/circle/index.js';
 import { settleWalletTransfer, isOnChainCapable } from '../services/wallet-settlement.js';
 import { getWalletVerificationService } from '../services/wallet/index.js';
-import { normalizeFields, buildDeprecationHeader } from '../utils/helpers.js';
+import { normalizeFields, buildDeprecationHeader, getEnv } from '../utils/helpers.js';
 import { triggerWorkflows } from '../services/workflow-trigger.js';
 import { trackOp } from '../services/ops/track-op.js';
 import { OpType } from '../services/ops/operation-types.js';
@@ -251,6 +251,7 @@ app.post('/', async (c) => {
       .select('id')
       .eq('id', accountId)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (accountError || !account) {
@@ -266,6 +267,7 @@ app.post('/', async (c) => {
         .select('id')
         .eq('id', validated.managedByAgentId)
         .eq('tenant_id', ctx.tenantId)
+        .eq('environment', getEnv(ctx))
         .single();
 
       if (agentError || !agent) {
@@ -337,6 +339,7 @@ app.post('/', async (c) => {
       .from('wallets')
       .insert({
         tenant_id: ctx.tenantId,
+        environment: getEnv(ctx),
         owner_account_id: accountId,
         managed_by_agent_id: validated.managedByAgentId || null,
         balance: validated.initialBalance,
@@ -386,6 +389,7 @@ app.post('/', async (c) => {
         .from('transfers')
         .insert({
           tenant_id: ctx.tenantId,
+          environment: getEnv(ctx),
           from_account_id: accountId,
           to_account_id: accountId,
           amount: validated.initialBalance,
@@ -466,6 +470,7 @@ app.get('/', async (c) => {
       .from('wallets')
       .select('*', { count: 'exact' })
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .order('created_at', { ascending: false });
 
     // Apply filters
@@ -550,6 +555,7 @@ app.post('/external', async (c) => {
       .select('id')
       .eq('id', accountId)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (accountError || !account) {
@@ -606,6 +612,7 @@ app.post('/external', async (c) => {
       .from('wallets')
       .insert({
         tenant_id: ctx.tenantId,
+        environment: getEnv(ctx),
         owner_account_id: accountId,
         managed_by_agent_id: validated.managedByAgentId || null,
         balance: 0, // External wallet balance must be synced
@@ -774,6 +781,7 @@ app.get('/:id', async (c) => {
       .select('*')
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (error || !wallet) {
@@ -785,6 +793,7 @@ app.get('/:id', async (c) => {
       .from('transfers')
       .select('id, from_account_id, to_account_id, amount, currency, status, type, created_at, protocol_metadata')
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .or(`protocol_metadata->>wallet_id.eq.${id}`)
       .order('created_at', { ascending: false })
       .limit(20);
@@ -864,8 +873,9 @@ app.get('/:id/balance', async (c) => {
         const walletRecord = wallet as any;
         if (walletRecord.wallet_type === 'circle_custodial' && walletRecord.provider_wallet_id) {
           // Circle wallet: use Circle API for balance
-          const { getCircleClient } = await import('../services/circle/client.js');
-          const circle = getCircleClient();
+          const isLiveBalEnv = getEnv(ctx) === 'live';
+          const { getCircleClient, getCircleLiveClient } = await import('../services/circle/client.js');
+          const circle = isLiveBalEnv ? getCircleLiveClient() : getCircleClient();
           const balance = await circle.getUsdcBalance(walletRecord.provider_wallet_id);
           onChainBalance = balance.formatted.toString();
         } else if (wallet.wallet_address && !wallet.wallet_address.startsWith('internal://')) {
@@ -948,6 +958,7 @@ app.patch('/:id', async (c) => {
       .select('id')
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (fetchError || !existing) {
@@ -1025,6 +1036,7 @@ app.post('/:id/deposit', async (c) => {
       .select('*')
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (walletError || !wallet) {
@@ -1076,6 +1088,7 @@ app.post('/:id/deposit', async (c) => {
       .from('transfers')
       .insert({
         tenant_id: ctx.tenantId,
+        environment: getEnv(ctx),
         from_account_id: fromAccountId,
         to_account_id: wallet.owner_account_id,
         amount: validated.amount,
@@ -1160,6 +1173,7 @@ app.post('/:id/withdraw', async (c) => {
       .select('*')
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (walletError || !wallet) {
@@ -1222,6 +1236,7 @@ app.post('/:id/withdraw', async (c) => {
       .from('transfers')
       .insert({
         tenant_id: ctx.tenantId,
+        environment: getEnv(ctx),
         from_account_id: wallet.owner_account_id,
         to_account_id: validated.destinationAccountId,
         amount: validated.amount,
@@ -1302,6 +1317,7 @@ app.delete('/:id', async (c) => {
       .select('id, balance')
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (walletError || !wallet) {
@@ -1386,6 +1402,7 @@ app.post('/:id/sync', async (c) => {
       .select('*')
       .eq('id', walletId)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (fetchError || !wallet) {
@@ -1406,8 +1423,9 @@ app.post('/:id/sync', async (c) => {
 
     // Circle custodial wallets: use Circle API (authoritative source of truth)
     if (wallet.wallet_type === 'circle_custodial' && wallet.provider_wallet_id) {
-      const { getCircleClient } = await import('../services/circle/client.js');
-      const circle = getCircleClient();
+      const isLiveSyncEnv = getEnv(ctx) === 'live';
+      const { getCircleClient, getCircleLiveClient } = await import('../services/circle/client.js');
+      const circle = isLiveSyncEnv ? getCircleLiveClient() : getCircleClient();
       const balances = await circle.getWalletBalances(wallet.provider_wallet_id);
 
       const tokenSymbol = wallet.currency || 'USDC';
@@ -1588,6 +1606,7 @@ app.post('/:id/test-fund', async (c) => {
       .select('*')
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (walletError || !wallet) {
@@ -1705,6 +1724,7 @@ app.post('/:id/fund', async (c) => {
       .select('*')
       .eq('id', id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (walletError || !wallet) {
@@ -1928,6 +1948,7 @@ app.post('/:id/transfer', async (c) => {
       .select('id, wallet_address, wallet_type, provider_wallet_id, balance, owner_account_id, status, currency')
       .eq('id', sourceWalletId)
       .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx))
       .single();
 
     if (srcErr || !sourceWallet) {
@@ -1947,6 +1968,7 @@ app.post('/:id/transfer', async (c) => {
         .select('id, wallet_address, wallet_type, provider_wallet_id, balance, owner_account_id, status')
         .eq('id', validated.destinationWalletId)
         .eq('tenant_id', ctx.tenantId)
+        .eq('environment', getEnv(ctx))
         .single();
 
       if (dwErr || !dw) {
@@ -1987,6 +2009,7 @@ app.post('/:id/transfer', async (c) => {
       .from('transfers')
       .insert({
         tenant_id: ctx.tenantId,
+        environment: getEnv(ctx),
         from_account_id: sourceWallet.owner_account_id,
         to_account_id: destWallet?.owner_account_id || null,
         amount: validated.amount,
@@ -2016,6 +2039,7 @@ app.post('/:id/transfer', async (c) => {
       amount: validated.amount,
       transferId: transfer.id,
       protocolMetadata: transferMetadata,
+      environment: getEnv(ctx) as 'test' | 'live',
     });
 
     if (!settlement.success) {

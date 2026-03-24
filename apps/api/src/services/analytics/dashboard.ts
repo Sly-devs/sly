@@ -110,6 +110,7 @@ export async function getProtocolDistribution(
     .from('ap2_mandate_executions')
     .select('amount, currency')
     .eq('tenant_id', tenantId)
+    .eq('environment', env)
     .gte('created_at', startTime.toISOString());
 
   // Query ACP checkouts (completed)
@@ -272,6 +273,7 @@ export async function getProtocolActivity(
       .from('ap2_mandate_executions')
       .select('amount, currency, created_at')
       .eq('tenant_id', tenantId)
+      .eq('environment', env)
       .gte('created_at', startTime.toISOString()),
     supabase
       .from('acp_checkouts')
@@ -429,11 +431,13 @@ export async function getProtocolStats(
       .from('ap2_mandate_executions')
       .select('amount, currency')
       .eq('tenant_id', tenantId)
+      .eq('environment', environment)
       .gte('created_at', thirtyDaysAgo.toISOString()),
     supabase
       .from('ap2_mandate_executions')
       .select('amount, currency')
       .eq('tenant_id', tenantId)
+      .eq('environment', environment)
       .gte('created_at', sixtyDaysAgo.toISOString())
       .lt('created_at', thirtyDaysAgo.toISOString()),
   ]);
@@ -639,6 +643,7 @@ export async function getRecentActivity(
     .from('ap2_mandate_executions')
     .select('id, amount, currency, created_at')
     .eq('tenant_id', tenantId)
+    .eq('environment', environment)
     .order('created_at', { ascending: false })
     .limit(limit);
 

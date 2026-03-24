@@ -69,7 +69,8 @@ export class AsyncSettlementWorker {
           from_account_id,
           to_account_id,
           protocol_metadata,
-          type
+          type,
+          environment
         `)
         .eq('status', 'authorized')
         .order('created_at', { ascending: true })
@@ -101,9 +102,12 @@ export class AsyncSettlementWorker {
     const metadata = transfer.protocol_metadata || {};
     const retryCount = metadata.async_settlement_retries || 0;
 
-    // Get source and destination wallet info
-    const walletIds = [metadata.wallet_id, metadata.provider_wallet_id].filter(Boolean);
-    if (walletIds.length < 2) {
+    // Get source and destination wallet info (support both naming conventions)
+    const srcWalletId = metadata.source_wallet_id || metadata.wallet_id;
+    const dstWalletId = metadata.destination_wallet_id || metadata.provider_wallet_id;
+    const env = (transfer as any).environment || metadata.environment || 'test';
+
+    if (!srcWalletId || !dstWalletId) {
       // No wallet IDs in metadata — mark as completed (ledger-only settlement is sufficient)
       await supabase
         .from('transfers')
@@ -113,6 +117,7 @@ export class AsyncSettlementWorker {
           protocol_metadata: {
             ...metadata,
             settlement_type: 'ledger',
+            async_settlement_completed_at: new Date().toISOString(),
             async_settlement_note: 'No on-chain wallets, ledger settlement is final',
           },
         })
@@ -124,10 +129,9 @@ export class AsyncSettlementWorker {
     const { data: wallets } = await supabase
       .from('wallets')
       .select('id, wallet_address, wallet_type, provider_wallet_id, balance, owner_account_id')
-      .in('id', walletIds);
+      .in('id', [srcWalletId, dstWalletId]);
 
     if (!wallets || wallets.length < 2) {
-      // Wallets not found — mark as completed with ledger settlement
       await supabase
         .from('transfers')
         .update({
@@ -136,6 +140,7 @@ export class AsyncSettlementWorker {
           protocol_metadata: {
             ...metadata,
             settlement_type: 'ledger',
+            async_settlement_completed_at: new Date().toISOString(),
             async_settlement_note: 'Wallets not found for on-chain, ledger is final',
           },
         })
@@ -143,8 +148,8 @@ export class AsyncSettlementWorker {
       return;
     }
 
-    const sourceWallet = wallets.find((w: any) => w.id === metadata.wallet_id);
-    const destWallet = wallets.find((w: any) => w.id === metadata.provider_wallet_id);
+    const sourceWallet = wallets.find((w: any) => w.id === srcWalletId);
+    const destWallet = wallets.find((w: any) => w.id === dstWalletId);
 
     if (!sourceWallet || !destWallet) {
       await supabase
@@ -191,6 +196,7 @@ export class AsyncSettlementWorker {
       destinationAddress: destWallet.wallet_address,
       amount: transfer.amount,
       tenantId: transfer.tenant_id,
+      environment: env as 'test' | 'live',
     });
 
     if (onChainResult.success && onChainResult.txHash) {
@@ -200,8 +206,8 @@ export class AsyncSettlementWorker {
 
       if (isCircleSrc || isCircleDest) {
         try {
-          const { getCircleClient } = await import('../services/circle/client.js');
-          const circle = getCircleClient();
+          const { getCircleClient, getCircleLiveClient } = await import('../services/circle/client.js');
+          const circle = env === 'live' ? getCircleLiveClient() : getCircleClient();
 
           if (isCircleSrc && sourceWallet.provider_wallet_id) {
             const bal = await circle.getUsdcBalance(sourceWallet.provider_wallet_id);

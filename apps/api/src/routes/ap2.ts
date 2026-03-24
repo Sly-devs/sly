@@ -668,32 +668,31 @@ ap2.post('/mandates/:id/execute', async (c) => {
   // Find wallet: prefer the mandate agent's wallet, fall back to account-owned wallet
   let wallet: any = null;
   if (!skipWalletDeduction) {
-    // First try: wallet managed by the mandate's agent, preferring currency match
+    // Find the PAYER wallet: owned by the mandate's account (the authorizer)
     const mandateCurrency = currency || mandate.currency;
-    const { data: agentWallets } = await supabase
+    const { data: accountWallets } = await supabase
       .from('wallets')
       .select('id, balance, currency, owner_account_id, status')
       .eq('tenant_id', ctx.tenantId)
       .eq('environment', getEnv(ctx))
-      .eq('managed_by_agent_id', mandate.agent_id)
-      .eq('status', 'active');
+      .eq('owner_account_id', mandate.account_id)
+      .eq('status', 'active')
+      .order('managed_by_agent_id', { ascending: false, nullsFirst: false });
 
-    if (agentWallets && agentWallets.length > 0) {
-      // Prefer wallet matching mandate currency, fall back to first available
-      wallet = agentWallets.find(w => w.currency === mandateCurrency) || agentWallets[0];
+    if (accountWallets && accountWallets.length > 0) {
+      wallet = accountWallets.find(w => w.currency === mandateCurrency) || accountWallets[0];
     } else {
-      // Fallback: wallet owned by the mandate's account, preferring currency match
-      const { data: accountWallets } = await supabase
+      // Fallback: wallet managed by the mandate's agent
+      const { data: agentWallets } = await supabase
         .from('wallets')
         .select('id, balance, currency, owner_account_id, status')
         .eq('tenant_id', ctx.tenantId)
         .eq('environment', getEnv(ctx))
-        .eq('owner_account_id', mandate.account_id)
-        .eq('status', 'active')
-        .order('managed_by_agent_id', { ascending: false, nullsFirst: false });
+        .eq('managed_by_agent_id', mandate.agent_id)
+        .eq('status', 'active');
 
-      if (accountWallets && accountWallets.length > 0) {
-        wallet = accountWallets.find(w => w.currency === mandateCurrency) || accountWallets[0];
+      if (agentWallets && agentWallets.length > 0) {
+        wallet = agentWallets.find(w => w.currency === mandateCurrency) || agentWallets[0];
       }
     }
   }
@@ -704,11 +703,13 @@ ap2.post('/mandates/:id/execute', async (c) => {
       const updatedBalance = currentBalance - execAmount;
       const updatedStatus = updatedBalance === 0 ? 'depleted' : 'active';
 
-      // Look up account name and agent name for the transfer record
-      const [{ data: fromAccount }, { data: agentRecord }] = await Promise.all([
+      // Look up account name, agent name, and recipient wallet for the transfer record
+      const [{ data: fromAccount }, { data: agentRecord }, { data: recipientWallets }] = await Promise.all([
         supabase.from('accounts').select('name').eq('id', wallet.owner_account_id).eq('tenant_id', ctx.tenantId).eq('environment', getEnv(ctx)).single(),
-        supabase.from('agents').select('name').eq('id', mandate.agent_id).eq('tenant_id', ctx.tenantId).eq('environment', getEnv(ctx)).single(),
+        supabase.from('agents').select('name, parent_account_id').eq('id', mandate.agent_id).eq('tenant_id', ctx.tenantId).eq('environment', getEnv(ctx)).single(),
+        supabase.from('wallets').select('id').eq('managed_by_agent_id', mandate.agent_id).eq('tenant_id', ctx.tenantId).eq('environment', getEnv(ctx)).eq('status', 'active').limit(1),
       ]);
+      const recipientWallet = recipientWallets?.[0] || null;
 
       const { error: walletUpdateError } = await supabase
         .from('wallets')
@@ -733,8 +734,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
           amount: execAmount,
           currency: currency || mandate.currency,
           type: isCrossBorder ? 'cross_border' : 'ap2',
-          status: 'completed',
-          completed_at: now,
+          status: 'authorized',
           initiated_by_type: 'agent',
           initiated_by_id: mandate.agent_id,
           initiated_by_name: agentRecord?.name || '',
@@ -742,6 +742,10 @@ ap2.post('/mandates/:id/execute', async (c) => {
           protocol_metadata: {
             protocol: 'ap2',
             wallet_id: wallet.id,
+            source_wallet_id: wallet.id,
+            destination_wallet_id: recipientWallet?.id !== wallet.id ? recipientWallet?.id || null : null,
+            settlement_type: 'ledger',
+            authorized_at: now,
             operation: 'mandate_execution',
             mandate_id: mandate.id,
             execution_index: newExecIndex,

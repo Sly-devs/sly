@@ -2193,10 +2193,10 @@ agents.post('/:id/skills', async (c) => {
 
   const supabase = createClient();
 
-  // Verify agent belongs to tenant
+  // Verify agent belongs to tenant and get parent account
   const { data: agent } = await supabase
     .from('agents')
-    .select('id')
+    .select('id, parent_account_id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
     .eq('environment', getEnv(ctx))
@@ -2204,12 +2204,57 @@ agents.post('/:id/skills', async (c) => {
 
   if (!agent) throw new NotFoundError('Agent');
 
+  // Auto-create x402 endpoint for paid skills
+  let x402EndpointId: string | null = null;
+  const basePrice = Number(parsed.data.base_price || 0);
+  if (basePrice > 0 && agent.parent_account_id) {
+    const endpointPath = `/v1/agents/${id}/skills/${parsed.data.skill_id}`;
+    // Check if endpoint already exists for this path
+    const { data: existing } = await supabase
+      .from('x402_endpoints')
+      .select('id')
+      .eq('tenant_id', ctx.tenantId)
+      .eq('path', endpointPath)
+      .eq('method', 'POST')
+      .maybeSingle();
+
+    if (existing) {
+      // Update price on existing endpoint
+      await supabase
+        .from('x402_endpoints')
+        .update({ base_price: basePrice, status: 'active' })
+        .eq('id', existing.id);
+      x402EndpointId = existing.id;
+    } else {
+      // Create new x402 endpoint
+      const { data: endpoint } = await supabase
+        .from('x402_endpoints')
+        .insert({
+          tenant_id: ctx.tenantId,
+          environment: getEnv(ctx),
+          account_id: agent.parent_account_id,
+          name: parsed.data.name || parsed.data.skill_id,
+          description: parsed.data.description || `Paid skill: ${parsed.data.skill_id}`,
+          path: endpointPath,
+          method: 'POST',
+          base_price: basePrice,
+          currency: parsed.data.currency || 'USDC',
+          status: 'active',
+          payment_address: `internal://payos/${ctx.tenantId}/${agent.parent_account_id}`,
+        })
+        .select('id')
+        .single();
+      if (endpoint) x402EndpointId = endpoint.id;
+    }
+  }
+
   const { data: skill, error } = await supabase
     .from('agent_skills')
     .upsert({
       tenant_id: ctx.tenantId,
       agent_id: id,
       ...parsed.data,
+      ...(x402EndpointId ? { x402_endpoint_id: x402EndpointId } : {}),
     }, { onConflict: 'tenant_id,agent_id,skill_id' })
     .select('*')
     .single();
@@ -2258,6 +2303,17 @@ agents.patch('/:id/skills/:skillId', async (c) => {
 
   if (error || !skill) throw new NotFoundError('Skill');
 
+  // Sync x402 endpoint price if linked
+  if (skill.x402_endpoint_id && updates.base_price !== undefined) {
+    const newPrice = Number(updates.base_price);
+    if (newPrice > 0) {
+      await supabase.from('x402_endpoints').update({ base_price: newPrice }).eq('id', skill.x402_endpoint_id);
+    } else {
+      // Price set to 0 — deactivate the endpoint
+      await supabase.from('x402_endpoints').update({ status: 'disabled' }).eq('id', skill.x402_endpoint_id);
+    }
+  }
+
   logAudit(supabase, ctx, 'agent.skill.updated', { agentId: id, skillId });
   return c.json(skill);
 });
@@ -2273,6 +2329,15 @@ agents.delete('/:id/skills/:skillId', async (c) => {
 
   const supabase = createClient();
 
+  // Get linked x402 endpoint before deleting
+  const { data: existingSkill } = await supabase
+    .from('agent_skills')
+    .select('x402_endpoint_id')
+    .eq('agent_id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('skill_id', skillId)
+    .maybeSingle();
+
   const { error } = await supabase
     .from('agent_skills')
     .delete()
@@ -2281,6 +2346,11 @@ agents.delete('/:id/skills/:skillId', async (c) => {
     .eq('skill_id', skillId);
 
   if (error) throw new Error(error.message);
+
+  // Clean up linked x402 endpoint
+  if (existingSkill?.x402_endpoint_id) {
+    await supabase.from('x402_endpoints').delete().eq('id', existingSkill.x402_endpoint_id);
+  }
 
   logAudit(supabase, ctx, 'agent.skill.deleted', { agentId: id, skillId });
   return c.json({ deleted: true });

@@ -1188,6 +1188,24 @@ app.post('/pay', async (c) => {
       });
     }
 
+    // Update agent_skills counters if this endpoint is linked to a skill
+    try {
+      const { data: linkedSkill } = await supabase
+        .from('agent_skills')
+        .select('id, total_invocations, total_fees_collected')
+        .eq('x402_endpoint_id', endpoint.id)
+        .maybeSingle();
+      if (linkedSkill) {
+        await supabase
+          .from('agent_skills')
+          .update({
+            total_invocations: (linkedSkill.total_invocations || 0) + 1,
+            total_fees_collected: parseFloat(String(linkedSkill.total_fees_collected || 0)) + auth.amount,
+          })
+          .eq('id', linkedSkill.id);
+      }
+    } catch { /* non-fatal — skill tracking failure shouldn't block payment */ }
+
     // Mark request as processed in bloom filter for future idempotency checks
     markRequestProcessed(auth.requestId);
     

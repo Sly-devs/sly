@@ -295,13 +295,13 @@ export class A2ATaskProcessor {
       const hasEndpoint = await this.agentHasEndpoint(agentCtx.agentId);
       if (hasEndpoint) {
         // Look up skill pricing from DB
-        let skillRow: { skill_id: string; handler_type: string; base_price: number; currency: string } | null = null;
+        let skillRow: { skill_id: string; handler_type: string; base_price: number; currency: string; x402_endpoint_id: string | null } | null = null;
 
         const targetSkillId = explicitSkillId || msgMetadata?.skill_id as string | undefined;
         if (targetSkillId) {
           const { data } = await this.supabase
             .from('agent_skills')
-            .select('skill_id, handler_type, base_price, currency')
+            .select('skill_id, handler_type, base_price, currency, x402_endpoint_id')
             .eq('agent_id', agentCtx.agentId)
             .eq('tenant_id', this.tenantId)
             .eq('skill_id', targetSkillId)
@@ -312,8 +312,9 @@ export class A2ATaskProcessor {
 
         const skill = skillRow
           ? { skill_id: skillRow.skill_id, handler_type: skillRow.handler_type || 'agent_provided',
-              base_price: Number(skillRow.base_price), currency: skillRow.currency || 'USDC' }
-          : { skill_id: explicitSkillId || 'default', handler_type: 'agent_provided', base_price: 0, currency: 'USDC' };
+              base_price: Number(skillRow.base_price), currency: skillRow.currency || 'USDC',
+              x402_endpoint_id: skillRow.x402_endpoint_id }
+          : { skill_id: explicitSkillId || 'default', handler_type: 'agent_provided', base_price: 0, currency: 'USDC', x402_endpoint_id: null as string | null };
 
         return await this.forwardToAgent(taskId, text, skill, agentCtx, msgMetadata);
       }
@@ -995,7 +996,7 @@ export class A2ATaskProcessor {
   private async forwardToAgent(
     taskId: string,
     messageText: string,
-    skill: { skill_id: string; handler_type: string; base_price: number; currency: string },
+    skill: { skill_id: string; handler_type: string; base_price: number; currency: string; x402_endpoint_id?: string | null },
     agentCtx: AgentContext,
     callerMetadata?: Record<string, unknown>,
   ): Promise<A2ATask | null> {
@@ -1074,6 +1075,16 @@ export class A2ATaskProcessor {
           next_action: isKya ? 'verify_agent' : 'fund_wallet',
           resolve_endpoint: isKya ? 'POST /a2a with skill: verify_agent' : undefined,
           required_auth: 'agent_token',
+          payment_required: true,
+          ...(skill.x402_endpoint_id ? {
+            x402: {
+              endpoint_id: skill.x402_endpoint_id,
+              amount: skill.base_price,
+              currency: skill.currency,
+              skill_id: skill.skill_id,
+              provider_agent_id: agentCtx.agentId,
+            },
+          } : {}),
           details: {
             skill_price: skill.base_price,
             currency: skill.currency,

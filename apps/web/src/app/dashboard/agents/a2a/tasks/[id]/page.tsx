@@ -13,7 +13,7 @@ import {
   DollarSign,
   MessageSquare,
 } from 'lucide-react';
-import { useApiClient } from '@/lib/api-client';
+import { useApiClient, useApiConfig } from '@/lib/api-client';
 import { Button, Card, CardContent } from '@sly/ui';
 import { A2ATaskDetail } from '@/components/agents/a2a-task-detail';
 
@@ -52,11 +52,12 @@ function DirectionBadge({ direction }: { direction: string }) {
 export default function A2ATaskDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const api = useApiClient();
+  const { apiEnvironment } = useApiConfig();
   const router = useRouter();
   const queryClient = useQueryClient();
 
   const { data: taskData, isLoading } = useQuery({
-    queryKey: ['a2a-task', id],
+    queryKey: ['a2a-task', id, apiEnvironment],
     queryFn: () => api!.a2a.getTask(id),
     enabled: !!api,
   });
@@ -75,7 +76,7 @@ export default function A2ATaskDetailPage({ params }: { params: Promise<{ id: st
   const contextId = task?.contextId;
 
   const { data: sessionTasks } = useQuery({
-    queryKey: ['a2a-session-tasks', contextId],
+    queryKey: ['a2a-session-tasks', contextId, apiEnvironment],
     queryFn: () => api!.a2a.listTasks({ contextId, limit: 50 }),
     enabled: !!api && !!contextId,
   });

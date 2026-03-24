@@ -15,7 +15,7 @@ import {
   ArrowUpRight,
   Network,
 } from 'lucide-react';
-import { useApiClient } from '@/lib/api-client';
+import { useApiClient, useApiConfig } from '@/lib/api-client';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import {
   Button,
@@ -70,6 +70,7 @@ function DirectionBadge({ direction }: { direction: string }) {
 
 export default function A2ATasksPage() {
   const api = useApiClient();
+  const { apiEnvironment } = useApiConfig();
   const searchParams = useSearchParams();
   const initialContextId = searchParams.get('context_id') || undefined;
 
@@ -79,7 +80,7 @@ export default function A2ATasksPage() {
   const [search, setSearch] = useState('');
 
   const { data: rawData, isLoading } = useQuery({
-    queryKey: ['a2a-tasks', page, state, direction, search, initialContextId],
+    queryKey: ['a2a-tasks', page, state, direction, search, initialContextId, apiEnvironment],
     queryFn: () =>
       api!.a2a.listTasks({
         page,
@@ -92,7 +93,7 @@ export default function A2ATasksPage() {
   });
 
   const { data: stats } = useQuery({
-    queryKey: ['a2a-stats'],
+    queryKey: ['a2a-stats', apiEnvironment],
     queryFn: () => api!.a2a.getStats(),
     enabled: !!api,
   });

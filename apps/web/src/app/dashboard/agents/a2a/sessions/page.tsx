@@ -14,7 +14,7 @@ import {
   ArrowLeftRight,
   ArrowRight,
 } from 'lucide-react';
-import { useApiClient } from '@/lib/api-client';
+import { useApiClient, useApiConfig } from '@/lib/api-client';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import {
   Input,
@@ -73,10 +73,11 @@ function DirectionIndicator({ directions }: { directions: string[] }) {
 
 export default function A2ASessionsPage() {
   const api = useApiClient();
+  const { apiEnvironment } = useApiConfig();
   const [search, setSearch] = useState('');
 
   const { data: rawData, isLoading } = useQuery({
-    queryKey: ['a2a-sessions'],
+    queryKey: ['a2a-sessions', apiEnvironment],
     queryFn: () => api!.a2a.listSessions(),
     enabled: !!api,
   });

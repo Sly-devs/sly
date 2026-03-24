@@ -1033,7 +1033,7 @@ a2aRouter.post('/tasks', async (c) => {
   }
 
   const supabase = createClient();
-  const taskService = new A2ATaskService(supabase, ctx.tenantId);
+  const taskService = new A2ATaskService(supabase, ctx.tenantId, getEnv(ctx) as 'test' | 'live');
 
   if (body.remoteUrl) {
     // Outbound: send to remote agent
@@ -1113,7 +1113,7 @@ a2aRouter.get('/tasks', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 100);
 
   const supabase = createClient();
-  const taskService = new A2ATaskService(supabase, ctx.tenantId);
+  const taskService = new A2ATaskService(supabase, ctx.tenantId, getEnv(ctx) as 'test' | 'live');
 
   const result = await taskService.listTasks({
     agentId,
@@ -1230,7 +1230,7 @@ a2aRouter.patch('/tasks/:taskId', async (c) => {
     }, 400);
   }
 
-  const taskService = new A2ATaskService(supabase, ctx.tenantId);
+  const taskService = new A2ATaskService(supabase, ctx.tenantId, getEnv(ctx) as 'test' | 'live');
 
   // Add message if provided
   if (body.message?.parts?.length) {
@@ -1318,7 +1318,7 @@ a2aRouter.get('/tasks/:taskId', async (c) => {
   }
 
   const supabase = createClient();
-  const taskService = new A2ATaskService(supabase, ctx.tenantId);
+  const taskService = new A2ATaskService(supabase, ctx.tenantId, getEnv(ctx) as 'test' | 'live');
 
   const task = await taskService.getTask(taskId);
 
@@ -1371,7 +1371,7 @@ a2aRouter.post('/tasks/:taskId/respond', async (c) => {
     }, 400);
   }
 
-  const taskService = new A2ATaskService(supabase, ctx.tenantId);
+  const taskService = new A2ATaskService(supabase, ctx.tenantId, getEnv(ctx) as 'test' | 'live');
   const taskMeta = (task as any).metadata || {};
   const inputContext = taskMeta.input_required_context;
 
@@ -1557,7 +1557,7 @@ a2aRouter.post('/tasks/:taskId/cancel', async (c) => {
   }
 
   const supabase = createClient();
-  const taskService = new A2ATaskService(supabase, ctx.tenantId);
+  const taskService = new A2ATaskService(supabase, ctx.tenantId, getEnv(ctx) as 'test' | 'live');
 
   const task = await taskService.cancelTask(taskId);
 

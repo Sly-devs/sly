@@ -366,6 +366,7 @@ export class A2ATaskService {
       .from('a2a_tasks')
       .select('*, agents!inner(name)', { count: 'exact' })
       .eq('tenant_id', this.tenantId)
+      .eq('environment', this.environment)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 

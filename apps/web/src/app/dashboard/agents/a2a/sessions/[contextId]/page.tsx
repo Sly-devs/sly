@@ -22,7 +22,7 @@ import {
   Activity,
   Bot,
 } from 'lucide-react';
-import { useApiClient } from '@/lib/api-client';
+import { useApiClient, useApiConfig } from '@/lib/api-client';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { MessageBubble } from '@/components/agents/message-bubble';
 import { SessionTimeline } from '@/components/agents/session-timeline';
@@ -52,10 +52,11 @@ function StateBadge({ state }: { state: string }) {
 export default function SessionDetailPage({ params }: { params: Promise<{ contextId: string }> }) {
   const { contextId } = use(params);
   const api = useApiClient();
+  const { apiEnvironment } = useApiConfig();
   const router = useRouter();
 
   const { data: session, isLoading, error } = useQuery({
-    queryKey: ['a2a-session', contextId],
+    queryKey: ['a2a-session', contextId, apiEnvironment],
     queryFn: () => api!.a2a.getSession(contextId),
     enabled: !!api,
   });

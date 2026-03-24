@@ -732,7 +732,7 @@ ap2.post('/mandates/:id/execute', async (c) => {
           from_account_name: fromAccount?.name || '',
           amount: execAmount,
           currency: currency || mandate.currency,
-          type: isCrossBorder ? 'cross_border' : 'internal',
+          type: isCrossBorder ? 'cross_border' : 'ap2',
           status: 'completed',
           completed_at: now,
           initiated_by_type: 'agent',

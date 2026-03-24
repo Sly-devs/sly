@@ -96,14 +96,25 @@ export async function getProtocolDistribution(
 
   const fxService = getCircleFXService();
 
-  // Query x402 payments (stored as transfers with type = 'x402')
-  const { data: x402Data } = await supabase
-    .from('transfers')
-    .select('amount, currency')
-    .eq('tenant_id', tenantId)
-    .eq('type', 'x402')
-    .eq('environment', env)
-    .gte('created_at', startTime.toISOString());
+  // Query x402 payments (transfers with type = 'x402' + deferred payment_intents)
+  const [{ data: x402Transfers }, { data: x402Intents }] = await Promise.all([
+    supabase
+      .from('transfers')
+      .select('amount, currency')
+      .eq('tenant_id', tenantId)
+      .eq('type', 'x402')
+      .eq('environment', env)
+      .gte('created_at', startTime.toISOString()),
+    supabase
+      .from('payment_intents')
+      .select('amount, currency')
+      .eq('tenant_id', tenantId)
+      .eq('protocol', 'x402')
+      .eq('environment', env)
+      .in('status', ['authorized', 'settled', 'completed'])
+      .gte('created_at', startTime.toISOString()),
+  ]);
+  const x402Data = [...(x402Transfers || []), ...(x402Intents || [])];
 
   // Query AP2 mandate executions
   const { data: ap2Data } = await supabase

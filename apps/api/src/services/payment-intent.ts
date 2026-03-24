@@ -54,6 +54,7 @@ export interface CreatePaymentIntentParams {
   nonce?: string;
   protocol?: 'x402' | 'a2a' | 'direct';
   protocolMetadata?: Record<string, unknown>;
+  environment?: 'test' | 'live';
 }
 
 export interface CreatePaymentIntentResult {
@@ -87,6 +88,7 @@ export async function createPaymentIntent(
     supabase, tenantId, sourceWalletId, destinationWalletId,
     sourceAccountId, destinationAccountId, amount,
     currency = 'USDC', nonce, protocol, protocolMetadata,
+    environment = 'test',
   } = params;
 
   // Idempotency check via nonce
@@ -117,6 +119,7 @@ export async function createPaymentIntent(
       nonce: nonce || null,
       protocol: protocol || null,
       protocol_metadata: protocolMetadata || {},
+      environment,
       status: 'pending',
     })
     .select()

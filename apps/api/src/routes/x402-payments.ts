@@ -879,6 +879,7 @@ app.post('/pay', async (c) => {
           amount: auth.amount,
           nonce: auth.requestId,
           protocol: 'x402',
+          environment: getEnv(ctx) as 'test' | 'live',
           protocolMetadata: {
             endpoint_id: endpoint.id,
             endpoint_path: endpoint.path,

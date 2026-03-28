@@ -145,7 +145,7 @@ function SetupPageInner() {
       setError('Organization name is required');
       return;
     }
-    await provision(organizationName.trim(), isClosedBeta ? inviteCode : undefined);
+    await provision(organizationName.trim(), inviteCode || undefined);
   }
 
   // Loading state
@@ -257,19 +257,17 @@ function SetupPageInner() {
                   {error}
                 </div>
               )}
-              {isClosedBeta && (
-                <div className="space-y-2">
-                  <Label htmlFor="inviteCode">Invite Code</Label>
-                  <Input
-                    id="inviteCode"
-                    type="text"
-                    placeholder="beta_..."
-                    value={inviteCode}
-                    onChange={(e) => setInviteCode(e.target.value)}
-                    required
-                  />
-                </div>
-              )}
+              <div className="space-y-2">
+                <Label htmlFor="inviteCode">Invite Code</Label>
+                <Input
+                  id="inviteCode"
+                  type="text"
+                  placeholder="beta_..."
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                  required
+                />
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="orgName">Organization Name</Label>
                 <Input

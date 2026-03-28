@@ -1795,9 +1795,23 @@ auth.post('/beta/validate', async (c) => {
     const validated = schema.parse(body);
     const result = await validateBetaCode(validated.code, validated.actorType || 'human');
 
+    // If valid, look up the linked application to pre-fill signup form
+    let applicant: { email?: string; organization_name?: string } | undefined;
+    if (result.valid && result.code?.id) {
+      const supabase = createClient();
+      const { data: app } = await (supabase.from('beta_applications') as any)
+        .select('email, organization_name')
+        .eq('access_code_id', result.code.id)
+        .single();
+      if (app) {
+        applicant = { email: app.email, organization_name: app.organization_name };
+      }
+    }
+
     return c.json({
       valid: result.valid,
       error: result.valid ? undefined : result.error,
+      ...(applicant ? { applicant } : {}),
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

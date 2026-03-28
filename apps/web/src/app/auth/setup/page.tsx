@@ -63,10 +63,11 @@ function SetupPageInner() {
         }),
       });
 
-      const data = await response.json();
+      const json = await response.json();
+      const data = json.data || json;
 
       if (!response.ok) {
-        setError(data.error || 'Failed to set up organization');
+        setError(data.error || json.error || 'Failed to set up organization');
         setProvisioning(false);
         return;
       }
@@ -77,9 +78,13 @@ function SetupPageInner() {
         return;
       }
 
-      // Show API keys once
+      // Show API keys once, then redirect
       if (data.apiKeys) {
         setApiKeys(data.apiKeys);
+      } else {
+        // No API keys in response — provisioned successfully, go to dashboard
+        router.push('/dashboard');
+        return;
       }
     } catch {
       setError('Could not connect to the server. Please try again.');

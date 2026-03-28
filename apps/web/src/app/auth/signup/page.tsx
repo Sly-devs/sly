@@ -122,9 +122,10 @@ function SignUpPageInner() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code: inviteCode }),
         });
-        const validateData = await validateRes.json();
+        const validateJson = await validateRes.json();
+        const validateData = validateJson.data || validateJson;
         if (!validateData.valid) {
-          setError(validateData.error || 'Invalid invite code');
+          setError(validateData.error || validateJson.error || 'Invalid invite code');
           setLoading(false);
           return;
         }

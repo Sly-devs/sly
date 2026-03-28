@@ -57,10 +57,12 @@ function CodeSignUpPageInner() {
         body: JSON.stringify({ code: codeToValidate }),
       });
 
-      const data = await response.json();
-      setCodeValid(data.valid);
-      if (!data.valid) {
-        setCodeError(data.error || 'Invalid invite code');
+      const json = await response.json();
+      // API returns { success, data: { valid } } or { valid } (legacy)
+      const result = json.data || json;
+      setCodeValid(result.valid);
+      if (!result.valid) {
+        setCodeError(result.error || json.error || 'Invalid invite code');
       }
     } catch {
       setCodeError('Could not validate code. Please try again.');

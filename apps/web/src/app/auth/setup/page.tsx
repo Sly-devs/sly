@@ -7,37 +7,116 @@ import { Button } from '@sly/ui';
 import { Input } from '@sly/ui';
 import { Label } from '@sly/ui';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@sly/ui';
-import { Loader2, Zap, Copy, Check, AlertCircle } from 'lucide-react';
+import {
+  Loader2, Zap, Copy, Check, AlertCircle, Download, Wallet,
+  Bot, ArrowRight, Globe, Terminal, FileCode, Code, Network,
+  Plus, Link2, ChevronRight, Shield,
+} from 'lucide-react';
+
+const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 interface ApiKeys {
   test: { key: string; prefix: string };
   live: { key: string; prefix: string };
 }
 
+interface WalletData {
+  id: string;
+  walletAddress: string;
+  network: string;
+  walletType: string;
+  balance: number;
+  currency: string;
+}
+
+interface AgentData {
+  id: string;
+  name: string;
+  token?: string;
+}
+
+type IntegrationMethod = 'a2a' | 'mcp' | 'skills' | 'sdk' | 'api';
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function downloadKeysAsEnv(testKey: string, liveKey: string, orgName: string) {
+  const content = [
+    `# ${orgName} — Sly API Keys`,
+    `# Generated: ${new Date().toISOString()}`,
+    `# Docs: https://docs.getsly.ai`,
+    '',
+    '# Sandbox (test mode)',
+    `SLY_API_KEY=${testKey}`,
+    '',
+    '# Production (live mode)',
+    `SLY_API_KEY_LIVE=${liveKey}`,
+    '',
+    '# API endpoint',
+    'SLY_API_URL=https://api.getsly.ai',
+    '',
+  ].join('\n');
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'sly-api-keys.env';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================================
+// Main page wrapper
+// ============================================================================
+
 export default function SetupPage() {
   return (
     <Suspense>
-      <SetupPageInner />
+      <SetupWizard />
     </Suspense>
   );
 }
 
-function SetupPageInner() {
+// ============================================================================
+// 3-Step Setup Wizard
+// ============================================================================
+
+function SetupWizard() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const urlInviteCode = searchParams.get('invite_code') || '';
-  const [organizationName, setOrganizationName] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [provisioning, setProvisioning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+
+  // Step 1 state
   const [apiKeys, setApiKeys] = useState<ApiKeys | null>(null);
-  const [showOrgForm, setShowOrgForm] = useState(false);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [orgName, setOrgName] = useState('');
   const [inviteCode, setInviteCode] = useState(urlInviteCode);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [showOrgForm, setShowOrgForm] = useState(false);
+  const [authToken, setAuthToken] = useState<string | null>(null);
 
-  const isClosedBeta = process.env.NEXT_PUBLIC_CLOSED_BETA === 'true';
+  // Step 2 state
+  const [walletData, setWalletData] = useState<WalletData | null>(null);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [externalAddress, setExternalAddress] = useState('');
 
-  const provision = useCallback(async (orgName: string, inviteCodeParam?: string) => {
+  // Step 3 state
+  const [agentData, setAgentData] = useState<AgentData | null>(null);
+  const [agentName, setAgentName] = useState('');
+  const [agentDesc, setAgentDesc] = useState('');
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [integrationMethod, setIntegrationMethod] = useState<IntegrationMethod | null>(null);
+
+  // Account ID for wallet/agent creation
+  const [accountId, setAccountId] = useState<string | null>(null);
+
+  // ---- Provision tenant ----
+  const provision = useCallback(async (orgNameVal: string, inviteCodeVal?: string) => {
     setProvisioning(true);
     setError(null);
 
@@ -49,17 +128,15 @@ function SetupPageInner() {
       return;
     }
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+    setAuthToken(session.access_token);
+
     try {
       const response = await fetch(`${apiUrl}/v1/auth/provision`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`,
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
         body: JSON.stringify({
-          organizationName: orgName,
-          ...(inviteCodeParam ? { inviteCode: inviteCodeParam } : {}),
+          organizationName: orgNameVal,
+          ...(inviteCodeVal ? { inviteCode: inviteCodeVal } : {}),
         }),
       });
 
@@ -73,222 +150,212 @@ function SetupPageInner() {
       }
 
       if (data.alreadyProvisioned) {
-        // Tenant already exists — go straight to dashboard
         router.push('/dashboard');
         return;
       }
 
-      // Show API keys once, then redirect
+      setOrgName(orgNameVal);
       if (data.apiKeys) {
         setApiKeys(data.apiKeys);
-      } else {
-        // No API keys in response — provisioned successfully, go to dashboard
-        router.push('/dashboard');
-        return;
       }
+
+      // Get the default account for wallet/agent creation
+      try {
+        const acctRes = await fetch(`${apiUrl}/v1/accounts?limit=1`, {
+          headers: { 'Authorization': `Bearer ${session.access_token}` },
+        });
+        const acctJson = await acctRes.json();
+        const accts = acctJson.data || [];
+        if (accts.length > 0) setAccountId(accts[0].id);
+      } catch { /* non-fatal */ }
+
     } catch {
       setError('Could not connect to the server. Please try again.');
     }
     setProvisioning(false);
   }, [router]);
 
+  // ---- Check session on mount ----
   useEffect(() => {
     async function checkSession() {
       const supabase = createSupabaseBrowserClient();
       const { data: { session } } = await supabase.auth.getSession();
 
       if (!session) {
-        // Preserve invite code for after login
-        if (urlInviteCode) {
-          localStorage.setItem('sly_beta_invite_code', urlInviteCode);
-        }
+        if (urlInviteCode) localStorage.setItem('sly_beta_invite_code', urlInviteCode);
         router.push('/auth/login');
         return;
       }
 
-      // Check user_metadata for organization name (from email signup)
-      const orgName = session.user.user_metadata?.organization_name;
-
-      // Check for invite code from URL (Google SSO beta signup) or localStorage
+      setAuthToken(session.access_token);
+      const orgNameMeta = session.user.user_metadata?.organization_name;
       const betaInviteCode = new URLSearchParams(window.location.search).get('invite_code')
         || localStorage.getItem('sly_beta_invite_code') || '';
       const betaOrgName = localStorage.getItem('sly_beta_org_name') || '';
 
-      if (orgName) {
-        // Auto-provision with the org name from signup
+      if (orgNameMeta) {
         const metaInviteCode = session.user.user_metadata?.invite_code || betaInviteCode;
-        await provision(orgName, metaInviteCode);
+        await provision(orgNameMeta, metaInviteCode);
       } else if (betaInviteCode && betaOrgName) {
-        // Google SSO from beta signup — we have both code and org from localStorage
         localStorage.removeItem('sly_beta_invite_code');
         localStorage.removeItem('sly_beta_org_name');
         await provision(betaOrgName, betaInviteCode);
       } else if (betaInviteCode) {
-        // Have code but need org name
         setInviteCode(betaInviteCode);
         localStorage.removeItem('sly_beta_invite_code');
         setShowOrgForm(true);
       } else {
-        // OAuth flow — need to ask for org name
         setShowOrgForm(true);
       }
       setLoading(false);
     }
-
     checkSession();
-  }, [router, provision]);
+  }, [router, provision, urlInviteCode]);
 
-  async function handleCopy(key: string, label: string) {
-    await navigator.clipboard.writeText(key);
+  // ---- Copy helper ----
+  async function handleCopy(text: string, label: string) {
+    await navigator.clipboard.writeText(text);
     setCopiedKey(label);
     setTimeout(() => setCopiedKey(null), 2000);
   }
 
-  async function handleOrgSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!organizationName.trim()) {
-      setError('Organization name is required');
-      return;
-    }
-    // Read invite code from state, URL, or localStorage as fallback
-    const code = inviteCode
-      || new URLSearchParams(window.location.search).get('invite_code')
-      || localStorage.getItem('sly_beta_invite_code')
-      || '';
-    await provision(organizationName.trim(), code || undefined);
+  // ---- API helper ----
+  async function apiCall(method: string, path: string, body?: any) {
+    const res = await fetch(`${apiUrl}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return res.json();
   }
 
-  // Loading state
+  // ---- Create wallet ----
+  async function createWallet(network: 'base' | 'tempo') {
+    if (!accountId) { setError('No account found'); return; }
+    setWalletLoading(true);
+    setError(null);
+    try {
+      const blockchain = network === 'tempo' ? 'base' : 'base'; // both use base chain
+      const json = await apiCall('POST', '/v1/wallets', {
+        accountId,
+        name: `${orgName} Wallet`,
+        currency: 'USDC',
+        walletType: 'circle_custodial',
+        blockchain,
+        purpose: 'Primary wallet for agent transactions',
+      });
+      const w = json.data || json;
+      setWalletData({
+        id: w.id,
+        walletAddress: w.walletAddress || w.wallet_address,
+        network: w.network,
+        walletType: w.walletType || w.wallet_type,
+        balance: w.balance || 0,
+        currency: w.currency || 'USDC',
+      });
+
+      // Auto-fund if testnet
+      if (network === 'tempo' && w.id) {
+        await apiCall('POST', `/v1/wallets/${w.id}/test-fund`, { amount: 10, currency: 'USDC' });
+        setWalletData(prev => prev ? { ...prev, balance: 10 } : prev);
+      }
+    } catch (e: any) {
+      setError(e.message || 'Failed to create wallet');
+    }
+    setWalletLoading(false);
+  }
+
+  // ---- Link external wallet ----
+  async function linkExternalWallet() {
+    if (!accountId || !externalAddress.trim()) return;
+    setWalletLoading(true);
+    setError(null);
+    try {
+      const json = await apiCall('POST', '/v1/wallets/external', {
+        accountId,
+        walletAddress: externalAddress.trim(),
+        name: `External Wallet`,
+        currency: 'USDC',
+      });
+      const w = json.data || json;
+      setWalletData({
+        id: w.id,
+        walletAddress: w.walletAddress || w.wallet_address || externalAddress,
+        network: w.network || 'unknown',
+        walletType: 'external',
+        balance: 0,
+        currency: 'USDC',
+      });
+    } catch (e: any) {
+      setError(e.message || 'Failed to link wallet');
+    }
+    setWalletLoading(false);
+  }
+
+  // ---- Create agent ----
+  async function createAgent() {
+    if (!accountId || !agentName.trim()) return;
+    setAgentLoading(true);
+    setError(null);
+    try {
+      const json = await apiCall('POST', '/v1/agents', {
+        accountId,
+        name: agentName.trim(),
+        description: agentDesc.trim() || undefined,
+      });
+      const data = json.data?.data || json.data || json;
+      setAgentData({
+        id: data.id,
+        name: data.name,
+        token: json.data?.credentials?.token,
+      });
+    } catch (e: any) {
+      setError(e.message || 'Failed to create agent');
+    }
+    setAgentLoading(false);
+  }
+
+  // ---- Loading state ----
   if (loading || (provisioning && !showOrgForm)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-primary/5 p-4">
         <Card className="w-full max-w-md">
-          <CardHeader className="space-y-1 text-center">
-            <div className="flex justify-center mb-4">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            </div>
-            <CardTitle className="text-2xl font-bold">Setting up your account</CardTitle>
-            <CardDescription>
-              Creating your organization and API keys...
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
-    );
-  }
-
-  // API keys display (shown once after provisioning)
-  if (apiKeys) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-primary/5 p-4">
-        <Card className="w-full max-w-lg">
-          <CardHeader className="space-y-1 text-center">
-            <div className="flex justify-center mb-4">
-              <div className="rounded-full bg-green-100 dark:bg-green-900/20 p-3">
-                <Zap className="h-8 w-8 text-green-600" />
-              </div>
-            </div>
-            <CardTitle className="text-2xl font-bold">You're all set!</CardTitle>
-            <CardDescription>
-              Save your API keys now — they won't be shown again.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-md border bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800 p-3 text-sm text-amber-800 dark:text-amber-200 flex gap-2">
-              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-              <span>These API keys are shown only once. Copy and store them securely.</span>
-            </div>
-
-            {apiKeys.test.key && (
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Test Key</Label>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 rounded bg-muted px-3 py-2 text-xs font-mono break-all">
-                    {apiKeys.test.key}
-                  </code>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleCopy(apiKeys.test.key, 'test')}
-                  >
-                    {copiedKey === 'test' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {apiKeys.live.key && (
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Live Key</Label>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 rounded bg-muted px-3 py-2 text-xs font-mono break-all">
-                    {apiKeys.live.key}
-                  </code>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleCopy(apiKeys.live.key, 'live')}
-                  >
-                    {copiedKey === 'live' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            <Button className="w-full mt-4" onClick={() => router.push('/dashboard')}>
-              Go to Dashboard
-            </Button>
+          <CardContent className="py-12 text-center">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-primary" />
+            <p className="text-muted-foreground">Setting up your organization...</p>
           </CardContent>
         </Card>
       </div>
     );
   }
 
-  // Organization name form (OAuth flow)
-  if (showOrgForm) {
+  // ---- Org name form (pre-provision) ----
+  if (showOrgForm && !apiKeys) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-primary/5 p-4">
         <Card className="w-full max-w-md">
           <CardHeader className="space-y-1 text-center">
             <div className="flex justify-center mb-4">
-              <div className="rounded-full bg-primary/10 p-3">
-                <Zap className="h-8 w-8 text-primary" />
-              </div>
+              <div className="rounded-full bg-primary/10 p-3"><Zap className="h-8 w-8 text-primary" /></div>
             </div>
             <CardTitle className="text-2xl font-bold">Set up your organization</CardTitle>
-            <CardDescription>
-              One last step — give your organization a name.
-            </CardDescription>
+            <CardDescription>One last step — give your organization a name.</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleOrgSubmit} className="space-y-4">
-              {error && (
-                <div className="p-3 text-sm text-red-500 bg-red-50 dark:bg-red-900/20 rounded-md">
-                  {error}
-                </div>
-              )}
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              if (!orgName.trim()) { setError('Organization name is required'); return; }
+              const code = inviteCode || new URLSearchParams(window.location.search).get('invite_code') || localStorage.getItem('sly_beta_invite_code') || '';
+              await provision(orgName.trim(), code || undefined);
+            }} className="space-y-4">
+              {error && <div className="p-3 text-sm text-red-500 bg-red-50 dark:bg-red-900/20 rounded-md">{error}</div>}
               <div className="space-y-2">
                 <Label htmlFor="inviteCode">Invite Code</Label>
-                <Input
-                  id="inviteCode"
-                  type="text"
-                  placeholder="beta_..."
-                  value={inviteCode}
-                  onChange={(e) => setInviteCode(e.target.value)}
-                  required
-                />
+                <Input id="inviteCode" placeholder="beta_..." value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} required />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="orgName">Organization Name</Label>
-                <Input
-                  id="orgName"
-                  type="text"
-                  placeholder="Acme Inc."
-                  value={organizationName}
-                  onChange={(e) => setOrganizationName(e.target.value)}
-                  required
-                  autoFocus
-                />
+                <Input id="orgName" placeholder="Acme Inc." value={orgName} onChange={(e) => setOrgName(e.target.value)} required autoFocus />
               </div>
               <Button type="submit" className="w-full" disabled={provisioning}>
                 {provisioning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -301,23 +368,286 @@ function SetupPageInner() {
     );
   }
 
-  // Error fallback
+  // ---- Step progress bar ----
+  const steps = [
+    { num: 1, label: 'API Keys' },
+    { num: 2, label: 'Wallet' },
+    { num: 3, label: 'Agent' },
+  ];
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-primary/5 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="space-y-1 text-center">
-          <CardTitle className="text-2xl font-bold">Something went wrong</CardTitle>
-          <CardDescription>{error || 'Please try again.'}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <Button className="w-full" onClick={() => window.location.reload()}>
-            Retry
-          </Button>
-          <Button variant="outline" className="w-full" onClick={() => router.push('/auth/login')}>
-            Back to Login
-          </Button>
-        </CardContent>
-      </Card>
+    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 p-4">
+      <div className="max-w-2xl mx-auto pt-8">
+        {/* Progress */}
+        <div className="flex items-center justify-center gap-2 mb-8">
+          {steps.map((s, i) => (
+            <div key={s.num} className="flex items-center gap-2">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
+                step > s.num ? 'bg-green-500 text-white' :
+                step === s.num ? 'bg-primary text-primary-foreground' :
+                'bg-muted text-muted-foreground'
+              }`}>
+                {step > s.num ? <Check className="h-4 w-4" /> : s.num}
+              </div>
+              <span className={`text-sm ${step === s.num ? 'font-medium' : 'text-muted-foreground'}`}>{s.label}</span>
+              {i < steps.length - 1 && <div className="w-12 h-px bg-border" />}
+            </div>
+          ))}
+        </div>
+
+        {error && <div className="p-3 mb-4 text-sm text-red-500 bg-red-50 dark:bg-red-900/20 rounded-md">{error}</div>}
+
+        {/* ============================================================ */}
+        {/* STEP 1: API Keys */}
+        {/* ============================================================ */}
+        {step === 1 && apiKeys && (
+          <Card>
+            <CardHeader className="text-center">
+              <div className="flex justify-center mb-2">
+                <div className="rounded-full bg-green-100 dark:bg-green-900/20 p-3"><Shield className="h-6 w-6 text-green-600" /></div>
+              </div>
+              <CardTitle>Your API Keys</CardTitle>
+              <CardDescription>Save these keys — they won&apos;t be shown again.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg text-sm text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                These API keys are shown only once. Download or copy them now.
+              </div>
+
+              {[
+                { label: 'Sandbox (Test)', key: apiKeys.test.key, id: 'test' },
+                { label: 'Production (Live)', key: apiKeys.live.key, id: 'live' },
+              ].map(({ label, key, id }) => (
+                <div key={id} className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">{label}</Label>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 p-2.5 bg-muted rounded-md text-xs font-mono break-all">{key}</code>
+                    <Button variant="ghost" size="sm" onClick={() => handleCopy(key, id)}>
+                      {copiedKey === id ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" className="flex-1" onClick={() => downloadKeysAsEnv(apiKeys.test.key, apiKeys.live.key, orgName)}>
+                  <Download className="mr-2 h-4 w-4" /> Download .env
+                </Button>
+                <Button className="flex-1" onClick={() => { setError(null); setStep(2); }}>
+                  Next <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ============================================================ */}
+        {/* STEP 2: Wallet */}
+        {/* ============================================================ */}
+        {step === 2 && !walletData && (
+          <Card>
+            <CardHeader className="text-center">
+              <div className="flex justify-center mb-2">
+                <div className="rounded-full bg-blue-100 dark:bg-blue-900/20 p-3"><Wallet className="h-6 w-6 text-blue-600" /></div>
+              </div>
+              <CardTitle>Connect a Wallet</CardTitle>
+              <CardDescription>Wallets hold USDC for your agents to transact on-chain.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {/* Create new */}
+              <div className="border rounded-lg p-4 space-y-3">
+                <div className="flex items-center gap-2 font-medium"><Plus className="h-4 w-4" /> Create New Wallet</div>
+                <div className="flex gap-2">
+                  <Button variant="outline" className="flex-1" disabled={walletLoading} onClick={() => createWallet('base')}>
+                    {walletLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Globe className="mr-2 h-4 w-4" />}
+                    Base (Mainnet)
+                  </Button>
+                  <Button variant="outline" className="flex-1" disabled={walletLoading} onClick={() => createWallet('tempo')}>
+                    {walletLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
+                    Tempo (Testnet)
+                  </Button>
+                </div>
+              </div>
+
+              {/* Link existing */}
+              <div className="border rounded-lg p-4 space-y-3">
+                <div className="flex items-center gap-2 font-medium"><Link2 className="h-4 w-4" /> Link Existing Wallet</div>
+                <div className="flex gap-2">
+                  <Input placeholder="0x... or base58 address" value={externalAddress} onChange={(e) => setExternalAddress(e.target.value)} />
+                  <Button variant="outline" disabled={!externalAddress.trim() || walletLoading} onClick={linkExternalWallet}>Link</Button>
+                </div>
+              </div>
+
+              <button onClick={() => { setError(null); setStep(3); }} className="w-full text-center text-sm text-muted-foreground hover:text-foreground py-2">
+                I&apos;ll connect a wallet later →
+              </button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Wallet created card */}
+        {step === 2 && walletData && (
+          <Card>
+            <CardHeader className="text-center">
+              <div className="flex justify-center mb-2">
+                <div className="rounded-full bg-green-100 dark:bg-green-900/20 p-3"><Check className="h-6 w-6 text-green-600" /></div>
+              </div>
+              <CardTitle>Wallet Connected</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="border rounded-lg p-4 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Address</span>
+                  <code className="font-mono text-xs">{walletData.walletAddress.substring(0, 8)}...{walletData.walletAddress.slice(-6)}</code>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Network</span>
+                  <span>{walletData.network}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Balance</span>
+                  <span>{walletData.balance} {walletData.currency}</span>
+                </div>
+              </div>
+              <Button className="w-full" onClick={() => { setError(null); setStep(3); }}>
+                Next <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ============================================================ */}
+        {/* STEP 3: Agent */}
+        {/* ============================================================ */}
+        {step === 3 && !agentData && (
+          <Card>
+            <CardHeader className="text-center">
+              <div className="flex justify-center mb-2">
+                <div className="rounded-full bg-purple-100 dark:bg-purple-900/20 p-3"><Bot className="h-6 w-6 text-purple-600" /></div>
+              </div>
+              <CardTitle>Register Your First Agent</CardTitle>
+              <CardDescription>How will your agent connect to Sly?</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Integration method picker */}
+              {!integrationMethod && (
+                <div className="space-y-2">
+                  {([
+                    { id: 'mcp' as const, icon: Terminal, label: 'MCP Server', desc: 'Claude Desktop, Cursor, Windsurf' },
+                    { id: 'a2a' as const, icon: Network, label: 'A2A Protocol', desc: 'Claude, GPT, custom LLMs' },
+                    { id: 'sdk' as const, icon: Code, label: 'SDK', desc: 'Node.js / TypeScript apps' },
+                    { id: 'api' as const, icon: Globe, label: 'REST API', desc: 'Any language / platform' },
+                    { id: 'skills' as const, icon: FileCode, label: 'Skills.md', desc: 'Any LLM with tool use' },
+                  ]).map(({ id, icon: Icon, label, desc }) => (
+                    <button key={id} onClick={() => setIntegrationMethod(id)}
+                      className="w-full flex items-center gap-3 p-3 border rounded-lg hover:bg-muted/50 transition-colors text-left">
+                      <Icon className="h-5 w-5 text-muted-foreground shrink-0" />
+                      <div className="flex-1">
+                        <div className="font-medium text-sm">{label}</div>
+                        <div className="text-xs text-muted-foreground">{desc}</div>
+                      </div>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Agent form (after picking method) */}
+              {integrationMethod && (
+                <div className="space-y-3">
+                  <button onClick={() => setIntegrationMethod(null)} className="text-sm text-muted-foreground hover:text-foreground">← Back to methods</button>
+                  <div className="space-y-2">
+                    <Label>Agent Name</Label>
+                    <Input placeholder="My AI Agent" value={agentName} onChange={(e) => setAgentName(e.target.value)} autoFocus />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Description <span className="text-muted-foreground">(optional)</span></Label>
+                    <Input placeholder="What does this agent do?" value={agentDesc} onChange={(e) => setAgentDesc(e.target.value)} />
+                  </div>
+                  <Button className="w-full" disabled={!agentName.trim() || agentLoading} onClick={createAgent}>
+                    {agentLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Bot className="mr-2 h-4 w-4" />}
+                    Create Agent
+                  </Button>
+                </div>
+              )}
+
+              <button onClick={() => router.push('/dashboard')} className="w-full text-center text-sm text-muted-foreground hover:text-foreground py-2">
+                Skip — I&apos;ll add agents later →
+              </button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Agent created card with quickstart */}
+        {step === 3 && agentData && (
+          <Card>
+            <CardHeader className="text-center">
+              <div className="flex justify-center mb-2">
+                <div className="rounded-full bg-green-100 dark:bg-green-900/20 p-3"><Check className="h-6 w-6 text-green-600" /></div>
+              </div>
+              <CardTitle>Agent Created</CardTitle>
+              <CardDescription>{agentData.name} is ready to go.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {agentData.token && (
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Agent Token (save this!)</Label>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 p-2.5 bg-muted rounded-md text-xs font-mono break-all">{agentData.token}</code>
+                    <Button variant="ghost" size="sm" onClick={() => handleCopy(agentData.token!, 'agent')}>
+                      {copiedKey === 'agent' ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Quickstart snippet based on integration method */}
+              {integrationMethod && (
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Quick Start</Label>
+                  <pre className="p-3 bg-muted rounded-md text-xs font-mono overflow-x-auto whitespace-pre-wrap">
+                    {integrationMethod === 'mcp' && `// Add to .mcp.json
+{
+  "mcpServers": {
+    "sly": {
+      "command": "npx",
+      "args": ["@sly/mcp-server"],
+      "env": {
+        "SLY_API_KEY": "${apiKeys?.test.key || 'pk_test_...'}"
+      }
+    }
+  }
+}`}
+                    {integrationMethod === 'sdk' && `npm install @sly/sdk
+
+import { Sly } from '@sly/sdk';
+const sly = new Sly({ apiKey: '${apiKeys?.test.key || 'pk_test_...'}' });
+const quote = await sly.getSettlementQuote({ ... });`}
+                    {integrationMethod === 'api' && `curl https://api.getsly.ai/v1/accounts \\
+  -H "Authorization: Bearer ${apiKeys?.test.key || 'pk_test_...'}"`}
+                    {integrationMethod === 'a2a' && `// Your agent's A2A endpoint
+POST https://api.getsly.ai/a2a/${agentData.id}
+
+// Discover other agents
+GET https://api.getsly.ai/a2a/${agentData.id}/.well-known/agent.json`}
+                    {integrationMethod === 'skills' && `// skills.md — drop in your repo root
+# ${agentData.name}
+
+## Skills
+- check_balance: Check account balance (free)
+- settlement_quote: Get FX quote (0.05 USDC)`}
+                  </pre>
+                </div>
+              )}
+
+              <Button className="w-full" onClick={() => router.push('/dashboard')}>
+                Go to Dashboard <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </div>
   );
 }

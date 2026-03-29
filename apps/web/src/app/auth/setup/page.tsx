@@ -102,7 +102,7 @@ function SetupWizard() {
 
   // Step 2 state
   const [walletData, setWalletData] = useState<WalletData | null>(null);
-  const [walletLoading, setWalletLoading] = useState(false);
+  const [walletLoading, setWalletLoading] = useState<string | false>(false);
   const [externalAddress, setExternalAddress] = useState('');
 
   // Step 3 state
@@ -246,23 +246,40 @@ function SetupWizard() {
     return json;
   }
 
+  // ---- Ensure account exists in target environment ----
+  async function ensureAccount(env: 'test' | 'live'): Promise<string | null> {
+    try {
+      const res = await apiCall('GET', '/v1/accounts?limit=1', undefined, env);
+      const accts = res.data || [];
+      if (accts.length > 0) return accts[0].id;
+      // Create account in this environment
+      const createRes = await apiCall('POST', '/v1/accounts', { type: 'business', name: orgName || 'My Organization' }, env);
+      const newAcct = createRes.data?.data || createRes.data || createRes;
+      return newAcct?.id || null;
+    } catch { return null; }
+  }
+
   // ---- Create wallet ----
   async function createWallet(network: 'base' | 'tempo' | 'sandbox') {
-    if (!accountId) { setError('No account found'); return; }
-    setWalletLoading(true);
+    setWalletLoading(network);
     setError(null);
     try {
       // Base & Tempo = production (mainnet, live key), Sandbox = test (testnet, test key)
       const isSandbox = network === 'sandbox';
       const env: 'test' | 'live' = isSandbox ? 'test' : 'live';
-      const blockchain = network === 'tempo' ? 'base' : 'base'; // Tempo uses Base chain
+
+      // Ensure account exists in the target environment
+      const acctId = await ensureAccount(env);
+      if (!acctId) { setError('Failed to create account'); setWalletLoading(false); return; }
+
+      const blockchain = 'base';
       const names: Record<string, string> = {
         base: 'Base Mainnet',
         tempo: 'Tempo',
         sandbox: 'Sandbox',
       };
       const json = await apiCall('POST', '/v1/wallets', {
-        accountId,
+        accountId: acctId,
         name: `${orgName} ${names[network]} Wallet`,
         currency: 'USDC',
         walletType: 'circle_custodial',
@@ -292,12 +309,14 @@ function SetupWizard() {
 
   // ---- Link external wallet ----
   async function linkExternalWallet() {
-    if (!accountId || !externalAddress.trim()) return;
-    setWalletLoading(true);
+    if (!externalAddress.trim()) return;
+    setWalletLoading('external');
     setError(null);
     try {
+      const acctId = await ensureAccount('test');
+      if (!acctId) { setError('Failed to create account'); setWalletLoading(false); return; }
       const json = await apiCall('POST', '/v1/wallets/external', {
-        accountId,
+        accountId: acctId,
         walletAddress: externalAddress.trim(),
         name: `External Wallet`,
         currency: 'USDC',
@@ -484,16 +503,16 @@ function SetupWizard() {
               <div className="border rounded-lg p-4 space-y-3">
                 <div className="flex items-center gap-2 font-medium"><Plus className="h-4 w-4" /> Create New Wallet</div>
                 <div className="grid grid-cols-3 gap-2">
-                  <Button variant="outline" className="flex-1" disabled={walletLoading} onClick={() => createWallet('base')}>
-                    {walletLoading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Globe className="mr-1 h-4 w-4" />}
+                  <Button variant="outline" className="flex-1" disabled={!!walletLoading} onClick={() => createWallet('base')}>
+                    {walletLoading === 'base' ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Globe className="mr-1 h-4 w-4" />}
                     Base
                   </Button>
-                  <Button variant="outline" className="flex-1" disabled={walletLoading} onClick={() => createWallet('tempo')}>
-                    {walletLoading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Zap className="mr-1 h-4 w-4" />}
+                  <Button variant="outline" className="flex-1" disabled={!!walletLoading} onClick={() => createWallet('tempo')}>
+                    {walletLoading === 'tempo' ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Zap className="mr-1 h-4 w-4" />}
                     Tempo
                   </Button>
-                  <Button variant="outline" className="flex-1" disabled={walletLoading} onClick={() => createWallet('sandbox')}>
-                    {walletLoading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Shield className="mr-1 h-4 w-4" />}
+                  <Button variant="outline" className="flex-1" disabled={!!walletLoading} onClick={() => createWallet('sandbox')}>
+                    {walletLoading === 'sandbox' ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Shield className="mr-1 h-4 w-4" />}
                     Sandbox
                   </Button>
                 </div>
@@ -505,7 +524,9 @@ function SetupWizard() {
                 <div className="flex items-center gap-2 font-medium"><Link2 className="h-4 w-4" /> Link Existing Wallet</div>
                 <div className="flex gap-2">
                   <Input placeholder="0x... or base58 address" value={externalAddress} onChange={(e) => setExternalAddress(e.target.value)} />
-                  <Button variant="outline" disabled={!externalAddress.trim() || walletLoading} onClick={linkExternalWallet}>Link</Button>
+                  <Button variant="outline" disabled={!externalAddress.trim() || !!walletLoading} onClick={linkExternalWallet}>
+                    {walletLoading === 'external' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Link'}
+                  </Button>
                 </div>
               </div>
 

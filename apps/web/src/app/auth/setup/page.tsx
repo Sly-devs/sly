@@ -232,10 +232,10 @@ function SetupWizard() {
   }
 
   // ---- API helper ----
-  async function apiCall(method: string, path: string, body?: any) {
+  async function apiCall(method: string, path: string, body?: any, env: 'test' | 'live' = 'test') {
     const res = await fetch(`${apiUrl}${path}`, {
       method,
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}`, 'X-Environment': 'test' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}`, 'X-Environment': env },
       body: body ? JSON.stringify(body) : undefined,
     });
     const json = await res.json();
@@ -252,15 +252,16 @@ function SetupWizard() {
     setWalletLoading(true);
     setError(null);
     try {
-      const blockchain = network === 'tempo' ? 'base' : 'base'; // both use base chain
+      // Base = production (mainnet, live key), Tempo = sandbox (testnet, test key)
+      const env: 'test' | 'live' = network === 'base' ? 'live' : 'test';
       const json = await apiCall('POST', '/v1/wallets', {
         accountId,
         name: `${orgName} Wallet`,
         currency: 'USDC',
         walletType: 'circle_custodial',
-        blockchain,
-        purpose: 'Primary wallet for agent transactions',
-      });
+        blockchain: 'base',
+        purpose: network === 'base' ? 'Production wallet on Base mainnet' : 'Sandbox wallet for testing',
+      }, env);
       const w = json.data || json;
       setWalletData({
         id: w.id,
@@ -273,7 +274,7 @@ function SetupWizard() {
 
       // Auto-fund if testnet
       if (network === 'tempo' && w.id) {
-        await apiCall('POST', `/v1/wallets/${w.id}/test-fund`, { amount: 10, currency: 'USDC' });
+        await apiCall('POST', `/v1/wallets/${w.id}/test-fund`, { amount: 10, currency: 'USDC' }, 'test');
         setWalletData(prev => prev ? { ...prev, balance: 10 } : prev);
       }
     } catch (e: any) {
@@ -478,13 +479,14 @@ function SetupWizard() {
                 <div className="flex gap-2">
                   <Button variant="outline" className="flex-1" disabled={walletLoading} onClick={() => createWallet('base')}>
                     {walletLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Globe className="mr-2 h-4 w-4" />}
-                    Base
+                    Base (Production)
                   </Button>
                   <Button variant="outline" className="flex-1" disabled={walletLoading} onClick={() => createWallet('tempo')}>
                     {walletLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
-                    Tempo
+                    Base (Sandbox)
                   </Button>
                 </div>
+                <p className="text-xs text-muted-foreground">Production wallets settle on Base mainnet with real USDC. Sandbox wallets use testnet with free test funds.</p>
               </div>
 
               {/* Link existing */}

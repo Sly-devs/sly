@@ -238,7 +238,12 @@ function SetupWizard() {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
       body: body ? JSON.stringify(body) : undefined,
     });
-    return res.json();
+    const json = await res.json();
+    if (!res.ok) {
+      const errMsg = json.error || json.data?.error || `Request failed (${res.status})`;
+      throw new Error(typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg));
+    }
+    return json;
   }
 
   // ---- Create wallet ----
@@ -511,7 +516,7 @@ function SetupWizard() {
               <div className="border rounded-lg p-4 space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Address</span>
-                  <code className="font-mono text-xs">{walletData.walletAddress.substring(0, 8)}...{walletData.walletAddress.slice(-6)}</code>
+                  <code className="font-mono text-xs">{walletData.walletAddress ? `${walletData.walletAddress.substring(0, 8)}...${walletData.walletAddress.slice(-6)}` : 'Pending...'}</code>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Network</span>

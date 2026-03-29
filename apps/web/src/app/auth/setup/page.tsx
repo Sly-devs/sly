@@ -341,7 +341,7 @@ function SetupWizard() {
   // ---- Link external wallet ----
   async function linkExternalWallet() {
     if (!externalAddress.trim()) return;
-    setWalletLoading('external');
+    setWalletLoading(true);
     setError(null);
     try {
       const acctId = await ensureAccount('test');

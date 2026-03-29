@@ -159,14 +159,26 @@ function SetupWizard() {
         setApiKeys(data.apiKeys);
       }
 
-      // Get the default account for wallet/agent creation
+      // Get or create the default account for wallet/agent creation
       try {
         const acctRes = await fetch(`${apiUrl}/v1/accounts?limit=1`, {
           headers: { 'Authorization': `Bearer ${session.access_token}` },
         });
         const acctJson = await acctRes.json();
         const accts = acctJson.data || [];
-        if (accts.length > 0) setAccountId(accts[0].id);
+        if (accts.length > 0) {
+          setAccountId(accts[0].id);
+        } else {
+          // Create a default account with the org name
+          const createRes = await fetch(`${apiUrl}/v1/accounts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+            body: JSON.stringify({ type: 'business', name: orgNameVal }),
+          });
+          const createJson = await createRes.json();
+          const newAcct = createJson.data?.data || createJson.data || createJson;
+          if (newAcct?.id) setAccountId(newAcct.id);
+        }
       } catch { /* non-fatal */ }
 
     } catch {

@@ -12,6 +12,7 @@ import {
   Bot, ArrowRight, Globe, Terminal, FileCode, Code, Network,
   Plus, Link2, ChevronRight, Shield,
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -294,7 +295,7 @@ function SetupWizard() {
       for (const def of walletDefs) {
         try {
           const acctId = await ensureAccount(def.env);
-          if (!acctId) continue;
+          if (!acctId) { toast.error(`Failed to create account for ${def.name}`); continue; }
 
           const json = await apiCall('POST', '/v1/wallets', {
             accountId: acctId,
@@ -322,16 +323,15 @@ function SetupWizard() {
             } catch { /* non-fatal */ }
           }
           results.push(wallet);
+          toast.success(`${def.name} created`);
         } catch (e: any) {
-          console.warn(`Failed to create ${def.name}:`, e.message);
+          toast.error(`${def.name} failed: ${e.message?.substring(0, 60) || 'Unknown error'}`);
         }
       }
 
-      if (results.length === 0) {
-        setError('Failed to create wallets. Please try again.');
-      } else {
-        setCreatedWallets(results);
-      }
+      setCreatedWallets(results);
+      // Auto-advance to Step 3 regardless of partial failures
+      setStep(3);
     } catch (e: any) {
       setError(e.message || 'Failed to create wallet');
     }
@@ -520,7 +520,7 @@ function SetupWizard() {
         {/* ============================================================ */}
         {/* STEP 2: Wallet */}
         {/* ============================================================ */}
-        {step === 2 && createdWallets.length === 0 && (
+        {step === 2 && (
           <Card>
             <CardHeader className="text-center">
               <div className="flex justify-center mb-2">
@@ -575,40 +575,7 @@ function SetupWizard() {
           </Card>
         )}
 
-        {/* Wallets created card */}
-        {step === 2 && createdWallets.length > 0 && (
-          <Card>
-            <CardHeader className="text-center">
-              <div className="flex justify-center mb-2">
-                <div className="rounded-full bg-green-100 dark:bg-green-900/20 p-3"><Check className="h-6 w-6 text-green-600" /></div>
-              </div>
-              <CardTitle>{createdWallets.length} Wallet{createdWallets.length > 1 ? 's' : ''} Created</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {createdWallets.map((w, i) => (
-                <div key={i} className="border rounded-lg p-3 space-y-1 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Network</span>
-                    <span>{w.network}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Address</span>
-                    <code className="font-mono text-xs">{w.walletAddress ? `${w.walletAddress.substring(0, 8)}...${w.walletAddress.slice(-6)}` : 'Internal'}</code>
-                  </div>
-                  {w.balance > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Balance</span>
-                      <span>{w.balance} {w.currency}</span>
-                    </div>
-                  )}
-                </div>
-              ))}
-              <Button className="w-full" onClick={() => { setError(null); setStep(3); }}>
-                Next <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </CardContent>
-          </Card>
-        )}
+        {/* Wallets created card removed — auto-advances to Step 3 with toasts */}
 
         {/* ============================================================ */}
         {/* STEP 3: Connect Your Agent */}
@@ -627,18 +594,28 @@ function SetupWizard() {
               {!integrationMethod ? (
                 <div className="space-y-2">
                   {([
-                    { id: 'mcp' as const, icon: Terminal, label: 'MCP Server', desc: 'Claude Desktop, Cursor, Windsurf' },
-                    { id: 'a2a' as const, icon: Network, label: 'A2A Protocol', desc: 'Claude, GPT, custom LLMs' },
-                    { id: 'sdk' as const, icon: Code, label: 'SDK', desc: 'Node.js / TypeScript apps' },
-                    { id: 'api' as const, icon: Globe, label: 'REST API', desc: 'Any language / platform' },
-                    { id: 'skills' as const, icon: FileCode, label: 'Skills.md', desc: 'Any LLM with tool use' },
-                  ]).map(({ id, icon: Icon, label, desc }) => (
+                    { id: 'mcp' as const, icon: Terminal, label: 'MCP Server', desc: 'One-click config for AI coding tools',
+                      logos: ['Claude', 'Cursor', 'Windsurf'] },
+                    { id: 'a2a' as const, icon: Network, label: 'A2A Protocol', desc: 'Agent-to-agent communication',
+                      logos: ['Claude', 'OpenAI', 'OpenClaw'] },
+                    { id: 'sdk' as const, icon: Code, label: 'SDK', desc: 'Build agents programmatically',
+                      logos: ['Node.js', 'TypeScript'] },
+                    { id: 'api' as const, icon: Globe, label: 'REST API', desc: 'Direct HTTP from any language',
+                      logos: ['Python', 'Go', 'Any'] },
+                    { id: 'skills' as const, icon: FileCode, label: 'Skills.md', desc: 'Discoverable skill manifest',
+                      logos: ['Claude', 'OpenAI', 'Gemini'] },
+                  ]).map(({ id, icon: Icon, label, desc, logos }) => (
                     <button key={id} onClick={() => setIntegrationMethod(id)}
                       className="w-full flex items-center gap-3 p-3 border rounded-lg hover:bg-muted/50 transition-colors text-left">
                       <Icon className="h-5 w-5 text-muted-foreground shrink-0" />
                       <div className="flex-1">
                         <div className="font-medium text-sm">{label}</div>
                         <div className="text-xs text-muted-foreground">{desc}</div>
+                        <div className="flex gap-1 mt-1">
+                          {logos.map(l => (
+                            <span key={l} className="text-[10px] px-1.5 py-0.5 bg-muted rounded-full text-muted-foreground">{l}</span>
+                          ))}
+                        </div>
                       </div>
                       <ChevronRight className="h-4 w-4 text-muted-foreground" />
                     </button>
@@ -651,7 +628,7 @@ function SetupWizard() {
 
                   {integrationMethod === 'mcp' && (
                     <div className="space-y-3">
-                      <div className="text-sm text-muted-foreground">Add this to your <code className="bg-muted px-1 rounded">.mcp.json</code> or Claude Desktop config:</div>
+                      <div className="text-sm text-muted-foreground">Add to your <code className="bg-muted px-1 rounded">.mcp.json</code> or Claude Desktop config:</div>
                       <div className="relative">
                         <pre className="p-4 bg-muted rounded-lg text-xs font-mono overflow-x-auto">{`{
   "mcpServers": {
@@ -664,11 +641,12 @@ function SetupWizard() {
     }
   }
 }`}</pre>
-                        <Button variant="ghost" size="sm" className="absolute top-2 right-2" onClick={() => handleCopy(`{"mcpServers":{"sly":{"command":"npx","args":["@sly/mcp-server"],"env":{"SLY_API_KEY":"${apiKeys?.test.key || ''}"}}}}`, 'mcp')}>
-                          {copiedKey === 'mcp' ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
-                        </Button>
                       </div>
-                      <div className="text-xs text-muted-foreground">Your agent will auto-register when it first connects. Works with Claude Desktop, Cursor, Windsurf, and any MCP-compatible client.</div>
+                      <Button className="w-full" onClick={() => { handleCopy(`{\n  "mcpServers": {\n    "sly": {\n      "command": "npx",\n      "args": ["@sly/mcp-server"],\n      "env": {\n        "SLY_API_KEY": "${apiKeys?.test.key || ''}"\n      }\n    }\n  }\n}`, 'mcp'); toast.success('Config copied — paste into .mcp.json'); }}>
+                        {copiedKey === 'mcp' ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+                        Copy MCP Config
+                      </Button>
+                      <div className="text-xs text-muted-foreground">Works with Claude Desktop, Cursor, Windsurf, and any MCP-compatible client. Agent auto-registers on first connection.</div>
                     </div>
                   )}
 
@@ -740,7 +718,14 @@ curl https://api.getsly.ai/v1/accounts \\
 
                   {integrationMethod === 'skills' && (
                     <div className="space-y-3">
-                      <div className="text-sm text-muted-foreground">Create a <code className="bg-muted px-1 rounded">skills.md</code> file in your repo:</div>
+                      <div className="text-sm text-muted-foreground">Your agent&apos;s skill manifest is available at:</div>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 p-2.5 bg-muted rounded-md text-xs font-mono break-all">https://api.getsly.ai/v1/skills.md</code>
+                        <Button variant="ghost" size="sm" onClick={() => { handleCopy('https://api.getsly.ai/v1/skills.md', 'skills-url'); toast.success('Skill URL copied'); }}>
+                          {copiedKey === 'skills-url' ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                      <div className="text-sm text-muted-foreground mt-2">Or create a custom <code className="bg-muted px-1 rounded">skills.md</code> in your repo:</div>
                       <pre className="p-4 bg-muted rounded-lg text-xs font-mono overflow-x-auto">{`# My Agent
 
 ## Skills
@@ -757,6 +742,10 @@ curl https://api.getsly.ai/v1/accounts \\
 
 ## Auth
 api_key: ${apiKeys?.test.key || 'pk_test_...'}`}</pre>
+                      <Button variant="outline" className="w-full" onClick={() => { handleCopy(`# My Agent\n\n## Skills\n\n### check_balance\n- Price: free\n- Input: account_id (string)\n- Description: Check USDC balance\n\n### settlement_quote\n- Price: 0.05 USDC\n- Input: from_currency, to_currency, amount\n- Description: Get real-time FX quote\n\n## Auth\napi_key: ${apiKeys?.test.key || ''}`, 'skills-tpl'); toast.success('Template copied'); }}>
+                        {copiedKey === 'skills-tpl' ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+                        Copy Template
+                      </Button>
                       <div className="text-xs text-muted-foreground">Other agents discover your skills automatically. Paid skills are billed via x402 micropayments.</div>
                     </div>
                   )}

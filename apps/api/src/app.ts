@@ -265,6 +265,16 @@ app.route('/agents', agentCardRouter);
 // Epic 49: Protocol Discovery & Management
 app.route('/v1/protocols', protocolsRouter);
 
+// OpenAPI spec + Skills.md (public - for agent discovery and API documentation)
+import { openapiRouter } from './routes/openapi.js';
+app.route('/v1', openapiRouter);
+
+// Swagger UI redirect
+app.get('/docs', (c) => {
+  const specUrl = encodeURIComponent(`${process.env.API_BASE_URL || 'https://api.getsly.ai'}/v1/openapi.json`);
+  return c.redirect(`https://petstore.swagger.io/?url=${specUrl}`);
+});
+
 // Beta admin routes (platform admin auth, NOT tenant auth)
 app.route('/admin/beta', betaAdminRouter);
 

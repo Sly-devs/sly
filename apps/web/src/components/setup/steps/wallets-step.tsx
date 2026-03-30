@@ -22,6 +22,7 @@ interface WalletDef {
   name: string;
   env: 'test' | 'live';
   walletType: string;
+  blockchain: string;
   fund?: number;
 }
 
@@ -116,12 +117,12 @@ export function WalletsStep({ orgName, apiCall, ensureAccount, onNext, onSkip }:
 
     const walletDefs: WalletDef[] = [];
     if (selections.has('base')) {
-      walletDefs.push({ id: 'base-live', name: `${orgName} Base Wallet`, env: 'live', walletType: 'circle_custodial' });
-      walletDefs.push({ id: 'base-sandbox', name: `${orgName} Base Sandbox Wallet`, env: 'test', walletType: 'circle_custodial', fund: 10 });
+      walletDefs.push({ id: 'base-live', name: `${orgName} Base Wallet`, env: 'live', walletType: 'circle_custodial', blockchain: 'base' });
+      walletDefs.push({ id: 'base-sandbox', name: `${orgName} Base Sandbox Wallet`, env: 'test', walletType: 'circle_custodial', blockchain: 'base', fund: 10 });
     }
     if (selections.has('tempo')) {
-      walletDefs.push({ id: 'tempo-live', name: `${orgName} Tempo Wallet`, env: 'live', walletType: 'circle_custodial' });
-      walletDefs.push({ id: 'tempo-sandbox', name: `${orgName} Tempo Sandbox Wallet`, env: 'test', walletType: 'internal' });
+      walletDefs.push({ id: 'tempo-live', name: `${orgName} Tempo Wallet`, env: 'live', walletType: 'circle_custodial', blockchain: 'tempo' });
+      walletDefs.push({ id: 'tempo-sandbox', name: `${orgName} Tempo Sandbox Wallet`, env: 'test', walletType: 'internal', blockchain: 'tempo' });
     }
 
     // Initialize progress rows
@@ -147,7 +148,7 @@ export function WalletsStep({ orgName, apiCall, ensureAccount, onNext, onSkip }:
             name: def.name,
             currency: 'USDC',
             walletType: def.walletType,
-            blockchain: 'base',
+            blockchain: def.blockchain,
             purpose: def.env === 'live' ? 'Production wallet' : 'Sandbox wallet for testing',
           },
           def.env,

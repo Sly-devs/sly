@@ -5,11 +5,16 @@ export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
   const next = searchParams.get('next') ?? '/dashboard';
+  const inviteCode = searchParams.get('invite_code');
 
   if (code) {
     const supabase = await createSupabaseServerClient();
     const { error, data } = await supabase.auth.exchangeCodeForSession(code);
     if (!error && data.session) {
+      const setupUrl = inviteCode
+        ? `${origin}/auth/setup?invite_code=${encodeURIComponent(inviteCode)}`
+        : `${origin}/auth/setup`;
+
       // Check if user has a tenant provisioned
       try {
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || 'http://localhost:4000';
@@ -21,23 +26,16 @@ export async function GET(request: Request) {
 
         if (meResponse.ok) {
           const meData = await meResponse.json();
-          // Response may be wrapped as { data: { user, tenant } }
           const me = meData.data || meData;
           if (!me.tenant) {
-            // No tenant — redirect to setup (invite code will be read from localStorage if available)
-            const inviteCode = searchParams.get('invite_code');
-            if (inviteCode) {
-              return NextResponse.redirect(`${origin}/auth/setup?invite_code=${encodeURIComponent(inviteCode)}`);
-            }
-            return NextResponse.redirect(`${origin}/auth/setup`);
+            return NextResponse.redirect(setupUrl);
           }
         } else {
-          // API error — redirect to setup to let user provide invite code
-          return NextResponse.redirect(`${origin}/auth/setup`);
+          return NextResponse.redirect(setupUrl);
         }
       } catch {
         // API unreachable — redirect to setup
-        return NextResponse.redirect(`${origin}/auth/setup`);
+        return NextResponse.redirect(setupUrl);
       }
 
       // User has tenant — proceed to requested page

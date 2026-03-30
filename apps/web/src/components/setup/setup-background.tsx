@@ -44,10 +44,7 @@ export function SetupBackground() {
       {/* Layer 1: Deep navy base matching --background */}
       <div className="absolute inset-0 bg-background" />
 
-      {/* Layer 2: Grid pattern */}
-      <div className="absolute inset-0 setup-grid-bg" />
-
-      {/* Layer 3: Gradient orbs */}
+      {/* Layer 2: Gradient orbs */}
       {orbs.map((orb, i) => (
         <motion.div
           key={i}

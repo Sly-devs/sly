@@ -33,7 +33,26 @@ interface IntegrationCard {
   getContent: (testKey: string, liveKey: string, accountId: string) => string;
 }
 
+// Order: Skills, A2A, MCP, CLI, SDK, ChatGPT, REST API
 const cards: IntegrationCard[] = [
+  {
+    id: 'skills',
+    icon: FileCode,
+    title: 'Skills.md',
+    description: 'Discoverable agent skill manifest',
+    accent: 'amber',
+    docsUrl: 'https://docs.getsly.ai/guides/skills',
+    getContent: () => 'https://api.getsly.ai/v1/skills.md',
+  },
+  {
+    id: 'a2a',
+    icon: Network,
+    title: 'A2A Protocol',
+    description: 'Agent-to-agent discovery and communication',
+    accent: 'indigo',
+    docsUrl: 'https://docs.getsly.ai/guides/a2a',
+    getContent: () => 'https://api.getsly.ai/a2a/<agent_id>/.well-known/agent.json',
+  },
   {
     id: 'mcp',
     icon: Terminal,
@@ -60,15 +79,6 @@ const cards: IntegrationCard[] = [
       ),
   },
   {
-    id: 'chatgpt',
-    icon: Globe,
-    title: 'ChatGPT Actions',
-    description: 'Import OpenAPI spec as a Custom GPT action',
-    accent: 'emerald',
-    docsUrl: 'https://docs.getsly.ai/guides/chatgpt',
-    getContent: () => 'https://api.getsly.ai/v1/openapi.json',
-  },
-  {
     id: 'cli',
     icon: Terminal,
     title: 'CLI',
@@ -87,31 +97,22 @@ const cards: IntegrationCard[] = [
     getContent: () => 'npm install @sly/sdk',
   },
   {
-    id: 'api',
+    id: 'chatgpt',
     icon: Globe,
-    title: 'REST API',
-    description: 'OpenAPI spec — import into Postman, Swagger, or any HTTP client',
+    title: 'ChatGPT Actions',
+    description: 'Create GPT → Configure → Actions → Import URL',
     accent: 'emerald',
-    docsUrl: 'https://docs.getsly.ai/api',
+    docsUrl: 'https://docs.getsly.ai/guides/chatgpt',
     getContent: () => 'https://api.getsly.ai/v1/openapi.json',
   },
   {
-    id: 'a2a',
-    icon: Network,
-    title: 'A2A Protocol',
-    description: 'Agent-to-agent discovery and communication',
-    accent: 'indigo',
-    docsUrl: 'https://docs.getsly.ai/guides/a2a',
-    getContent: () => 'https://api.getsly.ai/a2a/<agent_id>/.well-known/agent.json',
-  },
-  {
-    id: 'skills',
-    icon: FileCode,
-    title: 'Skills.md',
-    description: 'Discoverable agent skill manifest',
-    accent: 'amber',
-    docsUrl: 'https://docs.getsly.ai/guides/skills',
-    getContent: () => 'https://api.getsly.ai/v1/skills.md',
+    id: 'api',
+    icon: Globe,
+    title: 'REST API',
+    description: 'Interactive API docs — browse and test endpoints',
+    accent: 'emerald',
+    docsUrl: 'https://docs.getsly.ai/api',
+    getContent: () => 'https://api.getsly.ai/docs',
   },
 ];
 
@@ -224,8 +225,8 @@ export function IntegrationStep({ apiKeys, accountId, onComplete }: IntegrationS
         </motion.div>
 
         {/* Integration cards */}
-        <motion.div variants={stagger} className="space-y-3">
-          {cards.map((card) => {
+        <motion.div variants={stagger} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {cards.map((card, i) => {
             const Icon = card.icon;
             const colors = accentStyles[card.accent];
             const content = card.getContent(testKey, liveKey, acctId);
@@ -235,7 +236,9 @@ export function IntegrationStep({ apiKeys, accountId, onComplete }: IntegrationS
               <motion.div
                 key={card.id}
                 variants={fadeUp}
-                className="bg-card border border-border rounded-xl p-4"
+                className={`bg-card border border-border rounded-xl p-4 ${
+                  i === cards.length - 1 && cards.length % 2 === 1 ? 'sm:col-span-2' : ''
+                }`}
               >
                 {/* Header row: icon + title + docs link */}
                 <div className="flex items-start justify-between mb-1">

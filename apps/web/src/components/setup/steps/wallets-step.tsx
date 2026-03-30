@@ -67,7 +67,7 @@ const networks = [
     id: 'base',
     icon: Globe,
     label: 'Base',
-    desc: 'USDC on Base L2 — production + sandbox wallets',
+    desc: 'USDC on Base L2 — sandbox wallet with test funds',
     accent: 'blue',
     recommended: true,
   },
@@ -75,7 +75,7 @@ const networks = [
     id: 'tempo',
     icon: Zap,
     label: 'Tempo',
-    desc: 'USDC on Tempo L2 — production + sandbox wallets',
+    desc: 'USDC on Tempo L2 — sandbox wallet for testing',
     accent: 'purple',
     recommended: false,
   },
@@ -116,13 +116,13 @@ export function WalletsStep({ orgName, apiCall, ensureAccount, onNext, onSkip }:
     setCreating(true);
 
     const walletDefs: WalletDef[] = [];
+    // Onboarding creates sandbox wallets only — production wallets are created
+    // from the dashboard when the user switches to production mode
     if (selections.has('base')) {
-      walletDefs.push({ id: 'base-live', name: `${orgName} Base Wallet`, env: 'live', walletType: 'circle_custodial', blockchain: 'base' });
-      walletDefs.push({ id: 'base-sandbox', name: `${orgName} Base Sandbox Wallet`, env: 'test', walletType: 'circle_custodial', blockchain: 'base', fund: 10 });
+      walletDefs.push({ id: 'base-sandbox', name: `${orgName} Base Wallet`, env: 'test', walletType: 'circle_custodial', blockchain: 'base', fund: 10 });
     }
     if (selections.has('tempo')) {
-      walletDefs.push({ id: 'tempo-live', name: `${orgName} Tempo Wallet`, env: 'live', walletType: 'circle_custodial', blockchain: 'tempo' });
-      walletDefs.push({ id: 'tempo-sandbox', name: `${orgName} Tempo Sandbox Wallet`, env: 'test', walletType: 'internal', blockchain: 'tempo' });
+      walletDefs.push({ id: 'tempo-sandbox', name: `${orgName} Tempo Wallet`, env: 'test', walletType: 'internal', blockchain: 'tempo' });
     }
 
     // Initialize progress rows
@@ -216,7 +216,7 @@ export function WalletsStep({ orgName, apiCall, ensureAccount, onNext, onSkip }:
     setLinkingExternal(false);
   }, [externalAddress, apiCall, ensureAccount, onNext]);
 
-  const totalWallets = selections.size * 2;
+  const totalWallets = selections.size;
 
   return (
     <motion.div
@@ -258,7 +258,7 @@ export function WalletsStep({ orgName, apiCall, ensureAccount, onNext, onSkip }:
       <motion.div variants={fadeUp} className="text-center space-y-2">
         <h2 className="text-2xl font-bold text-white">Create Wallets</h2>
         <p className="text-sm text-white/50">
-          Select networks to create production + sandbox wallet pairs.
+          Select networks to create sandbox wallets with test funds.
         </p>
       </motion.div>
 

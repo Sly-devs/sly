@@ -17,11 +17,18 @@ import { ApiKeysStep } from './steps/api-keys-step';
 import { WalletsStep } from './steps/wallets-step';
 import { IntegrationStep } from './steps/integration-step';
 
-// Onboarding uses the sandbox API -- users start in sandbox, switch to production later
-const apiUrl =
+// Route API calls to the correct server based on environment
+const sandboxApiUrl =
   process.env.NEXT_PUBLIC_SANDBOX_API_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
   'http://localhost:4000';
+const productionApiUrl =
+  process.env.NEXT_PUBLIC_API_URL ||
+  'http://localhost:4000';
+
+function getApiUrl(env: 'test' | 'live'): string {
+  return env === 'live' ? productionApiUrl : sandboxApiUrl;
+}
 
 interface ApiKeys {
   test: { key: string; prefix: string };
@@ -69,7 +76,7 @@ export default function SetupWizard() {
       setAuthToken(session.access_token);
 
       try {
-        const response = await fetch(`${apiUrl}/v1/auth/provision`, {
+        const response = await fetch(`${sandboxApiUrl}/v1/auth/provision`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -102,7 +109,7 @@ export default function SetupWizard() {
 
         // Get or create the default account for wallet/agent creation
         try {
-          const acctRes = await fetch(`${apiUrl}/v1/accounts?limit=1`, {
+          const acctRes = await fetch(`${sandboxApiUrl}/v1/accounts?limit=1`, {
             headers: { Authorization: `Bearer ${session.access_token}` },
           });
           const acctJson = await acctRes.json();
@@ -111,7 +118,7 @@ export default function SetupWizard() {
             setAccountId(accts[0].id);
           } else {
             // Create a default account with the org name
-            const createRes = await fetch(`${apiUrl}/v1/accounts`, {
+            const createRes = await fetch(`${sandboxApiUrl}/v1/accounts`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -189,7 +196,7 @@ export default function SetupWizard() {
       }
       if (!token) throw new Error('Not authenticated');
 
-      const res = await fetch(`${apiUrl}${path}`, {
+      const res = await fetch(`${getApiUrl(env)}${path}`, {
         method,
         headers: {
           'Content-Type': 'application/json',

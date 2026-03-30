@@ -275,16 +275,27 @@ export default function SetupWizard() {
             className="space-y-8"
           >
             {/* Logo */}
-            <div className="flex justify-center">
-              <motion.div
-                initial={{ scale: 0.8, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ delay: 0.1 }}
-                className="text-3xl font-bold bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent"
-              >
-                Sly
-              </motion.div>
-            </div>
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ delay: 0.1 }}
+              className="flex items-center justify-center gap-2.5"
+            >
+              <div
+                className="w-9 h-9 bg-blue-500"
+                style={{
+                  WebkitMaskImage: 'url(/sly-logo.png)',
+                  WebkitMaskSize: 'contain',
+                  WebkitMaskRepeat: 'no-repeat',
+                  WebkitMaskPosition: 'center',
+                  maskImage: 'url(/sly-logo.png)',
+                  maskSize: 'contain',
+                  maskRepeat: 'no-repeat',
+                  maskPosition: 'center',
+                }}
+              />
+              <span className="text-2xl font-bold text-white">Sly</span>
+            </motion.div>
 
             {/* Title */}
             <motion.div
@@ -377,8 +388,21 @@ export default function SetupWizard() {
       <div className="relative z-10 w-full px-6 pt-6 pb-4">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           {/* Logo */}
-          <div className="text-xl font-bold bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">
-            Sly
+          <div className="flex items-center gap-2">
+            <div
+              className="w-7 h-7 bg-blue-500"
+              style={{
+                WebkitMaskImage: 'url(/sly-logo.png)',
+                WebkitMaskSize: 'contain',
+                WebkitMaskRepeat: 'no-repeat',
+                WebkitMaskPosition: 'center',
+                maskImage: 'url(/sly-logo.png)',
+                maskSize: 'contain',
+                maskRepeat: 'no-repeat',
+                maskPosition: 'center',
+              }}
+            />
+            <span className="text-lg font-bold text-white">Sly</span>
           </div>
           {/* Progress */}
           <div className="flex-1 max-w-xs ml-8">

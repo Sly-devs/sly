@@ -21,9 +21,9 @@ interface TenantOnboardingState {
   sandbox_mode: boolean;
 }
 
-async function fetchOnboardingState(apiFetch: ApiFetchFn): Promise<TenantOnboardingState> {
+async function fetchOnboardingState(apiFetch: ApiFetchFn, apiUrl: string): Promise<TenantOnboardingState> {
   const response = await apiFetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/v1/onboarding`
+    `${apiUrl}/v1/onboarding`
   );
   if (!response.ok) {
     throw new Error('Failed to fetch onboarding state');
@@ -43,7 +43,7 @@ interface OnboardingStep {
 }
 
 export function OnboardingBanner() {
-  const { authToken, isConfigured, apiEnvironment } = useApiConfig();
+  const { authToken, isConfigured, apiEnvironment, apiUrl } = useApiConfig();
   const { environment } = useEnvironment();
   const apiFetch = useApiFetch();
   const [dismissed, setDismissed] = useState(false);
@@ -63,7 +63,7 @@ export function OnboardingBanner() {
 
   const { data: onboardingState, isLoading } = useQuery({
     queryKey: ['onboarding-state-banner', apiEnvironment],
-    queryFn: () => fetchOnboardingState(apiFetch),
+    queryFn: () => fetchOnboardingState(apiFetch, apiUrl),
     enabled: !!authToken && isConfigured,
     staleTime: 60 * 1000,
   });

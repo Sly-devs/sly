@@ -47,8 +47,13 @@ const SLY_API_URL = process.env.SLY_API_URL || getEnvironmentConfig(SLY_ENVIRONM
 const keys: Record<string, string> = { sandbox: SLY_API_KEY };
 if (SLY_API_KEY_LIVE) keys.production = SLY_API_KEY_LIVE;
 
+// Build URLs map for runtime environment switching
+const SLY_API_URL_LIVE = process.env.SLY_API_URL_LIVE;
+const urls: Record<string, string> = { sandbox: SLY_API_URL };
+if (SLY_API_URL_LIVE) urls.production = SLY_API_URL_LIVE;
+
 // Create MCP server with all tools
-const server = createMcpServer(sly, SLY_API_URL, SLY_API_KEY, keys);
+const server = createMcpServer(sly, SLY_API_URL, SLY_API_KEY, keys, urls);
 
 /**
  * Start the server

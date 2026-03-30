@@ -53,11 +53,12 @@ const PROTOCOL_COLORS: Record<ProtocolId, string> = {
 
 async function fetchProtocolDistribution(
   apiFetch: ApiFetchFn,
+  apiUrl: string,
   timeRange: TimeRange,
   metric: Metric
 ): Promise<{ data: ProtocolDistribution[] }> {
   const response = await apiFetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/v1/analytics/protocol-distribution?timeRange=${timeRange}&metric=${metric}`
+    `${apiUrl}/v1/analytics/protocol-distribution?timeRange=${timeRange}&metric=${metric}`
   );
   if (!response.ok) {
     throw new Error('Failed to fetch protocol distribution');
@@ -88,14 +89,14 @@ function formatCount(value: number): string {
 }
 
 export function ProtocolStats() {
-  const { authToken, isConfigured, apiEnvironment } = useApiConfig();
+  const { authToken, isConfigured, apiEnvironment, apiUrl } = useApiConfig();
   const apiFetch = useApiFetch();
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
   const [metric, setMetric] = useState<Metric>('volume');
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['protocol-distribution', timeRange, metric, apiEnvironment],
-    queryFn: () => fetchProtocolDistribution(apiFetch, timeRange, metric),
+    queryFn: () => fetchProtocolDistribution(apiFetch, apiUrl, timeRange, metric),
     enabled: !!authToken && isConfigured,
     staleTime: 60 * 1000,
   });

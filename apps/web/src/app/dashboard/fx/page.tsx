@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 export default function FXCalculatorPage() {
     const router = useRouter();
     const api = useApiClient();
-    const { authToken } = useApiConfig();
+    const { authToken, apiUrl } = useApiConfig();
 
     const [fromCurrency, setFromCurrency] = useState('USDC');
     const [toCurrency, setToCurrency] = useState('EURC');
@@ -44,7 +44,7 @@ export default function FXCalculatorPage() {
             // but let's try to fit the shape.
 
             try {
-                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/v1/quotes`, {
+                const response = await fetch(`${apiUrl}/v1/quotes`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${authToken}`,

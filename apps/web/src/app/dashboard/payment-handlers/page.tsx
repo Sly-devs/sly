@@ -100,10 +100,8 @@ function getHandlerDisplay(type: string, dbHandlers: DbHandler[]) {
 }
 
 // API functions
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
-async function fetchConnectedAccounts(authToken: string): Promise<ConnectedAccountsResponse> {
-  const response = await fetch(`${API_BASE}/v1/organization/connected-accounts`, {
+async function fetchConnectedAccounts(authToken: string, apiUrl: string): Promise<ConnectedAccountsResponse> {
+  const response = await fetch(`${apiUrl}/v1/organization/connected-accounts`, {
     headers: {
       'Authorization': `Bearer ${authToken}`,
       'Content-Type': 'application/json',
@@ -115,8 +113,8 @@ async function fetchConnectedAccounts(authToken: string): Promise<ConnectedAccou
   return response.json();
 }
 
-async function fetchDbHandlers(authToken: string): Promise<DbHandlersResponse> {
-  const response = await fetch(`${API_BASE}/v1/payment-handlers`, {
+async function fetchDbHandlers(authToken: string, apiUrl: string): Promise<DbHandlersResponse> {
+  const response = await fetch(`${apiUrl}/v1/payment-handlers`, {
     headers: {
       'Authorization': `Bearer ${authToken}`,
       'Content-Type': 'application/json',
@@ -128,12 +126,12 @@ async function fetchDbHandlers(authToken: string): Promise<DbHandlersResponse> {
   return response.json();
 }
 
-async function createConnectedAccount(authToken: string, data: {
+async function createConnectedAccount(authToken: string, apiUrl: string, data: {
   handler_type: string;
   handler_name: string;
   credentials: Record<string, unknown>;
 }): Promise<ConnectedAccount> {
-  const response = await fetch(`${API_BASE}/v1/organization/connected-accounts`, {
+  const response = await fetch(`${apiUrl}/v1/organization/connected-accounts`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${authToken}`,
@@ -148,8 +146,8 @@ async function createConnectedAccount(authToken: string, data: {
   return response.json();
 }
 
-async function deleteConnectedAccount(authToken: string, id: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/v1/organization/connected-accounts/${id}`, {
+async function deleteConnectedAccount(authToken: string, apiUrl: string, id: string): Promise<void> {
+  const response = await fetch(`${apiUrl}/v1/organization/connected-accounts/${id}`, {
     method: 'DELETE',
     headers: {
       'Authorization': `Bearer ${authToken}`,
@@ -161,8 +159,8 @@ async function deleteConnectedAccount(authToken: string, id: string): Promise<vo
   }
 }
 
-async function verifyConnectedAccount(authToken: string, id: string): Promise<{ verified: boolean; error?: string }> {
-  const response = await fetch(`${API_BASE}/v1/organization/connected-accounts/${id}/verify`, {
+async function verifyConnectedAccount(authToken: string, apiUrl: string, id: string): Promise<{ verified: boolean; error?: string }> {
+  const response = await fetch(`${apiUrl}/v1/organization/connected-accounts/${id}/verify`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${authToken}`,
@@ -582,7 +580,7 @@ function ConnectDialog({
 
 // Main page component
 export default function PaymentHandlersPage() {
-  const { isConfigured, isLoading: isAuthLoading, authToken } = useApiConfig();
+  const { isConfigured, isLoading: isAuthLoading, authToken, apiUrl } = useApiConfig();
   const queryClient = useQueryClient();
   const [showConnectDialog, setShowConnectDialog] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -590,14 +588,14 @@ export default function PaymentHandlersPage() {
   // Fetch connected accounts
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['connected-accounts'],
-    queryFn: () => fetchConnectedAccounts(authToken!),
+    queryFn: () => fetchConnectedAccounts(authToken!, apiUrl),
     enabled: !!authToken,
   });
 
   // Fetch available DB handlers
   const { data: dbHandlersData } = useQuery({
     queryKey: ['payment-handlers'],
-    queryFn: () => fetchDbHandlers(authToken!),
+    queryFn: () => fetchDbHandlers(authToken!, apiUrl),
     enabled: !!authToken,
   });
 
@@ -606,7 +604,7 @@ export default function PaymentHandlersPage() {
   // Create mutation
   const createMutation = useMutation({
     mutationFn: ({ type, name, credentials }: { type: string; name: string; credentials: Record<string, unknown> }) =>
-      createConnectedAccount(authToken!, { handler_type: type, handler_name: name, credentials }),
+      createConnectedAccount(authToken!, apiUrl, { handler_type: type, handler_name: name, credentials }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['connected-accounts'] });
       toast.success('Payment handler connected successfully');
@@ -618,7 +616,7 @@ export default function PaymentHandlersPage() {
 
   // Delete mutation
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteConnectedAccount(authToken!, id),
+    mutationFn: (id: string) => deleteConnectedAccount(authToken!, apiUrl, id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['connected-accounts'] });
       toast.success('Payment handler disconnected');
@@ -631,7 +629,7 @@ export default function PaymentHandlersPage() {
 
   // Verify mutation
   const verifyMutation = useMutation({
-    mutationFn: (id: string) => verifyConnectedAccount(authToken!, id),
+    mutationFn: (id: string) => verifyConnectedAccount(authToken!, apiUrl, id),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['connected-accounts'] });
       if (result.verified) {

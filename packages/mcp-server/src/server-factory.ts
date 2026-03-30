@@ -23,6 +23,7 @@ export interface McpContext {
   apiKey: string;
   environment: string;
   keys: Record<string, string>;
+  urls: Record<string, string>;
 }
 
 /**
@@ -33,6 +34,7 @@ export function createMcpServer(
   apiUrl: string,
   apiKey: string,
   keys?: Record<string, string>,
+  urls?: Record<string, string>,
 ): Server {
   const ctx: McpContext = {
     sly,
@@ -40,6 +42,7 @@ export function createMcpServer(
     apiKey,
     environment: apiKey.startsWith('pk_live_') ? 'production' : 'sandbox',
     keys: keys || {},
+    urls: urls || {},
   };
   const server = new Server(
     {
@@ -1631,8 +1634,10 @@ export function createMcpServer(
           const hint = targetEnv === 'production' ? 'Set SLY_API_KEY_LIVE in your MCP server config (.mcp.json)' : 'Set SLY_API_KEY in your MCP server config (.mcp.json)';
           return { content: [{ type: 'text', text: `Error: No API key configured for "${targetEnv}" environment. ${hint}` }], isError: true };
         }
-        ctx.sly = new Sly({ apiKey: targetKey, apiUrl: ctx.apiUrl });
+        const targetUrl = ctx.urls[targetEnv] || ctx.apiUrl;
+        ctx.sly = new Sly({ apiKey: targetKey, apiUrl: targetUrl });
         ctx.apiKey = targetKey;
+        ctx.apiUrl = targetUrl;
         ctx.environment = targetEnv;
         return { content: [{ type: 'text', text: JSON.stringify({ message: `Switched to ${targetEnv} environment`, environment: ctx.environment, apiKeyPrefix: ctx.apiKey.slice(0, 12) + '***' }, null, 2) }] };
       }

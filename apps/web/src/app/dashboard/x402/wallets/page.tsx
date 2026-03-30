@@ -12,7 +12,7 @@ import { PaginationControls } from '@/components/ui/pagination-controls';
 
 export default function WalletsPage() {
   const api = useApiClient();
-  const { isConfigured, isLoading: isAuthLoading, authToken } = useApiConfig();
+  const { isConfigured, isLoading: isAuthLoading, authToken, apiUrl } = useApiConfig();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -99,7 +99,7 @@ export default function WalletsPage() {
 
       if (createMode === 'external') {
         // Add existing external wallet
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/v1/wallets/external`, {
+        const response = await fetch(`${apiUrl}/v1/wallets/external`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

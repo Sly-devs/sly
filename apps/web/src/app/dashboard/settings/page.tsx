@@ -4,10 +4,12 @@ import { useState, useEffect } from 'react';
 import { useTheme } from 'next-themes';
 import { User, Bell, Shield, Palette, Moon, Sun, Monitor, Check, Globe, Users, Bot } from 'lucide-react';
 import { useLocale, type Locale } from '@/lib/locale';
+import { useApiConfig } from '@/lib/api-client';
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { locale, setLocale, formatCurrency, formatDate } = useLocale();
+  const { apiUrl } = useApiConfig();
   const [mounted, setMounted] = useState(false);
   const [resourceUsage, setResourceUsage] = useState<{
     teamMembers: { current: number; limit: number | null };
@@ -29,7 +31,6 @@ export default function SettingsPage() {
   useEffect(() => {
     async function fetchUsage() {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
         const { createSupabaseBrowserClient } = await import('@/lib/supabase/client');
         const supabase = createSupabaseBrowserClient();
         const { data: { session } } = await supabase.auth.getSession();

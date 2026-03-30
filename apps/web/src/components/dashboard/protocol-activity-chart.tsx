@@ -34,11 +34,12 @@ const PROTOCOL_NAMES: Record<ProtocolId, string> = {
 
 async function fetchProtocolActivity(
   apiFetch: ApiFetchFn,
+  apiUrl: string,
   timeRange: TimeRange,
   metric: Metric
 ): Promise<{ data: ProtocolActivityPoint[] }> {
   const response = await apiFetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/v1/analytics/protocol-activity?timeRange=${timeRange}&metric=${metric}`
+    `${apiUrl}/v1/analytics/protocol-activity?timeRange=${timeRange}&metric=${metric}`
   );
   if (!response.ok) {
     throw new Error('Failed to fetch protocol activity');
@@ -49,7 +50,7 @@ async function fetchProtocolActivity(
 }
 
 export function ProtocolActivityChart() {
-  const { authToken, isConfigured, apiEnvironment } = useApiConfig();
+  const { authToken, isConfigured, apiEnvironment, apiUrl } = useApiConfig();
   const apiFetch = useApiFetch();
   const [timeRange, setTimeRange] = useState<TimeRange>('7d');
   const [metric, setMetric] = useState<Metric>('volume');
@@ -57,7 +58,7 @@ export function ProtocolActivityChart() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['protocol-activity', timeRange, metric, apiEnvironment],
-    queryFn: () => fetchProtocolActivity(apiFetch, timeRange, metric),
+    queryFn: () => fetchProtocolActivity(apiFetch, apiUrl, timeRange, metric),
     enabled: !!authToken && isConfigured,
     staleTime: 60 * 1000,
   });

@@ -110,10 +110,8 @@ const SETTLEMENT_RAILS: { value: SettlementRail; label: string }[] = [
 ];
 
 // API functions
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
-async function fetchRules(authToken: string): Promise<SettlementRule[]> {
-  const response = await fetch(`${API_URL}/v1/settlement-rules`, {
+async function fetchRules(authToken: string, apiUrl: string): Promise<SettlementRule[]> {
+  const response = await fetch(`${apiUrl}/v1/settlement-rules`, {
     headers: {
       Authorization: `Bearer ${authToken}`,
       'Content-Type': 'application/json',
@@ -124,8 +122,8 @@ async function fetchRules(authToken: string): Promise<SettlementRule[]> {
   return json.data?.data || json.data || [];
 }
 
-async function createRule(authToken: string, rule: Partial<SettlementRule>): Promise<SettlementRule> {
-  const response = await fetch(`${API_URL}/v1/settlement-rules`, {
+async function createRule(authToken: string, apiUrl: string, rule: Partial<SettlementRule>): Promise<SettlementRule> {
+  const response = await fetch(`${apiUrl}/v1/settlement-rules`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${authToken}`,
@@ -141,8 +139,8 @@ async function createRule(authToken: string, rule: Partial<SettlementRule>): Pro
   return json.data || json;
 }
 
-async function updateRule(authToken: string, id: string, updates: Partial<SettlementRule>): Promise<SettlementRule> {
-  const response = await fetch(`${API_URL}/v1/settlement-rules/${id}`, {
+async function updateRule(authToken: string, apiUrl: string, id: string, updates: Partial<SettlementRule>): Promise<SettlementRule> {
+  const response = await fetch(`${apiUrl}/v1/settlement-rules/${id}`, {
     method: 'PATCH',
     headers: {
       Authorization: `Bearer ${authToken}`,
@@ -158,8 +156,8 @@ async function updateRule(authToken: string, id: string, updates: Partial<Settle
   return json.data || json;
 }
 
-async function deleteRule(authToken: string, id: string): Promise<void> {
-  const response = await fetch(`${API_URL}/v1/settlement-rules/${id}`, {
+async function deleteRule(authToken: string, apiUrl: string, id: string): Promise<void> {
+  const response = await fetch(`${apiUrl}/v1/settlement-rules/${id}`, {
     method: 'DELETE',
     headers: {
       Authorization: `Bearer ${authToken}`,
@@ -172,8 +170,8 @@ async function deleteRule(authToken: string, id: string): Promise<void> {
   }
 }
 
-async function fetchExecutions(authToken: string, ruleId: string): Promise<RuleExecution[]> {
-  const response = await fetch(`${API_URL}/v1/settlement-rules/${ruleId}/executions?limit=20`, {
+async function fetchExecutions(authToken: string, apiUrl: string, ruleId: string): Promise<RuleExecution[]> {
+  const response = await fetch(`${apiUrl}/v1/settlement-rules/${ruleId}/executions?limit=20`, {
     headers: {
       Authorization: `Bearer ${authToken}`,
       'Content-Type': 'application/json',
@@ -184,8 +182,8 @@ async function fetchExecutions(authToken: string, ruleId: string): Promise<RuleE
   return json.data?.data || json.data || [];
 }
 
-async function fetchWallets(authToken: string): Promise<Wallet[]> {
-  const response = await fetch(`${API_URL}/v1/wallets?limit=100`, {
+async function fetchWallets(authToken: string, apiUrl: string): Promise<Wallet[]> {
+  const response = await fetch(`${apiUrl}/v1/wallets?limit=100`, {
     headers: {
       Authorization: `Bearer ${authToken}`,
       'Content-Type': 'application/json',
@@ -644,15 +642,17 @@ function RuleFormDialog({
 function ExecutionHistoryDialog({
   rule,
   authToken,
+  apiUrl,
   onClose,
 }: {
   rule: SettlementRule;
   authToken: string;
+  apiUrl: string;
   onClose: () => void;
 }) {
   const { data: executions, isLoading } = useQuery({
     queryKey: ['settlement-rule-executions', rule.id],
-    queryFn: () => fetchExecutions(authToken, rule.id),
+    queryFn: () => fetchExecutions(authToken, apiUrl, rule.id),
   });
 
   const statusColors: Record<string, string> = {
@@ -728,7 +728,7 @@ function ExecutionHistoryDialog({
 
 // Main Page Component
 export default function SettlementRulesPage() {
-  const { isConfigured, isLoading: isAuthLoading, authToken } = useApiConfig();
+  const { isConfigured, isLoading: isAuthLoading, authToken, apiUrl } = useApiConfig();
   const queryClient = useQueryClient();
 
   // State
@@ -741,20 +741,20 @@ export default function SettlementRulesPage() {
   // Fetch rules
   const { data: rules, isLoading: isLoadingRules } = useQuery({
     queryKey: ['settlement-rules'],
-    queryFn: () => fetchRules(authToken!),
+    queryFn: () => fetchRules(authToken!, apiUrl),
     enabled: !!authToken,
   });
 
   // Fetch wallets for scoping
   const { data: wallets = [] } = useQuery({
     queryKey: ['wallets'],
-    queryFn: () => fetchWallets(authToken!),
+    queryFn: () => fetchWallets(authToken!, apiUrl),
     enabled: !!authToken,
   });
 
   // Create mutation
   const createMutation = useMutation({
-    mutationFn: (rule: Partial<SettlementRule>) => createRule(authToken!, rule),
+    mutationFn: (rule: Partial<SettlementRule>) => createRule(authToken!, apiUrl, rule),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settlement-rules'] });
       setShowCreateDialog(false);
@@ -768,7 +768,7 @@ export default function SettlementRulesPage() {
   // Update mutation
   const updateMutation = useMutation({
     mutationFn: ({ id, updates }: { id: string; updates: Partial<SettlementRule> }) =>
-      updateRule(authToken!, id, updates),
+      updateRule(authToken!, apiUrl, id, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settlement-rules'] });
       setEditingRule(null);
@@ -783,7 +783,7 @@ export default function SettlementRulesPage() {
 
   // Delete mutation
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteRule(authToken!, id),
+    mutationFn: (id: string) => deleteRule(authToken!, apiUrl, id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settlement-rules'] });
       setDeletingRuleId(null);
@@ -961,6 +961,7 @@ export default function SettlementRulesPage() {
         <ExecutionHistoryDialog
           rule={viewingHistoryRule}
           authToken={authToken}
+          apiUrl={apiUrl}
           onClose={() => setViewingHistoryRule(null)}
         />
       )}

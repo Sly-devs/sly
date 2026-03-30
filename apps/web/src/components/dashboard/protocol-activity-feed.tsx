@@ -49,9 +49,9 @@ const PROTOCOL_UI: Record<ProtocolId, { icon: typeof Zap; color: string; bgColor
   },
 };
 
-async function fetchRecentActivity(apiFetch: ApiFetchFn, limit: number = 10): Promise<{ data: RecentActivity[] }> {
+async function fetchRecentActivity(apiFetch: ApiFetchFn, apiUrl: string, limit: number = 10): Promise<{ data: RecentActivity[] }> {
   const response = await apiFetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/v1/analytics/recent-activity?limit=${limit}`
+    `${apiUrl}/v1/analytics/recent-activity?limit=${limit}`
   );
   if (!response.ok) {
     throw new Error('Failed to fetch recent activity');
@@ -134,12 +134,12 @@ function ActivityItem({ activity }: { activity: RecentActivity }) {
 }
 
 export function ProtocolActivityFeed() {
-  const { authToken, isConfigured, apiEnvironment } = useApiConfig();
+  const { authToken, isConfigured, apiEnvironment, apiUrl } = useApiConfig();
   const apiFetch = useApiFetch();
 
   const { data, isLoading } = useQuery({
     queryKey: ['recent-activity', apiEnvironment],
-    queryFn: () => fetchRecentActivity(apiFetch, 8),
+    queryFn: () => fetchRecentActivity(apiFetch, apiUrl, 8),
     enabled: !!authToken && isConfigured,
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000, // Auto-refresh every minute

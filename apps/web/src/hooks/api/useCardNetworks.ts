@@ -134,12 +134,10 @@ export const CARD_NETWORK_INFO: Record<CardNetworkType, CardNetworkInfo> = {
 };
 
 export function useCardNetworks() {
-  const { authToken, isConfigured, isLoading: authLoading } = useApiConfig();
+  const { authToken, isConfigured, isLoading: authLoading, apiUrl } = useApiConfig();
   const [networks, setNetworks] = useState<CardNetworkConfig[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
   // Helper for making authenticated requests
   const makeRequest = useCallback(

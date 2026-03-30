@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useApiClient } from '@/lib/api-client';
+import { useApiClient, useApiConfig } from '@/lib/api-client';
 import Link from 'next/link';
 import { LobsterClaw } from '@/components/icons/lobster-claw';
 import {
@@ -73,6 +73,7 @@ export default function AgentDetailPage() {
   const params = useParams();
   const router = useRouter();
   const api = useApiClient();
+  const { apiUrl } = useApiConfig();
   const agentId = params.id as string;
 
   const [agent, setAgent] = useState<Agent | null>(null);
@@ -1679,6 +1680,7 @@ function KYATab({ agent, limits }: { agent: Agent; limits: AgentLimits | null })
 // A2A Tab — shows agent card, inbound/outbound tasks
 function A2ATab({ agentId }: { agentId: string }) {
   const api = useApiClient();
+  const { apiUrl } = useApiConfig();
   const [showCard, setShowCard] = useState(false);
 
   // Fetch agent card
@@ -1705,9 +1707,8 @@ function A2ATab({ agentId }: { agentId: string }) {
   });
 
   const tasks = (tasksData as any)?.data || [];
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-  const cardUrl = `${baseUrl}/a2a/agents/${agentId}/card`;
-  const rpcUrl = `${baseUrl}/a2a/${agentId}`;
+  const cardUrl = `${apiUrl}/a2a/agents/${agentId}/card`;
+  const rpcUrl = `${apiUrl}/a2a/${agentId}`;
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);

@@ -107,26 +107,24 @@ const STATUS_CONFIG: Record<ExecutionStatus, { icon: typeof CheckCircle; label: 
 };
 
 // API functions
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
-async function fetchRules(authToken: string): Promise<{ data: SettlementRule[] }> {
-  const response = await fetch(`${API_URL}/v1/settlement-rules`, {
+async function fetchRules(authToken: string, apiUrl: string): Promise<{ data: SettlementRule[] }> {
+  const response = await fetch(`${apiUrl}/v1/settlement-rules`, {
     headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
   });
   if (!response.ok) throw new Error('Failed to fetch rules');
   return response.json();
 }
 
-async function fetchExecutions(authToken: string): Promise<{ data: RuleExecution[] }> {
-  const response = await fetch(`${API_URL}/v1/settlement-rules/executions/all?limit=20`, {
+async function fetchExecutions(authToken: string, apiUrl: string): Promise<{ data: RuleExecution[] }> {
+  const response = await fetch(`${apiUrl}/v1/settlement-rules/executions/all?limit=20`, {
     headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
   });
   if (!response.ok) throw new Error('Failed to fetch executions');
   return response.json();
 }
 
-async function createRule(authToken: string, data: Partial<SettlementRule>): Promise<SettlementRule> {
-  const response = await fetch(`${API_URL}/v1/settlement-rules`, {
+async function createRule(authToken: string, apiUrl: string, data: Partial<SettlementRule>): Promise<SettlementRule> {
+  const response = await fetch(`${apiUrl}/v1/settlement-rules`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -138,8 +136,8 @@ async function createRule(authToken: string, data: Partial<SettlementRule>): Pro
   return response.json();
 }
 
-async function updateRule(authToken: string, id: string, data: Partial<SettlementRule>): Promise<SettlementRule> {
-  const response = await fetch(`${API_URL}/v1/settlement-rules/${id}`, {
+async function updateRule(authToken: string, apiUrl: string, id: string, data: Partial<SettlementRule>): Promise<SettlementRule> {
+  const response = await fetch(`${apiUrl}/v1/settlement-rules/${id}`, {
     method: 'PATCH',
     headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -151,8 +149,8 @@ async function updateRule(authToken: string, id: string, data: Partial<Settlemen
   return response.json();
 }
 
-async function deleteRule(authToken: string, id: string): Promise<void> {
-  const response = await fetch(`${API_URL}/v1/settlement-rules/${id}`, {
+async function deleteRule(authToken: string, apiUrl: string, id: string): Promise<void> {
+  const response = await fetch(`${apiUrl}/v1/settlement-rules/${id}`, {
     method: 'DELETE',
     headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
   });
@@ -488,7 +486,7 @@ function RuleDialog({
 
 // Main page
 export default function SettlementRulesPage() {
-  const { isConfigured, isLoading: isAuthLoading, authToken } = useApiConfig();
+  const { isConfigured, isLoading: isAuthLoading, authToken, apiUrl } = useApiConfig();
   const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingRule, setEditingRule] = useState<SettlementRule | undefined>();
@@ -498,20 +496,20 @@ export default function SettlementRulesPage() {
   // Fetch rules
   const { data: rulesData, isLoading: isLoadingRules } = useQuery({
     queryKey: ['settlement-rules'],
-    queryFn: () => fetchRules(authToken!),
+    queryFn: () => fetchRules(authToken!, apiUrl),
     enabled: !!authToken,
   });
 
   // Fetch executions
   const { data: executionsData, isLoading: isLoadingExecutions } = useQuery({
     queryKey: ['settlement-executions'],
-    queryFn: () => fetchExecutions(authToken!),
+    queryFn: () => fetchExecutions(authToken!, apiUrl),
     enabled: !!authToken && showHistory,
   });
 
   // Create mutation
   const createMutation = useMutation({
-    mutationFn: (data: Partial<SettlementRule>) => createRule(authToken!, data),
+    mutationFn: (data: Partial<SettlementRule>) => createRule(authToken!, apiUrl, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settlement-rules'] });
       toast.success('Rule created successfully');
@@ -522,7 +520,7 @@ export default function SettlementRulesPage() {
 
   // Update mutation
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<SettlementRule> }) => updateRule(authToken!, id, data),
+    mutationFn: ({ id, data }: { id: string; data: Partial<SettlementRule> }) => updateRule(authToken!, apiUrl, id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settlement-rules'] });
       toast.success('Rule updated successfully');
@@ -534,7 +532,7 @@ export default function SettlementRulesPage() {
 
   // Delete mutation
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteRule(authToken!, id),
+    mutationFn: (id: string) => deleteRule(authToken!, apiUrl, id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settlement-rules'] });
       toast.success('Rule deleted');

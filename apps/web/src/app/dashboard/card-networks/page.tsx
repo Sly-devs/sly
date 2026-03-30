@@ -148,8 +148,7 @@ const PROTOCOL_INFO = [
 ];
 
 export default function CardNetworksSettingsPage() {
-  const { authToken, isConfigured, isLoading: authLoading } = useApiConfig();
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+  const { authToken, isConfigured, isLoading: authLoading, apiUrl } = useApiConfig();
 
   const [showVisaKey, setShowVisaKey] = useState(false);
   const [showMcKey, setShowMcKey] = useState(false);

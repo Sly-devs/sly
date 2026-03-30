@@ -40,13 +40,13 @@ function getSpendingStatus(policy: SpendingPolicy | undefined) {
   return { dailyPercent, monthlyPercent, isNearLimit, hasPolicies };
 }
 
-const useWalletBalance = (walletId: string | undefined, authToken: string | null, apiEnvironment?: string) => {
+const useWalletBalance = (walletId: string | undefined, authToken: string | null, apiEnvironment?: string, apiUrl?: string) => {
   return useQuery({
     queryKey: ['wallet-balance', walletId, apiEnvironment],
     queryFn: async () => {
       if (!authToken) return null;
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || ''}/v1/wallets/${walletId}/balance`,
+        `${apiUrl || ''}/v1/wallets/${walletId}/balance`,
         {
           headers: {
             'Authorization': `Bearer ${authToken}`,
@@ -66,12 +66,13 @@ interface WalletBalanceCardProps {
   wallet: Wallet;
   authToken: string | null;
   apiEnvironment?: string;
+  apiUrl?: string;
   onDelete?: (id: string) => void;
   isDeleting?: boolean;
 }
 
-function WalletBalanceCard({ wallet, authToken, apiEnvironment, onDelete, isDeleting }: WalletBalanceCardProps) {
-  const { data: balanceData, isLoading: balanceLoading } = useWalletBalance(wallet.id, authToken, apiEnvironment);
+function WalletBalanceCard({ wallet, authToken, apiEnvironment, apiUrl, onDelete, isDeleting }: WalletBalanceCardProps) {
+  const { data: balanceData, isLoading: balanceLoading } = useWalletBalance(wallet.id, authToken, apiEnvironment, apiUrl);
   const onChain = balanceData?.data?.onChain;
   const syncStatus = balanceData?.data?.syncStatus || 'stale';
   const queryClient = useQueryClient();
@@ -131,7 +132,7 @@ function WalletBalanceCard({ wallet, authToken, apiEnvironment, onDelete, isDele
     setSyncing(true);
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || ''}/v1/wallets/${wallet.id}/sync`,
+        `${apiUrl || ''}/v1/wallets/${wallet.id}/sync`,
         {
           method: 'POST',
           headers: {
@@ -170,7 +171,7 @@ function WalletBalanceCard({ wallet, authToken, apiEnvironment, onDelete, isDele
 
       // Submit to backend
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || ''}/v1/wallets/${wallet.id}/verify`,
+        `${apiUrl || ''}/v1/wallets/${wallet.id}/verify`,
         {
           method: 'POST',
           headers: {
@@ -486,7 +487,7 @@ function WalletBalanceCard({ wallet, authToken, apiEnvironment, onDelete, isDele
 
 export default function WalletsPage() {
   const api = useApiClient();
-  const { isConfigured, isLoading: isAuthLoading, authToken, apiEnvironment } = useApiConfig();
+  const { isConfigured, isLoading: isAuthLoading, authToken, apiEnvironment, apiUrl } = useApiConfig();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -644,7 +645,7 @@ export default function WalletsPage() {
 
       if (createMode === 'external') {
         // Add existing external wallet
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/v1/wallets/external`, {
+        const response = await fetch(`${apiUrl}/v1/wallets/external`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -952,6 +953,7 @@ export default function WalletsPage() {
               wallet={wallet}
               authToken={authToken}
               apiEnvironment={apiEnvironment}
+              apiUrl={apiUrl}
               onDelete={(id) => deleteMutation.mutate(id)}
               isDeleting={deletingId === wallet.id}
             />

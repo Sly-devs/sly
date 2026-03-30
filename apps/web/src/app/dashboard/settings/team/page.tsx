@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
+import { useApiConfig } from '@/lib/api-client';
 import { Button } from '@sly/ui';
 import { Input } from '@sly/ui';
 import { Label } from '@sly/ui';
@@ -34,8 +35,6 @@ interface TeamInvite {
   expired?: boolean;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
 const ROLE_OPTIONS = [
   { value: 'admin', label: 'Admin' },
   { value: 'member', label: 'Member' },
@@ -59,6 +58,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 }
 
 export default function TeamSettingsPage() {
+  const { apiUrl } = useApiConfig();
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [invites, setInvites] = useState<TeamInvite[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,9 +86,9 @@ export default function TeamSettingsPage() {
       const headers = await getAuthHeaders();
 
       const [teamRes, invitesRes, meRes] = await Promise.all([
-        fetch(`${API_URL}/v1/organization/team`, { headers }),
-        fetch(`${API_URL}/v1/organization/team/invites`, { headers }),
-        fetch(`${API_URL}/v1/auth/me`, { headers }),
+        fetch(`${apiUrl}/v1/organization/team`, { headers }),
+        fetch(`${apiUrl}/v1/organization/team/invites`, { headers }),
+        fetch(`${apiUrl}/v1/auth/me`, { headers }),
       ]);
 
       if (teamRes.ok) {
@@ -122,7 +122,7 @@ export default function TeamSettingsPage() {
     }
 
     setLoading(false);
-  }, []);
+  }, [apiUrl]);
 
   useEffect(() => {
     fetchTeam();
@@ -139,7 +139,7 @@ export default function TeamSettingsPage() {
 
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch(`${API_URL}/v1/organization/team/invite`, {
+      const res = await fetch(`${apiUrl}/v1/organization/team/invite`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
@@ -177,7 +177,7 @@ export default function TeamSettingsPage() {
   async function handleRoleChange(userId: string, newRole: string) {
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch(`${API_URL}/v1/organization/team/${userId}`, {
+      const res = await fetch(`${apiUrl}/v1/organization/team/${userId}`, {
         method: 'PATCH',
         headers,
         body: JSON.stringify({ role: newRole }),
@@ -200,7 +200,7 @@ export default function TeamSettingsPage() {
 
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch(`${API_URL}/v1/organization/team/${userId}`, {
+      const res = await fetch(`${apiUrl}/v1/organization/team/${userId}`, {
         method: 'DELETE',
         headers,
       });
@@ -221,7 +221,7 @@ export default function TeamSettingsPage() {
     setResendingInvite(inviteId);
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch(`${API_URL}/v1/organization/team/invites/${inviteId}/resend`, {
+      const res = await fetch(`${apiUrl}/v1/organization/team/invites/${inviteId}/resend`, {
         method: 'POST',
         headers,
       });
@@ -251,7 +251,7 @@ export default function TeamSettingsPage() {
 
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch(`${API_URL}/v1/organization/team/invites/${inviteId}`, {
+      const res = await fetch(`${apiUrl}/v1/organization/team/invites/${inviteId}`, {
         method: 'DELETE',
         headers,
       });

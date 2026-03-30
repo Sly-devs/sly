@@ -17,7 +17,7 @@ import { Key, Eye, EyeOff, Check, Copy, AlertTriangle, CheckCircle2 } from 'luci
 import { toast } from 'sonner';
 
 export default function ApiKeysPage() {
-  const { apiKey, setApiKey, isConfigured, authToken } = useApiConfig();
+  const { apiKey, setApiKey, isConfigured, authToken, apiUrl } = useApiConfig();
   const [newApiKey, setNewApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -34,7 +34,7 @@ export default function ApiKeysPage() {
     setTesting(true);
     try {
       // Test the key by making a simple request
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/v1/accounts?limit=1`, {
+      const response = await fetch(`${apiUrl}/v1/accounts?limit=1`, {
         headers: {
           'Authorization': `Bearer ${newApiKey}`,
         },

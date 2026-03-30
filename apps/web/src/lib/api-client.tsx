@@ -86,9 +86,14 @@ export function ApiClientProvider({ children }: { children: ReactNode }) {
     const token = authToken || apiKey;
     if (!token) return null;
     
+    // Route to the correct API server based on environment
+    const sandboxUrl = process.env.NEXT_PUBLIC_SANDBOX_API_URL;
+    const productionUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+    const baseUrl = apiEnvironment === 'live' ? productionUrl : (sandboxUrl || productionUrl);
+
     return createPayOSClient({
-      baseUrl: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000',
-      apiKey: token, // API client uses this as the auth token
+      baseUrl,
+      apiKey: token,
       defaultHeaders: { 'X-Environment': apiEnvironment },
       onError: (error) => {
         console.error('API Error:', error);
@@ -153,6 +158,9 @@ export function useApiClient() {
 export function useApiConfig() {
   const context = useContext(ApiClientContext);
   const { apiEnvironment } = useEnvironment();
+  const sandboxUrl = process.env.NEXT_PUBLIC_SANDBOX_API_URL;
+  const productionUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+  const apiUrl = apiEnvironment === 'live' ? productionUrl : (sandboxUrl || productionUrl);
   return {
     apiKey: context.apiKey,
     setApiKey: context.setApiKey,
@@ -160,6 +168,7 @@ export function useApiConfig() {
     isLoading: context.isLoading,
     authToken: context.authToken,
     apiEnvironment,
+    apiUrl,
   };
 }
 

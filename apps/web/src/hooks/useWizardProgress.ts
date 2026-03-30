@@ -12,7 +12,6 @@ import {
   LEGACY_TEMPLATE_MAP,
 } from '@/types/wizard';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 const STORAGE_KEY = 'payos_wizard_progress';
 
 // Get all wizard progress from localStorage
@@ -111,7 +110,7 @@ export function useWizardProgress({
   autoSave = true,
 }: UseWizardProgressOptions): UseWizardProgressReturn {
   const router = useRouter();
-  const { authToken } = useApiConfig();
+  const { authToken, apiUrl } = useApiConfig();
 
   // Normalize template ID
   const templateId = (LEGACY_TEMPLATE_MAP[rawTemplateId] || rawTemplateId) as TemplateId;
@@ -158,7 +157,7 @@ export function useWizardProgress({
     if (!authToken) return;
 
     try {
-      const response = await fetch(`${API_URL}/v1/onboarding/wizard/${templateId}`, {
+      const response = await fetch(`${apiUrl}/v1/onboarding/wizard/${templateId}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${authToken}`,
@@ -178,7 +177,7 @@ export function useWizardProgress({
     } catch (e) {
       console.warn('Failed to sync wizard progress:', e);
     }
-  }, [authToken, templateId, state]);
+  }, [authToken, apiUrl, templateId, state]);
 
   // Navigation
   const goToStep = useCallback((stepIndex: number) => {

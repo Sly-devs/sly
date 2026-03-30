@@ -79,8 +79,8 @@ const PROTOCOL_UI: Record<ProtocolId, { icon: typeof Zap; color: string; gradien
 };
 
 // API functions
-async function fetchProtocols(): Promise<{ data: Protocol[] }> {
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/v1/protocols`);
+async function fetchProtocols(baseUrl: string): Promise<{ data: Protocol[] }> {
+  const response = await fetch(`${baseUrl}/v1/protocols`);
   if (!response.ok) {
     throw new Error('Failed to fetch protocols');
   }
@@ -89,8 +89,8 @@ async function fetchProtocols(): Promise<{ data: Protocol[] }> {
   return json.data || json;
 }
 
-async function fetchProtocolStatus(authToken: string): Promise<OrganizationProtocolStatus> {
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/v1/organization/protocol-status`, {
+async function fetchProtocolStatus(authToken: string, baseUrl: string): Promise<OrganizationProtocolStatus> {
+  const response = await fetch(`${baseUrl}/v1/organization/protocol-status`, {
     headers: {
       'Authorization': `Bearer ${authToken}`,
       'Content-Type': 'application/json',
@@ -104,8 +104,8 @@ async function fetchProtocolStatus(authToken: string): Promise<OrganizationProto
   return json.data || json;
 }
 
-async function enableProtocol(authToken: string, protocolId: ProtocolId): Promise<{ success: boolean; error?: string; missing_prerequisites?: string[] }> {
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/v1/organization/protocols/${protocolId}/enable`, {
+async function enableProtocol(authToken: string, protocolId: ProtocolId, baseUrl: string): Promise<{ success: boolean; error?: string; missing_prerequisites?: string[] }> {
+  const response = await fetch(`${baseUrl}/v1/organization/protocols/${protocolId}/enable`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${authToken}`,
@@ -117,8 +117,8 @@ async function enableProtocol(authToken: string, protocolId: ProtocolId): Promis
   return json.data || json;
 }
 
-async function disableProtocol(authToken: string, protocolId: ProtocolId): Promise<{ success: boolean; error?: string }> {
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/v1/organization/protocols/${protocolId}/disable`, {
+async function disableProtocol(authToken: string, protocolId: ProtocolId, baseUrl: string): Promise<{ success: boolean; error?: string }> {
+  const response = await fetch(`${baseUrl}/v1/organization/protocols/${protocolId}/disable`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${authToken}`,
@@ -310,26 +310,26 @@ function ProtocolCard({
 
 // Main page component
 export default function ProtocolsPage() {
-  const { isConfigured, isLoading: isAuthLoading, authToken } = useApiConfig();
+  const { isConfigured, isLoading: isAuthLoading, authToken, apiUrl } = useApiConfig();
   const queryClient = useQueryClient();
   const [togglingProtocol, setTogglingProtocol] = useState<ProtocolId | null>(null);
 
   // Fetch protocols (public)
   const { data: protocolsData, isLoading: isLoadingProtocols } = useQuery({
     queryKey: ['protocols'],
-    queryFn: fetchProtocols,
+    queryFn: () => fetchProtocols(apiUrl),
   });
 
   // Fetch protocol status (authenticated)
   const { data: statusData, isLoading: isLoadingStatus } = useQuery({
     queryKey: ['protocol-status'],
-    queryFn: () => fetchProtocolStatus(authToken!),
+    queryFn: () => fetchProtocolStatus(authToken!, apiUrl),
     enabled: !!authToken,
   });
 
   // Enable mutation
   const enableMutation = useMutation({
-    mutationFn: (protocolId: ProtocolId) => enableProtocol(authToken!, protocolId),
+    mutationFn: (protocolId: ProtocolId) => enableProtocol(authToken!, protocolId, apiUrl),
     onSuccess: (result, protocolId) => {
       if (result.success) {
         queryClient.invalidateQueries({ queryKey: ['protocol-status'] });
@@ -353,7 +353,7 @@ export default function ProtocolsPage() {
 
   // Disable mutation
   const disableMutation = useMutation({
-    mutationFn: (protocolId: ProtocolId) => disableProtocol(authToken!, protocolId),
+    mutationFn: (protocolId: ProtocolId) => disableProtocol(authToken!, protocolId, apiUrl),
     onSuccess: (result, protocolId) => {
       if (result.success) {
         queryClient.invalidateQueries({ queryKey: ['protocol-status'] });

@@ -18,8 +18,6 @@ import {
 import { toast } from 'sonner';
 import { cn } from '@sly/ui';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
 // Protocol configuration with icons and colors
 const PROTOCOL_CONFIG = {
   x402: {
@@ -77,8 +75,8 @@ interface ProtocolStatusResponse {
   protocols: Record<ProtocolId, ProtocolEnablementStatus>;
 }
 
-async function fetchProtocolStatus(apiFetch: ApiFetchFn): Promise<ProtocolStatusResponse> {
-  const response = await apiFetch(`${API_URL}/v1/organization/protocol-status`);
+async function fetchProtocolStatus(apiFetch: ApiFetchFn, apiUrl: string): Promise<ProtocolStatusResponse> {
+  const response = await apiFetch(`${apiUrl}/v1/organization/protocol-status`);
   if (!response.ok) {
     throw new Error('Failed to fetch protocol status');
   }
@@ -87,12 +85,13 @@ async function fetchProtocolStatus(apiFetch: ApiFetchFn): Promise<ProtocolStatus
 
 async function toggleProtocol(
   apiFetch: ApiFetchFn,
+  apiUrl: string,
   protocolId: ProtocolId,
   enable: boolean
 ): Promise<void> {
   const action = enable ? 'enable' : 'disable';
   const response = await apiFetch(
-    `${API_URL}/v1/organization/protocols/${protocolId}/${action}`,
+    `${apiUrl}/v1/organization/protocols/${protocolId}/${action}`,
     {
       method: 'POST',
     }
@@ -115,21 +114,21 @@ function getPrerequisiteLabel(prereq: string): string {
 }
 
 export function ProtocolStatusWidget() {
-  const { authToken, isConfigured, apiEnvironment } = useApiConfig();
+  const { authToken, isConfigured, apiEnvironment, apiUrl } = useApiConfig();
   const apiFetch = useApiFetch();
   const queryClient = useQueryClient();
   const [togglingProtocol, setTogglingProtocol] = useState<ProtocolId | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['protocol-status', apiEnvironment],
-    queryFn: () => fetchProtocolStatus(apiFetch),
+    queryFn: () => fetchProtocolStatus(apiFetch, apiUrl),
     enabled: !!authToken && isConfigured,
     staleTime: 30 * 1000,
   });
 
   const toggleMutation = useMutation({
     mutationFn: ({ protocolId, enable }: { protocolId: ProtocolId; enable: boolean }) =>
-      toggleProtocol(apiFetch, protocolId, enable),
+      toggleProtocol(apiFetch, apiUrl, protocolId, enable),
     onMutate: ({ protocolId }) => {
       setTogglingProtocol(protocolId);
     },

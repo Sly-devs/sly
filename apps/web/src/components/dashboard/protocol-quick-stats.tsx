@@ -21,8 +21,6 @@ import { cn } from '@sly/ui';
 import Link from 'next/link';
 import { toast } from 'sonner';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
 type ProtocolId = 'x402' | 'ap2' | 'acp' | 'ucp';
 
 interface ProtocolStats {
@@ -104,8 +102,8 @@ const PROTOCOL_UI: Record<
   },
 };
 
-async function fetchProtocolStats(apiFetch: ApiFetchFn): Promise<ProtocolStats[]> {
-  const response = await apiFetch(`${API_URL}/v1/analytics/protocol-stats`);
+async function fetchProtocolStats(apiFetch: ApiFetchFn, apiUrl: string): Promise<ProtocolStats[]> {
+  const response = await apiFetch(`${apiUrl}/v1/analytics/protocol-stats`);
   if (!response.ok) {
     throw new Error('Failed to fetch protocol stats');
   }
@@ -114,8 +112,8 @@ async function fetchProtocolStats(apiFetch: ApiFetchFn): Promise<ProtocolStats[]
   return Array.isArray(data) ? data : [];
 }
 
-async function fetchProtocolStatus(apiFetch: ApiFetchFn): Promise<ProtocolStatusResponse> {
-  const response = await apiFetch(`${API_URL}/v1/organization/protocol-status`);
+async function fetchProtocolStatus(apiFetch: ApiFetchFn, apiUrl: string): Promise<ProtocolStatusResponse> {
+  const response = await apiFetch(`${apiUrl}/v1/organization/protocol-status`);
   if (!response.ok) {
     throw new Error('Failed to fetch protocol status');
   }
@@ -126,11 +124,12 @@ async function fetchProtocolStatus(apiFetch: ApiFetchFn): Promise<ProtocolStatus
 
 async function toggleProtocol(
   apiFetch: ApiFetchFn,
+  apiUrl: string,
   protocolId: ProtocolId,
   enable: boolean
 ): Promise<void> {
   const action = enable ? 'enable' : 'disable';
-  const response = await apiFetch(`${API_URL}/v1/organization/protocols/${protocolId}/${action}`, {
+  const response = await apiFetch(`${apiUrl}/v1/organization/protocols/${protocolId}/${action}`, {
     method: 'POST',
   });
   if (!response.ok) {
@@ -307,7 +306,7 @@ function ProtocolCard({ stats, status, onToggle, isToggling }: ProtocolCardProps
 }
 
 export function ProtocolQuickStats() {
-  const { authToken, isConfigured, apiEnvironment } = useApiConfig();
+  const { authToken, isConfigured, apiEnvironment, apiUrl } = useApiConfig();
   const apiFetch = useApiFetch();
   const queryClient = useQueryClient();
   const [togglingProtocol, setTogglingProtocol] = useState<ProtocolId | null>(null);
@@ -315,7 +314,7 @@ export function ProtocolQuickStats() {
   // Fetch protocol stats
   const { data: statsData, isLoading: statsLoading } = useQuery({
     queryKey: ['protocol-stats', apiEnvironment],
-    queryFn: () => fetchProtocolStats(apiFetch),
+    queryFn: () => fetchProtocolStats(apiFetch, apiUrl),
     enabled: !!authToken && isConfigured,
     staleTime: 60 * 1000,
   });
@@ -323,7 +322,7 @@ export function ProtocolQuickStats() {
   // Fetch protocol status
   const { data: statusData, isLoading: statusLoading } = useQuery({
     queryKey: ['protocol-status', apiEnvironment],
-    queryFn: () => fetchProtocolStatus(apiFetch),
+    queryFn: () => fetchProtocolStatus(apiFetch, apiUrl),
     enabled: !!authToken && isConfigured,
     staleTime: 30 * 1000,
   });
@@ -331,7 +330,7 @@ export function ProtocolQuickStats() {
   // Toggle mutation
   const toggleMutation = useMutation({
     mutationFn: ({ protocolId, enable }: { protocolId: ProtocolId; enable: boolean }) =>
-      toggleProtocol(apiFetch, protocolId, enable),
+      toggleProtocol(apiFetch, apiUrl, protocolId, enable),
     onMutate: ({ protocolId }) => {
       setTogglingProtocol(protocolId);
     },

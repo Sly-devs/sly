@@ -25,9 +25,8 @@ export function CreateMandateStep({
   onMandateCreated,
   helpText = 'Mandates authorize the agent to make recurring payments within defined rules.',
 }: CreateMandateStepProps) {
-  const { authToken } = useApiConfig();
+  const { authToken, apiUrl } = useApiConfig();
   const queryClient = useQueryClient();
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
   const [formData, setFormData] = useState({
     name: '',
@@ -55,7 +54,7 @@ export function CreateMandateStep({
     setError(null);
 
     try {
-      const response = await fetch(`${API_URL}/v1/ap2/mandates`, {
+      const response = await fetch(`${apiUrl}/v1/ap2/mandates`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${authToken}`,

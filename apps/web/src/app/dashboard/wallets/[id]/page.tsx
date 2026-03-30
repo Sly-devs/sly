@@ -31,13 +31,13 @@ import { formatCurrency } from '@sly/ui';
 import { formatDistanceToNow } from 'date-fns';
 import { SpendingPolicyEditor } from '@/components/wallets/spending-policy-editor';
 
-const useWalletBalance = (walletId: string | undefined, authToken: string | null) => {
+const useWalletBalance = (walletId: string | undefined, authToken: string | null, apiUrl?: string) => {
     return useQuery({
         queryKey: ['wallet-balance', walletId],
         queryFn: async () => {
             if (!authToken) return null;
             const response = await fetch(
-                `${process.env.NEXT_PUBLIC_API_URL || ''}/v1/wallets/${walletId}/balance`,
+                `${apiUrl || ''}/v1/wallets/${walletId}/balance`,
                 {
                     headers: {
                         'Authorization': `Bearer ${authToken}`,
@@ -72,7 +72,7 @@ export default function WalletDetailPage() {
     const { id } = useParams<{ id: string }>();
     const router = useRouter();
     const api = useApiClient();
-    const { authToken } = useApiConfig();
+    const { authToken, apiUrl } = useApiConfig();
     const queryClient = useQueryClient();
     const [timeRange, setTimeRange] = useState('30d');
     const [editingName, setEditingName] = useState(false);
@@ -91,7 +91,7 @@ export default function WalletDetailPage() {
     const wallet = (walletResponse as any)?.data || walletResponse;
 
     // Fetch on-chain balance
-    const { data: balanceData, isLoading: balanceLoading, refetch: refetchBalance } = useWalletBalance(id, authToken);
+    const { data: balanceData, isLoading: balanceLoading, refetch: refetchBalance } = useWalletBalance(id, authToken, apiUrl);
     const onChain = balanceData?.data?.onChain;
     const syncStatus = balanceData?.data?.syncStatus || 'stale';
 
@@ -124,7 +124,7 @@ export default function WalletDetailPage() {
         setSyncing(true);
         try {
             const response = await fetch(
-                `${process.env.NEXT_PUBLIC_API_URL || ''}/v1/wallets/${id}/sync`,
+                `${apiUrl}/v1/wallets/${id}/sync`,
                 {
                     method: 'POST',
                     headers: {

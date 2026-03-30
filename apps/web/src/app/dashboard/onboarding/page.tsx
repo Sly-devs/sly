@@ -117,10 +117,8 @@ const TEMPLATE_ICONS: Record<string, typeof Rocket> = {
 };
 
 // API functions
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
-async function fetchOnboardingState(authToken: string): Promise<TenantOnboardingState> {
-  const response = await fetch(`${API_URL}/v1/onboarding`, {
+async function fetchOnboardingState(authToken: string, apiUrl: string): Promise<TenantOnboardingState> {
+  const response = await fetch(`${apiUrl}/v1/onboarding`, {
     headers: {
       'Authorization': `Bearer ${authToken}`,
       'Content-Type': 'application/json',
@@ -134,8 +132,8 @@ async function fetchOnboardingState(authToken: string): Promise<TenantOnboarding
   return json.data || json;
 }
 
-async function fetchTemplates(authToken: string): Promise<{ data: QuickStartTemplate[] }> {
-  const response = await fetch(`${API_URL}/v1/onboarding/templates`, {
+async function fetchTemplates(authToken: string, apiUrl: string): Promise<{ data: QuickStartTemplate[] }> {
+  const response = await fetch(`${apiUrl}/v1/onboarding/templates`, {
     headers: {
       'Authorization': `Bearer ${authToken}`,
       'Content-Type': 'application/json',
@@ -151,11 +149,12 @@ async function fetchTemplates(authToken: string): Promise<{ data: QuickStartTemp
 
 async function completeStep(
   authToken: string,
+  apiUrl: string,
   protocolId: ProtocolId,
   stepId: string
 ): Promise<ProtocolOnboardingState> {
   const response = await fetch(
-    `${API_URL}/v1/onboarding/protocols/${protocolId}/steps/${stepId}/complete`,
+    `${apiUrl}/v1/onboarding/protocols/${protocolId}/steps/${stepId}/complete`,
     {
       method: 'POST',
       headers: {
@@ -174,11 +173,12 @@ async function completeStep(
 
 async function skipStep(
   authToken: string,
+  apiUrl: string,
   protocolId: ProtocolId,
   stepId: string
 ): Promise<ProtocolOnboardingState> {
   const response = await fetch(
-    `${API_URL}/v1/onboarding/protocols/${protocolId}/steps/${stepId}/skip`,
+    `${apiUrl}/v1/onboarding/protocols/${protocolId}/steps/${stepId}/skip`,
     {
       method: 'POST',
       headers: {
@@ -197,10 +197,11 @@ async function skipStep(
 
 async function resetOnboarding(
   authToken: string,
+  apiUrl: string,
   protocolId: ProtocolId
 ): Promise<ProtocolOnboardingState> {
   const response = await fetch(
-    `${API_URL}/v1/onboarding/protocols/${protocolId}/reset`,
+    `${apiUrl}/v1/onboarding/protocols/${protocolId}/reset`,
     {
       method: 'POST',
       headers: {
@@ -219,9 +220,10 @@ async function resetOnboarding(
 
 async function toggleSandboxMode(
   authToken: string,
+  apiUrl: string,
   enabled: boolean
 ): Promise<{ success: boolean; sandbox_mode: boolean }> {
-  const response = await fetch(`${API_URL}/v1/onboarding/sandbox`, {
+  const response = await fetch(`${apiUrl}/v1/onboarding/sandbox`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${authToken}`,
@@ -239,10 +241,11 @@ async function toggleSandboxMode(
 
 async function enableProtocol(
   authToken: string,
+  apiUrl: string,
   protocolId: ProtocolId
 ): Promise<{ success: boolean; error?: string; missing_prerequisites?: string[] }> {
   const response = await fetch(
-    `${API_URL}/v1/organization/protocols/${protocolId}/enable`,
+    `${apiUrl}/v1/organization/protocols/${protocolId}/enable`,
     {
       method: 'POST',
       headers: {
@@ -743,28 +746,28 @@ function ResumeSetupCard() {
 
 // Main page component
 export default function OnboardingPage() {
-  const { isConfigured, isLoading: isAuthLoading, authToken } = useApiConfig();
+  const { isConfigured, isLoading: isAuthLoading, authToken, apiUrl } = useApiConfig();
   const queryClient = useQueryClient();
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
 
   // Fetch onboarding state
   const { data: onboardingState, isLoading: isLoadingState } = useQuery({
     queryKey: ['onboarding-state'],
-    queryFn: () => fetchOnboardingState(authToken!),
+    queryFn: () => fetchOnboardingState(authToken!, apiUrl),
     enabled: !!authToken,
   });
 
   // Fetch templates
   const { data: templatesData } = useQuery({
     queryKey: ['onboarding-templates'],
-    queryFn: () => fetchTemplates(authToken!),
+    queryFn: () => fetchTemplates(authToken!, apiUrl),
     enabled: !!authToken,
   });
 
   // Complete step mutation
   const completeStepMutation = useMutation({
     mutationFn: ({ protocolId, stepId }: { protocolId: ProtocolId; stepId: string }) =>
-      completeStep(authToken!, protocolId, stepId),
+      completeStep(authToken!, apiUrl, protocolId, stepId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['onboarding-state'] });
       toast.success('Step completed');
@@ -779,7 +782,7 @@ export default function OnboardingPage() {
   // Skip step mutation
   const skipStepMutation = useMutation({
     mutationFn: ({ protocolId, stepId }: { protocolId: ProtocolId; stepId: string }) =>
-      skipStep(authToken!, protocolId, stepId),
+      skipStep(authToken!, apiUrl, protocolId, stepId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['onboarding-state'] });
       toast.success('Step skipped');
@@ -793,7 +796,7 @@ export default function OnboardingPage() {
 
   // Reset mutation
   const resetMutation = useMutation({
-    mutationFn: (protocolId: ProtocolId) => resetOnboarding(authToken!, protocolId),
+    mutationFn: (protocolId: ProtocolId) => resetOnboarding(authToken!, apiUrl, protocolId),
     onSuccess: (_, protocolId) => {
       queryClient.invalidateQueries({ queryKey: ['onboarding-state'] });
       toast.success(`${protocolId.toUpperCase()} onboarding reset`);
@@ -807,7 +810,7 @@ export default function OnboardingPage() {
 
   // Sandbox toggle mutation
   const sandboxMutation = useMutation({
-    mutationFn: (enabled: boolean) => toggleSandboxMode(authToken!, enabled),
+    mutationFn: (enabled: boolean) => toggleSandboxMode(authToken!, apiUrl, enabled),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['onboarding-state'] });
       toast.success(result.sandbox_mode ? 'Sandbox mode enabled' : 'Sandbox mode disabled');
@@ -819,7 +822,7 @@ export default function OnboardingPage() {
 
   // Enable protocol mutation
   const enableProtocolMutation = useMutation({
-    mutationFn: (protocolId: ProtocolId) => enableProtocol(authToken!, protocolId),
+    mutationFn: (protocolId: ProtocolId) => enableProtocol(authToken!, apiUrl, protocolId),
     onSuccess: (result, protocolId) => {
       if (result.success) {
         queryClient.invalidateQueries({ queryKey: ['onboarding-state'] });

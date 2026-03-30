@@ -60,7 +60,7 @@ interface ExecuteResponse {
 }
 
 export function useSimulation() {
-  const { authToken, apiKey } = useApiConfig();
+  const { authToken, apiKey, apiUrl } = useApiConfig();
   const [isSimulating, setIsSimulating] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
   const [simulation, setSimulation] = useState<SimulationResponse['data'] | null>(null);
@@ -74,16 +74,12 @@ export function useSimulation() {
     return `Bearer ${token}`;
   };
 
-  const getApiUrl = () => {
-    return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-  };
-
   const simulate = async (payload: SimulationPayload): Promise<SimulationResponse['data'] | null> => {
     setIsSimulating(true);
     setError(null);
 
     try {
-      const response = await fetch(`${getApiUrl()}/v1/simulate`, {
+      const response = await fetch(`${apiUrl}/v1/simulate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -140,7 +136,7 @@ export function useSimulation() {
     setError(null);
 
     try {
-      const response = await fetch(`${getApiUrl()}/v1/simulate/${simulationId}/execute`, {
+      const response = await fetch(`${apiUrl}/v1/simulate/${simulationId}/execute`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

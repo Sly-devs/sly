@@ -45,8 +45,7 @@ const statusColors: Record<string, string> = {
 };
 
 export default function MppSessionsPage() {
-    const { authToken, apiKey } = useApiConfig();
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+    const { authToken, apiKey, apiUrl } = useApiConfig();
     const token = authToken || apiKey;
     const [statusFilter, setStatusFilter] = useState<string>("all");
     const [page, setPage] = useState(0);
@@ -56,7 +55,7 @@ export default function MppSessionsPage() {
         queryFn: async () => {
             const params = new URLSearchParams({ limit: "20", offset: String(page * 20) });
             if (statusFilter !== "all") params.set("status", statusFilter);
-            const res = await fetch(`${baseUrl}/v1/mpp/sessions?${params}`, {
+            const res = await fetch(`${apiUrl}/v1/mpp/sessions?${params}`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
             return res.json();

@@ -36,14 +36,13 @@ function hostname(url: string | undefined): string {
 }
 
 export default function MppOverviewPage() {
-    const { authToken, apiKey } = useApiConfig();
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+    const { authToken, apiKey, apiUrl } = useApiConfig();
     const token = authToken || apiKey;
 
     const { data: sessions } = useQuery({
         queryKey: ["mpp-sessions"],
         queryFn: async () => {
-            const res = await fetch(`${baseUrl}/v1/mpp/sessions?limit=10`, {
+            const res = await fetch(`${apiUrl}/v1/mpp/sessions?limit=10`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
             return res.json();
@@ -54,7 +53,7 @@ export default function MppOverviewPage() {
     const { data: transfers } = useQuery({
         queryKey: ["mpp-transfers"],
         queryFn: async () => {
-            const res = await fetch(`${baseUrl}/v1/mpp/transfers?limit=10`, {
+            const res = await fetch(`${apiUrl}/v1/mpp/transfers?limit=10`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
             return res.json();

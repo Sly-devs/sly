@@ -70,15 +70,14 @@ const statusStyles: Record<string, string> = {
 export default function MppSessionDetailPage() {
     const params = useParams();
     const sessionId = params.id as string;
-    const { authToken, apiKey } = useApiConfig();
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+    const { authToken, apiKey, apiUrl } = useApiConfig();
     const token = authToken || apiKey;
     const queryClient = useQueryClient();
 
     const { data: rawData, isLoading, error } = useQuery({
         queryKey: ["mpp-session", sessionId],
         queryFn: async () => {
-            const res = await fetch(`${baseUrl}/v1/mpp/sessions/${sessionId}`, {
+            const res = await fetch(`${apiUrl}/v1/mpp/sessions/${sessionId}`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
             if (!res.ok) return null;
@@ -91,7 +90,7 @@ export default function MppSessionDetailPage() {
 
     const closeMutation = useMutation({
         mutationFn: async () => {
-            const res = await fetch(`${baseUrl}/v1/mpp/sessions/${sessionId}/close`, {
+            const res = await fetch(`${apiUrl}/v1/mpp/sessions/${sessionId}/close`, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${token}` },
             });

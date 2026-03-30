@@ -17,8 +17,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
 interface UsageSummary {
   period: { start: string; end: string };
   totalRequests: number;
@@ -104,8 +102,8 @@ function correlationColor(id: string | null): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
-async function fetchUsage(path: string, token: string) {
-  const res = await fetch(`${API_URL}/v1/usage${path}`, {
+async function fetchUsage(path: string, token: string, baseUrl: string) {
+  const res = await fetch(`${baseUrl}/v1/usage${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`Usage API error: ${res.status}`);
@@ -114,7 +112,7 @@ async function fetchUsage(path: string, token: string) {
 }
 
 export default function OperationsPage() {
-  const { isConfigured, isLoading: configLoading, authToken, apiKey } = useApiConfig();
+  const { isConfigured, isLoading: configLoading, authToken, apiKey, apiUrl } = useApiConfig();
   const token = authToken || apiKey || '';
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -144,21 +142,21 @@ export default function OperationsPage() {
 
   const { data: summary, isLoading: summaryLoading } = useQuery<UsageSummary>({
     queryKey: ['operations', 'summary'],
-    queryFn: async () => (await fetchUsage('/summary', token)).data,
+    queryFn: async () => (await fetchUsage('/summary', token, apiUrl)).data,
     enabled: isConfigured && !!token,
     staleTime: 60 * 1000,
   });
 
   const { data: requests, isLoading: requestsLoading } = useQuery<RequestAggregations>({
     queryKey: ['operations', 'requests'],
-    queryFn: async () => (await fetchUsage('/requests?group_by=path_template', token)).data,
+    queryFn: async () => (await fetchUsage('/requests?group_by=path_template', token, apiUrl)).data,
     enabled: isConfigured && !!token,
     staleTime: 60 * 1000,
   });
 
   const { data: costs, isLoading: costsLoading } = useQuery<CostBreakdown>({
     queryKey: ['operations', 'costs'],
-    queryFn: async () => (await fetchUsage('/costs', token)).data,
+    queryFn: async () => (await fetchUsage('/costs', token, apiUrl)).data,
     enabled: isConfigured && !!token,
     staleTime: 60 * 1000,
   });
@@ -174,7 +172,7 @@ export default function OperationsPage() {
     pagination: { page: number; limit: number; total: number; totalPages: number };
   }>({
     queryKey: ['operations', 'events', categoryFilter, protocolFilter, successFilter, page],
-    queryFn: () => fetchUsage(`/operations?${opsQueryParts.join('&')}`, token),
+    queryFn: () => fetchUsage(`/operations?${opsQueryParts.join('&')}`, token, apiUrl),
     enabled: isConfigured && !!token,
     staleTime: 30 * 1000,
   });

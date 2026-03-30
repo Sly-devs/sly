@@ -14,7 +14,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+// Onboarding uses the sandbox API — users start in sandbox, switch to production later
+const apiUrl = process.env.NEXT_PUBLIC_SANDBOX_API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 interface ApiKeys {
   test: { key: string; prefix: string };

@@ -17,24 +17,16 @@ import { AlertCircle } from 'lucide-react';
 import { useParams } from 'next/navigation';
 
 // Helper to fetch context
-async function fetchAccountContext(id: string, token: string | null): Promise<AccountContext> {
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+async function fetchAccountContext(id: string, token: string | null, apiUrl: string): Promise<AccountContext> {
     const headers: HeadersInit = {
         'Content-Type': 'application/json',
     };
 
     if (token) {
-        headers['Authorization'] = `Bearer ${token}`; // Or however the API expects it. usually Bearer with JWT
-        // Double check api-client.tsx implementation: apiKey: token. 
-        // The createPayOSClient likely sets Authorization header.
-        // If token is JWT (from supabase), it's Bearer. If it's API Key, it might be x-api-key or Bearer.
-        // Based on api-client.tsx logic, token is either apiKey or JWT.
-        // I'll assume Bearer for now as that's standard for Supabase JWT.
-        // If it's a raw API Key, PayOS might expect `Authorization: Bearer <key>` too.
         headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const res = await fetch(`${baseUrl}/v1/context/account/${id}`, { headers });
+    const res = await fetch(`${apiUrl}/v1/context/account/${id}`, { headers });
 
     if (!res.ok) {
         throw new Error(`Failed to fetch account context: ${res.statusText}`);
@@ -47,11 +39,11 @@ async function fetchAccountContext(id: string, token: string | null): Promise<Ac
 export default function Account360Page() {
     const params = useParams(); // Use useParams hook instead of props for client component
     const id = params?.id as string;
-    const { authToken, isConfigured } = useApiConfig();
+    const { authToken, isConfigured, apiUrl } = useApiConfig();
 
     const { data, isLoading, error, refetch } = useQuery({
         queryKey: ['account-context', id],
-        queryFn: () => fetchAccountContext(id, authToken),
+        queryFn: () => fetchAccountContext(id, authToken, apiUrl),
         enabled: !!id && isConfigured,
         staleTime: 30000, // 30 seconds
     });

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useApiClient } from '@/lib/api-client';
+import { useApiClient, useApiConfig } from '@/lib/api-client';
 import { X, AlertCircle, Loader2, ArrowLeft, Eye, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Button, Input, Label, cn } from '@sly/ui';
 import type { Transfer, RefundReason } from '@sly/api-client';
@@ -23,6 +23,7 @@ const REFUND_REASONS: { value: RefundReason; label: string; description: string 
 
 export function RefundModal({ transfer, onClose, onSuccess }: RefundModalProps) {
   const api = useApiClient();
+  const { apiUrl } = useApiConfig();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
@@ -60,7 +61,6 @@ export function RefundModal({ transfer, onClose, onSuccess }: RefundModalProps) 
         throw new Error('Not authenticated');
       }
 
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
       const response = await fetch(`${apiUrl}/v1/simulate`, {
         method: 'POST',
         headers: {

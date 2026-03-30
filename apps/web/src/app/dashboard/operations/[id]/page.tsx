@@ -17,8 +17,6 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
 interface OperationEvent {
   id: string;
   type: string;
@@ -50,8 +48,8 @@ const PROTOCOL_TEXT_COLORS: Record<string, string> = {
   cctp: 'text-cyan-700 bg-cyan-50 dark:text-cyan-300 dark:bg-cyan-900/30',
 };
 
-async function fetchUsage(path: string, token: string) {
-  const res = await fetch(`${API_URL}/v1/usage${path}`, {
+async function fetchUsage(path: string, token: string, baseUrl: string) {
+  const res = await fetch(`${baseUrl}/v1/usage${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`Usage API error: ${res.status}`);
@@ -59,7 +57,7 @@ async function fetchUsage(path: string, token: string) {
 }
 
 export default function OperationDetailPage() {
-  const { isConfigured, isLoading: configLoading, authToken, apiKey } = useApiConfig();
+  const { isConfigured, isLoading: configLoading, authToken, apiKey, apiUrl } = useApiConfig();
   const token = authToken || apiKey || '';
   const params = useParams();
   const id = params.id as string;
@@ -71,7 +69,7 @@ export default function OperationDetailPage() {
     pagination: { total: number };
   }>({
     queryKey: ['operation-detail', id],
-    queryFn: () => fetchUsage(`/operations?limit=200`, token),
+    queryFn: () => fetchUsage(`/operations?limit=200`, token, apiUrl),
     enabled: isConfigured && !!token,
   });
 
@@ -84,7 +82,7 @@ export default function OperationDetailPage() {
     data: OperationEvent[];
   }>({
     queryKey: ['operation-correlated', event?.correlation_id],
-    queryFn: () => fetchUsage(`/operations?correlation_id=${encodeURIComponent(event!.correlation_id!)}&limit=50`, token),
+    queryFn: () => fetchUsage(`/operations?correlation_id=${encodeURIComponent(event!.correlation_id!)}&limit=50`, token, apiUrl),
     enabled: isConfigured && !!token && !!event?.correlation_id,
   });
 

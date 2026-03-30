@@ -28,11 +28,9 @@ interface Stats {
   pendingFlags: number;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
 export default function DashboardPage() {
   const api = useApiClient();
-  const { isConfigured, isLoading: configLoading, authToken, apiEnvironment } = useApiConfig();
+  const { isConfigured, isLoading: configLoading, authToken, apiEnvironment, apiUrl } = useApiConfig();
   const apiFetch = useApiFetch();
 
   // Fetch agents count
@@ -62,7 +60,7 @@ export default function DashboardPage() {
     queryKey: ['dashboard', 'total-volume', apiEnvironment],
     queryFn: async () => {
       const response = await apiFetch(
-        `${API_URL}/v1/analytics/protocol-distribution?timeRange=30d&metric=volume`,
+        `${apiUrl}/v1/analytics/protocol-distribution?timeRange=30d&metric=volume`,
       );
       if (!response.ok) return 0;
       const json = await response.json();

@@ -179,12 +179,10 @@ export const HANDLER_INFO: Record<HandlerType, HandlerInfo> = {
 };
 
 export function useConnectedAccounts() {
-  const { authToken, isConfigured, isLoading: authLoading } = useApiConfig();
+  const { authToken, isConfigured, isLoading: authLoading, apiUrl } = useApiConfig();
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
   // Helper for making authenticated requests
   const makeRequest = useCallback(

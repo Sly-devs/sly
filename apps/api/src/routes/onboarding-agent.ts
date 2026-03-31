@@ -308,12 +308,14 @@ router.post('/one-click', async (c) => {
 
           // Create user_profile so the user has dashboard access when they accept
           if (inviteData?.user?.id) {
-            await supabase.from('user_profiles').insert({
-              id: inviteData.user.id,
-              tenant_id: tenant.id,
-              role: 'owner',
-              name: name,
-            }).catch(() => {}); // non-fatal if profile already exists
+            try {
+              await (supabase.from('user_profiles') as any).insert({
+                id: inviteData.user.id,
+                tenant_id: tenant.id,
+                role: 'owner',
+                name: name,
+              });
+            } catch { /* non-fatal if profile already exists */ }
           }
 
           console.log(`[agent-onboard] Dashboard invite sent to ${email} for tenant ${tenant.id}`);
@@ -390,16 +392,19 @@ router.post('/one-click', async (c) => {
 
     // Store idempotency key
     if (idempotencyKey) {
-      await (supabase.from('idempotency_keys') as any)
-        .insert({
-          idempotency_key: idempotencyKey,
-          tenant_id: tenant.id,
-          response_body: response,
-          response_status: 201,
-          request_method: 'POST',
-          request_path: '/v1/onboarding/agent/one-click',
-        })
-        .catch(() => {}); // non-fatal
+      try {
+        await (supabase.from('idempotency_keys') as any)
+          .insert({
+            idempotency_key: idempotencyKey,
+            tenant_id: tenant.id,
+            response_body: response,
+            response_status: 201,
+            request_method: 'POST',
+            request_path: '/v1/onboarding/agent/one-click',
+            request_hash: idempotencyKey,
+            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          });
+      } catch { /* non-fatal */ }
     }
 
     return c.json(response, 201);

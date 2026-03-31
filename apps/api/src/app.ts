@@ -269,6 +269,10 @@ app.route('/v1/protocols', protocolsRouter);
 import { openapiRouter } from './routes/openapi.js';
 app.route('/v1', openapiRouter);
 
+// One-click agent onboarding (public - no auth required)
+import { onboardingAgentRouter } from './routes/onboarding-agent.js';
+app.route('/v1/onboarding/agent', onboardingAgentRouter);
+
 // Swagger UI redirect
 app.get('/docs', (c) => {
   const specUrl = encodeURIComponent(`${process.env.API_BASE_URL || 'https://api.getsly.ai'}/v1/openapi.json`);

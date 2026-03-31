@@ -10,7 +10,7 @@
     "test:watch": "vitest src/index.test.ts"
   },
   "dependencies": {
-    "@sly/sdk": "workspace:*"
+    "@sly_ai/sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

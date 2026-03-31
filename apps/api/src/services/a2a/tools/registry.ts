@@ -80,7 +80,7 @@ export class AgentToolRegistry {
 
     let mcpToolDefinitions: Array<{ name: string; description?: string; inputSchema: unknown }> = [];
     try {
-      const mod = await import('@sly/mcp-server');
+      const mod = await import('@sly_ai/mcp-server');
       mcpToolDefinitions = mod.tools || [];
     } catch {
       // MCP server not available — continue with synthetic + custom tools only

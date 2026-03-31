@@ -14,7 +14,7 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@sly/sdk": "workspace:*",
+    "@sly_ai/sdk": "workspace:*",
     "@sly/x402-client-sdk": "workspace:*",
     "chalk": "^5.3.0",
     "dotenv": "^16.4.5",

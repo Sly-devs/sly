@@ -11,8 +11,8 @@
 import { Hono } from 'hono';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { Sly } from '@sly/sdk';
-import { createMcpServer } from '@sly/mcp-server/server-factory';
+import { Sly } from '@sly_ai/sdk';
+import { createMcpServer } from '@sly_ai/mcp-server/server-factory';
 import { createClient } from '../db/client.js';
 import { verifyApiKey, getKeyPrefix } from '../utils/crypto.js';
 

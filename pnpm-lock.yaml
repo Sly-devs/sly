@@ -64,18 +64,18 @@ importers:
       '@sly/cards':
         specifier: workspace:*
         version: link:../../packages/cards
-      '@sly/mcp-server':
-        specifier: workspace:*
-        version: link:../../packages/mcp-server
-      '@sly/sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
       '@sly/types':
         specifier: workspace:*
         version: link:../../packages/types
       '@sly/utils':
         specifier: workspace:*
         version: link:../../packages/utils
+      '@sly_ai/mcp-server':
+        specifier: workspace:*
+        version: link:../../packages/mcp-server
+      '@sly_ai/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@solana/spl-token':
         specifier: ^0.4.14
         version: 0.4.14(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@5.0.10)
@@ -146,12 +146,12 @@ importers:
 
   apps/sample-consumer:
     dependencies:
-      '@sly/sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
       '@sly/x402-client-sdk':
         specifier: workspace:*
         version: link:../../packages/x402-client-sdk
+      '@sly_ai/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       chalk:
         specifier: ^5.3.0
         version: 5.6.2
@@ -389,9 +389,9 @@ importers:
 
   packages/cli:
     dependencies:
-      '@sly/sdk':
-        specifier: workspace:*
-        version: link:../sdk
+      '@sly_ai/sdk':
+        specifier: ^0.1.0
+        version: 0.1.0(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       commander:
         specifier: ^12.0.0
         version: 12.1.0
@@ -417,9 +417,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.4
         version: 1.25.1(hono@4.12.8)(zod@4.3.6)
-      '@sly/sdk':
-        specifier: workspace:*
-        version: link:../sdk
+      '@sly_ai/sdk':
+        specifier: ^0.1.0
+        version: 0.1.0(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
     devDependencies:
       '@types/node':
         specifier: ^20.14.10
@@ -2207,6 +2207,15 @@ packages:
 
   '@sinclair/typebox@0.27.8':
     resolution: {integrity: sha512-+Fj43pSMwJs4KRrH/938Uf+uAELIgVBmQzg/q1YG10djyfA3TnrU8N8XzqCh/okZdszqBQTZf96idMfE5lnwTA==}
+
+  '@sly_ai/sdk@0.1.0':
+    resolution: {integrity: sha512-eoSYY4tAb+l5R/VUzKneEZDBfsz3BkntKGg7+y2gsB9TToLaKw+67nBLmPFQeuHKdEP25wzb62U9gVLZgM5ESQ==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      express: ^4.18.0
+    peerDependenciesMeta:
+      express:
+        optional: true
 
   '@solana-program/system@0.8.1':
     resolution: {integrity: sha512-71U9Mzdpw8HQtfgfJSL5xKZbLMRnza2Llsfk7gGnmg2waqK+o8MMH4YNma8xXS1UmOBptXIiNvoZ3p7cmOVktg==}
@@ -7207,6 +7216,33 @@ snapshots:
 
   '@sinclair/typebox@0.27.8': {}
 
+  '@sly_ai/sdk@0.1.0(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@sly/types': link:packages/types
+      '@x402/core': 2.1.0
+      '@x402/evm': 2.1.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@x402/express': 2.1.0(bufferutil@4.1.0)(express@5.2.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@x402/fetch': 2.1.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      ai: 3.4.33(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(vue@3.5.26(typescript@5.9.3))(zod@3.25.76)
+      zod: 3.25.76
+    optionalDependencies:
+      express: 5.2.1
+    transitivePeerDependencies:
+      - '@x402/paywall'
+      - bufferutil
+      - debug
+      - encoding
+      - fastestsmallesttextencoderdecoder
+      - openai
+      - react
+      - solid-js
+      - sswr
+      - svelte
+      - typescript
+      - utf-8-validate
+      - vue
+      - ws
+
   '@solana-program/system@0.8.1(@solana/kit@3.0.3(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)))':
     dependencies:
       '@solana/kit': 3.0.3(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
@@ -8546,6 +8582,24 @@ snapshots:
       '@x402/core': 2.1.0
       '@x402/extensions': 2.1.0
       express: 4.22.1
+      viem: 2.43.5(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
+      zod: 3.25.76
+    transitivePeerDependencies:
+      - bufferutil
+      - debug
+      - encoding
+      - fastestsmallesttextencoderdecoder
+      - typescript
+      - utf-8-validate
+      - ws
+
+  '@x402/express@2.1.0(bufferutil@4.1.0)(express@5.2.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@coinbase/cdp-sdk': 1.40.1(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@solana/kit': 2.3.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@x402/core': 2.1.0
+      '@x402/extensions': 2.1.0
+      express: 5.2.1
       viem: 2.43.5(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
       zod: 3.25.76
     transitivePeerDependencies:

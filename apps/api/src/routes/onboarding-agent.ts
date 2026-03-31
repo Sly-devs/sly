@@ -6,6 +6,8 @@
  * Creates tenant + account + agent + wallet + API keys in one call.
  * Returns everything needed to start using Sly, including code snippets.
  *
+ * Returns everything needed to start using Sly.
+ *
  * Two paths:
  * - If beta is open or agent has approved application → instant activation
  * - If beta is closed and no approval → returns pending_review

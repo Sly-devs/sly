@@ -393,7 +393,7 @@ export default function SetupWizard() {
 
       {/* Top bar: logo + progress */}
       <div className="relative z-10 w-full px-6 pt-6 pb-4">
-        <div className={`${step === 3 ? 'max-w-2xl' : 'max-w-lg'} mx-auto flex items-center justify-between transition-all`}>
+        <div className={`${step === 3 ? 'max-w-4xl' : 'max-w-2xl'} mx-auto flex items-center justify-between transition-all`}>
           {/* Logo */}
           <div className="flex items-center gap-2">
             <div
@@ -420,7 +420,7 @@ export default function SetupWizard() {
 
       {/* Step content */}
       <div className="relative z-10 flex-1 flex items-start justify-center px-4 pt-4 pb-12 overflow-y-auto">
-        <div className={`w-full ${step === 3 ? 'max-w-2xl' : 'max-w-lg'}`}>
+        <div className={`w-full ${step === 3 ? 'max-w-4xl' : 'max-w-2xl'}`}>
           {error && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}

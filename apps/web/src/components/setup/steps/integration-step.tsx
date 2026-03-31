@@ -31,6 +31,7 @@ interface IntegrationCard {
   description: string;
   accent: string;
   docsUrl: string;
+  logos: string[];
   getContent: (testKey: string, liveKey: string, accountId: string) => string;
 }
 
@@ -43,6 +44,7 @@ const cards: IntegrationCard[] = [
     description: 'Discoverable agent skill manifest',
     accent: 'amber',
     docsUrl: 'https://docs.getsly.ai/guides/skills',
+    logos: ['Claude', 'ChatGPT', 'Gemini', 'Any Agent'],
     getContent: () => 'https://api.getsly.ai/v1/skills.md',
   },
   {
@@ -52,15 +54,17 @@ const cards: IntegrationCard[] = [
     description: 'Agent-to-agent discovery and communication',
     accent: 'indigo',
     docsUrl: 'https://docs.getsly.ai/guides/a2a',
+    logos: ['Google', 'Any A2A Agent'],
     getContent: () => 'https://api.getsly.ai/a2a/<agent_id>/.well-known/agent.json',
   },
   {
     id: 'mcp',
     icon: Terminal,
     title: 'MCP Server',
-    description: 'For Claude, Gemini, Cursor & Windsurf',
+    description: 'Model Context Protocol integration',
     accent: 'purple',
     docsUrl: 'https://docs.getsly.ai/guides/mcp',
+    logos: ['Claude', 'Gemini', 'Cursor', 'Windsurf'],
     getContent: () => 'npx @sly/mcp-server',
   },
   {
@@ -70,6 +74,7 @@ const cards: IntegrationCard[] = [
     description: 'Shell commands for any agent with exec access',
     accent: 'blue',
     docsUrl: 'https://docs.getsly.ai/guides/cli',
+    logos: ['ChatGPT', 'Devin', 'Any Agent'],
     getContent: () => 'npx @sly/cli',
   },
   {
@@ -79,6 +84,7 @@ const cards: IntegrationCard[] = [
     description: 'TypeScript/Node.js SDK',
     accent: 'blue',
     docsUrl: 'https://docs.getsly.ai/sdk',
+    logos: ['Node.js', 'TypeScript'],
     getContent: () => 'npm install @sly/sdk',
   },
   {
@@ -88,6 +94,7 @@ const cards: IntegrationCard[] = [
     description: 'Create GPT → Configure → Actions → Import URL',
     accent: 'emerald',
     docsUrl: 'https://docs.getsly.ai/guides/chatgpt',
+    logos: ['ChatGPT'],
     getContent: () => 'https://api.getsly.ai/v1/openapi.json',
   },
   {
@@ -97,6 +104,7 @@ const cards: IntegrationCard[] = [
     description: 'Interactive API docs — browse and test endpoints',
     accent: 'emerald',
     docsUrl: 'https://docs.getsly.ai/api',
+    logos: ['Postman', 'Python', 'Go', 'Any'],
     getContent: () => 'https://api.getsly.ai/docs',
   },
 ];
@@ -276,8 +284,20 @@ export function IntegrationStep({ apiKeys, accountId, onComplete }: IntegrationS
                   </a>
                 </div>
 
+                {/* Company logos */}
+                <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                  {card.logos.map((logo) => (
+                    <span
+                      key={logo}
+                      className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5"
+                    >
+                      {logo}
+                    </span>
+                  ))}
+                </div>
+
                 {/* Code/content area */}
-                <div className="mt-3 flex items-start gap-2">
+                <div className="mt-2 flex items-start gap-2">
                   {card.id === 'mcp' ? (
                     <button
                       onClick={downloadMcpJson}

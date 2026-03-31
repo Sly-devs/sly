@@ -223,8 +223,7 @@ function SignUpPageInner() {
               <span className="text-2xl font-bold text-foreground">Sly</span>
             </div>
           </div>
-          <h1 className="text-3xl font-bold text-foreground">Join Sly</h1>
-          <p className="text-sm text-muted-foreground">The Agentic Economy Platform</p>
+          <h1 className="text-3xl font-bold text-foreground">Join The Agentic Economy Platform</h1>
         </div>
 
         {/* Tab toggle */}

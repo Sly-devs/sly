@@ -269,6 +269,21 @@ app.route('/v1/protocols', protocolsRouter);
 import { openapiRouter } from './routes/openapi.js';
 app.route('/v1', openapiRouter);
 
+// Package tarballs (public - for SDK/CLI installation)
+app.get('/packages/:name', async (c) => {
+  const name = c.req.param('name');
+  const allowed = ['sdk.tgz', 'cli.tgz'];
+  if (!allowed.includes(name)) return c.json({ error: 'Not found' }, 404);
+
+  // For now, redirect to a future CDN or return 404 with instructions
+  // Tarballs will be uploaded to a public URL after build
+  return c.json({
+    error: 'Package not yet available for direct download',
+    alternative: `git clone https://github.com/haxaco/payos && cd payos && pnpm install && pnpm build`,
+    package: name.replace('.tgz', ''),
+  }, 404);
+});
+
 // Swagger UI redirect
 app.get('/docs', (c) => {
   const specUrl = encodeURIComponent(`${process.env.API_BASE_URL || 'https://api.getsly.ai'}/v1/openapi.json`);

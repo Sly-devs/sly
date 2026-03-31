@@ -51,11 +51,11 @@ const cards: IntegrationCard[] = [
     id: 'a2a',
     icon: Network,
     title: 'A2A Protocol',
-    description: 'Agent-to-agent discovery and communication',
+    description: 'Discover Sly\'s platform agent card and capabilities',
     accent: 'indigo',
     docsUrl: 'https://docs.getsly.ai/guides/a2a',
     logos: ['Google', 'Any A2A Agent'],
-    getContent: () => 'https://api.getsly.ai/a2a/<agent_id>/.well-known/agent.json',
+    getContent: () => 'https://api.getsly.ai/.well-known/agent.json',
   },
   {
     id: 'mcp',
@@ -75,7 +75,7 @@ const cards: IntegrationCard[] = [
     accent: 'blue',
     docsUrl: 'https://docs.getsly.ai/guides/cli',
     logos: ['ChatGPT', 'Devin', 'Any Agent'],
-    getContent: () => 'npx @sly/cli',
+    getContent: () => 'npm install https://api.getsly.ai/packages/cli.tgz',
   },
   {
     id: 'sdk',
@@ -85,7 +85,7 @@ const cards: IntegrationCard[] = [
     accent: 'blue',
     docsUrl: 'https://docs.getsly.ai/sdk',
     logos: ['Node.js', 'TypeScript'],
-    getContent: () => 'npm install @sly/sdk',
+    getContent: () => 'npm install https://api.getsly.ai/packages/sdk.tgz',
   },
   {
     id: 'chatgpt',

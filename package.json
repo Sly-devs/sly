@@ -13,6 +13,10 @@
     "test:integration": "turbo test:integration",
     "test:coverage": "turbo test:coverage",
     "clean": "turbo clean && rm -rf node_modules",
+    "publish:sdk": "pnpm --filter @sly_ai/sdk build && cd packages/sdk && npm publish --access public",
+    "publish:cli": "pnpm --filter @sly_ai/cli build && cd packages/cli && npm publish --access public",
+    "publish:mcp": "pnpm --filter @sly_ai/mcp-server build && cd packages/mcp-server && npm publish --access public",
+    "publish:all": "pnpm publish:sdk && pnpm publish:cli && pnpm publish:mcp",
     "db:migrate": "turbo db:migrate",
     "db:seed": "turbo db:seed"
   },

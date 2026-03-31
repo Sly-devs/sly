@@ -19,6 +19,9 @@ build/
 # MCP config (contains secrets)
 .mcp.json
 
+# npm auth tokens
+.npmrc
+
 # IDE
 .idea/
 .vscode/

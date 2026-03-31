@@ -46,6 +46,19 @@ pnpm --filter @sly/web dev
 pnpm dev
 ```
 
+### npm Package Publishing
+```bash
+# Publish all public packages to npm (@sly_ai scope)
+pnpm publish:all
+
+# Publish individually
+pnpm publish:sdk    # @sly_ai/sdk
+pnpm publish:cli    # @sly_ai/cli
+pnpm publish:mcp    # @sly_ai/mcp-server
+```
+
+**When to publish**: Bump the version in the package's `package.json` and run the publish command after any changes to `packages/sdk/`, `packages/cli/`, or `packages/mcp-server/` that affect the public API or fix bugs. The workspace uses `@sly_ai/*` for npm-published packages and `@sly/*` for internal-only packages (types, utils, ui, etc.).
+
 ### Testing
 ```bash
 # Run all tests

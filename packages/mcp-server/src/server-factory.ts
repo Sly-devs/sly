@@ -10,7 +10,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { Sly } from '@sly/sdk';
+import { Sly } from '@sly_ai/sdk';
 import { tools } from './tools.js';
 
 /**

@@ -1,4 +1,4 @@
-import { Sly } from '@sly/sdk';
+import { Sly } from '@sly_ai/sdk';
 
 export function createClient(): Sly {
   const apiKey = process.env.SLY_API_KEY;

@@ -15,7 +15,7 @@
  */
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { Sly, getEnvironmentConfig } from '@sly/sdk';
+import { Sly, getEnvironmentConfig } from '@sly_ai/sdk';
 import { createMcpServer } from './server-factory.js';
 
 // Re-export for external consumers (e.g., apps/api remote MCP endpoint)

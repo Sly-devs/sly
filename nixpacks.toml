@@ -15,8 +15,8 @@ cmds = [
 cmds = [
   "pnpm --filter @sly/types build",
   "pnpm --filter @sly/utils build",
-  "pnpm --filter @sly/sdk build",
-  "pnpm --filter @sly/mcp-server build",
+  "pnpm --filter @sly_ai/sdk build",
+  "pnpm --filter @sly_ai/mcp-server build",
   "pnpm --filter @sly/api build"
 ]
 

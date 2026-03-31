@@ -390,8 +390,8 @@ importers:
   packages/cli:
     dependencies:
       '@sly_ai/sdk':
-        specifier: ^0.1.0
-        version: 0.1.0(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+        specifier: ^0.1.3
+        version: 0.1.3(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(vue@3.5.26(typescript@5.9.3))(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       commander:
         specifier: ^12.0.0
         version: 12.1.0
@@ -418,8 +418,8 @@ importers:
         specifier: ^1.0.4
         version: 1.25.1(hono@4.12.8)(zod@4.3.6)
       '@sly_ai/sdk':
-        specifier: ^0.1.0
-        version: 0.1.0(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+        specifier: ^0.1.3
+        version: 0.1.3(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(vue@3.5.26(typescript@5.9.3))(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
     devDependencies:
       '@types/node':
         specifier: ^20.14.10
@@ -436,9 +436,6 @@ importers:
 
   packages/sdk:
     dependencies:
-      '@sly/types':
-        specifier: workspace:*
-        version: link:../types
       '@x402/core':
         specifier: ^2.1.0
         version: 2.1.0
@@ -2208,8 +2205,8 @@ packages:
   '@sinclair/typebox@0.27.8':
     resolution: {integrity: sha512-+Fj43pSMwJs4KRrH/938Uf+uAELIgVBmQzg/q1YG10djyfA3TnrU8N8XzqCh/okZdszqBQTZf96idMfE5lnwTA==}
 
-  '@sly_ai/sdk@0.1.0':
-    resolution: {integrity: sha512-eoSYY4tAb+l5R/VUzKneEZDBfsz3BkntKGg7+y2gsB9TToLaKw+67nBLmPFQeuHKdEP25wzb62U9gVLZgM5ESQ==}
+  '@sly_ai/sdk@0.1.3':
+    resolution: {integrity: sha512-RcmRCa3T8zYE04aXMJj9qCwaWMzRr4RY5v9KX9FVs+cDDH9Vf1Q44cCST2OQXEG2vhy6MlRMD82bCTLMpci3/A==}
     engines: {node: '>=18'}
     peerDependencies:
       express: ^4.18.0
@@ -7216,9 +7213,8 @@ snapshots:
 
   '@sinclair/typebox@0.27.8': {}
 
-  '@sly_ai/sdk@0.1.0(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
+  '@sly_ai/sdk@0.1.3(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(vue@3.5.26(typescript@5.9.3))(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
     dependencies:
-      '@sly/types': link:packages/types
       '@x402/core': 2.1.0
       '@x402/evm': 2.1.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@x402/express': 2.1.0(bufferutil@4.1.0)(express@5.2.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))

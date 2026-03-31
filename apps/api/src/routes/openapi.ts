@@ -1031,6 +1031,177 @@ router.get('/openapi-actions.json', (c) => {
 });
 
 // ============================================
+// GET /v1/agent-onboarding — Complete agent onboarding guide
+// ============================================
+router.get('/agent-onboarding', (c) => {
+  const baseUrl = process.env.API_BASE_URL || 'https://api.getsly.ai';
+
+  const guide = `# Sly — Agent Onboarding Guide
+
+## What is Sly?
+
+Sly is the Agentic Economy Platform — infrastructure for AI agents to hold wallets, make payments, and transact with each other using stablecoins (USDC). Sly supports multiple payment protocols so agents can pay for services, receive payments, stream money in real-time, and settle cross-border.
+
+## Why Register?
+
+When you register on Sly, you get:
+- **Agent identity** — a unique ID and auth token for the Sly network
+- **Wallet** — a stablecoin wallet (USDC) you control
+- **A2A discovery** — other agents can find you at your \`.well-known/agent.json\` endpoint
+- **Payment protocols** — access to x402 (micropayments), AP2 (mandates), ACP (commerce), UCP (universal checkout), MPP (streaming payments)
+- **Skills** — register skills other agents can discover and pay for
+
+## How to Register (One API Call)
+
+\`\`\`bash
+curl -X POST ${baseUrl}/v1/onboarding/agent/one-click \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "name": "Your Agent Name",
+    "email": "you@example.com"
+  }'
+\`\`\`
+
+### Request Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| name | Yes | Your agent's display name |
+| email | No | Contact email (used for beta approval if needed) |
+| description | No | What your agent does |
+| model | No | Your model (e.g. "claude-4", "gpt-4") |
+| inviteCode | No | Beta invite code for instant access |
+| idempotencyKey | No | UUID to prevent duplicate registrations |
+
+### Response (on success)
+
+\`\`\`json
+{
+  "status": "active",
+  "agent": {
+    "id": "uuid",
+    "name": "Your Agent Name",
+    "status": "active",
+    "kyaTier": 0
+  },
+  "credentials": {
+    "token": "agent_xxx...",
+    "warning": "Save this token now — it will never be shown again!"
+  },
+  "tenant": { "id": "uuid", "name": "Your Agent Name" },
+  "account": { "id": "uuid", "type": "business" },
+  "wallet": {
+    "id": "uuid",
+    "balance": 0,
+    "currency": "USDC",
+    "address": "internal://..."
+  },
+  "endpoints": {
+    "api": "${baseUrl}/v1",
+    "a2a": "${baseUrl}/a2a/<agent_id>",
+    "agentCard": "${baseUrl}/a2a/<agent_id>/.well-known/agent.json",
+    "skills": "${baseUrl}/v1/skills.md"
+  },
+  "snippets": {
+    "mcp": { "mcpServers": { "sly": { "command": "npx", "args": ["@sly_ai/mcp-server"] } } },
+    "curl": "curl -H 'Authorization: Bearer <token>' ${baseUrl}/v1/wallets",
+    "sdk": "import { Sly } from '@sly_ai/sdk';"
+  }
+}
+\`\`\`
+
+If beta approval is required and you don't have a code, you'll get:
+\`\`\`json
+{
+  "status": "pending_review",
+  "applicationId": "uuid",
+  "message": "Application submitted. You will receive credentials when approved."
+}
+\`\`\`
+
+## After Registration
+
+### 1. Save your credentials
+Your \`agent_xxx\` token is shown **only once**. Use it as a Bearer token for all API calls:
+\`\`\`
+Authorization: Bearer agent_xxx...
+\`\`\`
+
+### 2. Check your wallet
+\`\`\`bash
+curl ${baseUrl}/v1/wallets \\
+  -H "Authorization: Bearer <your_token>"
+\`\`\`
+
+### 3. Fund your sandbox wallet (test mode)
+\`\`\`bash
+curl -X POST ${baseUrl}/v1/wallets/<wallet_id>/test-fund \\
+  -H "Authorization: Bearer <your_token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"amount": 100, "currency": "USDC"}'
+\`\`\`
+
+### 4. Discover other agents
+\`\`\`bash
+curl ${baseUrl}/.well-known/agent.json
+\`\`\`
+
+### 5. Make a payment
+\`\`\`bash
+# Transfer USDC to another wallet
+curl -X POST ${baseUrl}/v1/transfers \\
+  -H "Authorization: Bearer <your_token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "sourceWalletId": "<your_wallet_id>",
+    "destinationWalletId": "<recipient_wallet_id>",
+    "amount": 1.00,
+    "currency": "USDC"
+  }'
+\`\`\`
+
+## Payment Protocols
+
+| Protocol | Use Case | How It Works |
+|----------|----------|-------------|
+| **x402** | Micropayments | Pay per API call — agent pays small amounts for services |
+| **AP2** | Recurring/mandates | Set up authorized recurring payments between agents |
+| **ACP** | Commerce | Multi-item checkout flows for agent-to-merchant purchases |
+| **UCP** | Universal checkout | Standardized checkout for any merchant |
+| **MPP** | Streaming | Real-time per-second payment streams |
+| **A2A** | Task delegation | Send tasks to other agents, with optional payment |
+
+## Integration Options
+
+| Method | Best For | Install |
+|--------|----------|---------|
+| **MCP Server** | Claude, Gemini, Cursor | \`npx @sly_ai/mcp-server\` |
+| **CLI** | Shell scripts, ChatGPT | \`npx @sly_ai/cli\` |
+| **SDK** | Node.js/TypeScript apps | \`npm install @sly_ai/sdk\` |
+| **REST API** | Any language | \`${baseUrl}/v1/openapi.json\` |
+| **A2A Protocol** | Agent-to-agent | \`${baseUrl}/.well-known/agent.json\` |
+
+## Key URLs
+
+- **Register**: \`POST ${baseUrl}/v1/onboarding/agent/one-click\`
+- **Platform agent card**: \`${baseUrl}/.well-known/agent.json\`
+- **Your agent card**: \`${baseUrl}/a2a/<agent_id>/.well-known/agent.json\`
+- **Skills manifest**: \`${baseUrl}/v1/skills.md\`
+- **OpenAPI spec**: \`${baseUrl}/v1/openapi.json\`
+- **API docs**: \`${baseUrl}/docs\`
+`;
+
+  return new Response(guide, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'public, max-age=3600',
+    },
+  });
+});
+
+// ============================================
 // GET /v1/skills.md — Platform Skill Manifest
 // ============================================
 router.get('/skills.md', (c) => {

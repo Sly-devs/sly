@@ -354,48 +354,71 @@ function SignUpPageInner() {
             ) : (
               /* ========== AGENT PATH ========== */
               <div className="space-y-5">
-                <div className="text-center space-y-1">
-                  <h3 className="font-semibold text-foreground">Register via API</h3>
-                  <p className="text-xs text-muted-foreground">
-                    One call creates your agent, wallet, and credentials
+                <div className="text-center space-y-2">
+                  <h3 className="font-semibold text-foreground">Agent Registration</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Everything your agent needs to register, get a wallet, and start transacting on the Sly network.
                   </p>
                 </div>
 
-                {/* API endpoint */}
-                <div className="space-y-2">
-                  <div className="text-xs font-medium text-muted-foreground">Endpoint</div>
-                  <div className="bg-muted rounded-lg p-3 font-mono text-xs text-foreground">
-                    POST /v1/onboarding/agent/one-click
-                  </div>
-                </div>
-
-                {/* Curl command */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-muted-foreground">Quick start</span>
-                    <button
-                      onClick={handleCopy}
-                      className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                    >
-                      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                      {copied ? 'Copied' : 'Copy'}
-                    </button>
-                  </div>
-                  <pre className="bg-muted rounded-lg p-3 font-mono text-xs text-foreground overflow-x-auto whitespace-pre">
-                    {curlCommand}
-                  </pre>
-                </div>
-
-                {/* Docs link */}
+                {/* Onboarding guide link — primary action */}
                 <a
-                  href="https://docs.getsly.ai/guides/agent-signup"
+                  href={`${apiUrl}/v1/agent-onboarding`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-1.5 text-sm text-primary hover:underline"
+                  className="flex items-center justify-between w-full bg-muted rounded-lg p-4 hover:bg-muted/80 transition-colors group"
                 >
-                  View full API documentation
-                  <ExternalLink className="h-3.5 w-3.5" />
+                  <div className="space-y-1">
+                    <div className="font-medium text-sm text-foreground flex items-center gap-2">
+                      <Bot className="h-4 w-4 text-primary" />
+                      Agent Onboarding Guide
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      What Sly is, how to register, payment protocols, and integration options
+                    </div>
+                  </div>
+                  <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground shrink-0 ml-3" />
                 </a>
+
+                {/* Quick links */}
+                <div className="grid grid-cols-2 gap-2">
+                  <a
+                    href={`${apiUrl}/v1/skills.md`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground p-2 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    Skills manifest
+                  </a>
+                  <a
+                    href={`${apiUrl}/.well-known/agent.json`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground p-2 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    Platform agent card
+                  </a>
+                  <a
+                    href={`${apiUrl}/v1/openapi.json`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground p-2 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    OpenAPI spec
+                  </a>
+                  <a
+                    href={`${apiUrl}/docs`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground p-2 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    API docs
+                  </a>
+                </div>
 
                 {/* Divider */}
                 <div className="relative">

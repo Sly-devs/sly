@@ -77,11 +77,11 @@ router.post('/one-click', async (c) => {
     // Idempotency: check if this key was already used
     if (idempotencyKey) {
       const { data: existing } = await (supabase.from('idempotency_keys') as any)
-        .select('response')
-        .eq('key', idempotencyKey)
-        .single();
-      if (existing?.response) {
-        return c.json(existing.response, 201);
+        .select('response_body')
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+      if (existing?.response_body) {
+        return c.json(existing.response_body, 201);
       }
     }
 
@@ -390,11 +390,12 @@ router.post('/one-click', async (c) => {
     if (idempotencyKey) {
       await (supabase.from('idempotency_keys') as any)
         .insert({
-          key: idempotencyKey,
+          idempotency_key: idempotencyKey,
           tenant_id: tenant.id,
-          response,
-          method: 'POST',
-          path: '/v1/onboarding/agent/one-click',
+          response_body: response,
+          response_status: 201,
+          request_method: 'POST',
+          request_path: '/v1/onboarding/agent/one-click',
         })
         .catch(() => {}); // non-fatal
     }

@@ -14,6 +14,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createClient } from '../db/client.js';
+import { createAdminClient } from '../db/admin-client.js';
 import {
   generateApiKey,
   hashApiKey,
@@ -281,6 +282,45 @@ router.post('/one-click', async (c) => {
       } catch { /* non-fatal */ }
     }
 
+    // Send dashboard claim email (non-blocking)
+    if (email) {
+      (async () => {
+        try {
+          const adminSupabase = createAdminClient();
+          const dashboardUrl = process.env.DASHBOARD_URL || 'https://app.getsly.ai';
+
+          // Invite the user — sends a magic link email
+          const { data: inviteData, error: inviteError } = await adminSupabase.auth.admin.inviteUserByEmail(email, {
+            data: {
+              tenant_id: tenant.id,
+              organization_name: name,
+              role: 'owner',
+            },
+            redirectTo: `${dashboardUrl}/auth/callback?next=/dashboard`,
+          });
+
+          if (inviteError) {
+            console.error('[agent-onboard] Dashboard invite email failed:', inviteError.message);
+            return;
+          }
+
+          // Create user_profile so the user has dashboard access when they accept
+          if (inviteData?.user?.id) {
+            await supabase.from('user_profiles').insert({
+              id: inviteData.user.id,
+              tenant_id: tenant.id,
+              role: 'owner',
+              name: name,
+            }).catch(() => {}); // non-fatal if profile already exists
+          }
+
+          console.log(`[agent-onboard] Dashboard invite sent to ${email} for tenant ${tenant.id}`);
+        } catch (err) {
+          console.error('[agent-onboard] Dashboard invite failed (non-fatal):', err);
+        }
+      })().catch(() => {});
+    }
+
     // Build response
     const response = {
       status: 'active' as const,
@@ -319,12 +359,16 @@ router.post('/one-click', async (c) => {
       } : null,
       endpoints: {
         api: `${baseUrl}/v1`,
+        dashboard: `${process.env.DASHBOARD_URL || 'https://app.getsly.ai'}/dashboard`,
         a2a: `${baseUrl}/a2a/${agent.id}`,
         agentCard: `${baseUrl}/a2a/${agent.id}/.well-known/agent.json`,
         platformCard: `${baseUrl}/.well-known/agent.json`,
         skills: `${baseUrl}/v1/skills.md`,
         openapi: `${baseUrl}/v1/openapi.json`,
       },
+      dashboardAccess: email
+        ? 'A dashboard invite has been sent to your email. Click the link to access your dashboard.'
+        : 'Provide an email during registration to receive dashboard access.',
       snippets: {
         mcp: {
           mcpServers: {

@@ -1,207 +1,329 @@
 'use client';
 
-import { useState } from 'react';
-import { 
-  Card, 
-  CardContent, 
-  CardDescription, 
-  CardHeader, 
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
   CardTitle,
   Button,
   Input,
   Label,
   Badge,
 } from '@sly/ui';
-import { useApiConfig } from '@/lib/api-client';
-import { Key, Eye, EyeOff, Check, Copy, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { useApiConfig, useApiFetch } from '@/lib/api-client';
+import { useEnvironment } from '@/lib/environment-context';
+import { Key, Plus, Copy, Check, Trash2, RotateCcw, Eye, EyeOff, AlertTriangle, Loader2, Shield } from 'lucide-react';
 import { toast } from 'sonner';
 
+interface ApiKeyRecord {
+  id: string;
+  name: string;
+  description: string | null;
+  environment: 'test' | 'live';
+  key_prefix: string;
+  status: 'active' | 'revoked';
+  created_at: string;
+  last_used_at: string | null;
+}
+
 export default function ApiKeysPage() {
-  const { apiKey, setApiKey, isConfigured, authToken, apiUrl } = useApiConfig();
-  const [newApiKey, setNewApiKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [testing, setTesting] = useState(false);
+  const { authToken, isConfigured, isLoading, apiUrl } = useApiConfig();
+  const { apiEnvironment } = useEnvironment();
+  const apiFetch = useApiFetch();
 
-  // Check if user is authenticated via JWT (normal dashboard access)
-  const isAuthenticatedViaJWT = !!authToken;
+  const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const handleSaveKey = async () => {
-    if (!newApiKey.startsWith('pk_')) {
-      toast.error('Invalid API key format. Keys should start with pk_test_ or pk_live_');
-      return;
-    }
-
-    setTesting(true);
+  const fetchKeys = useCallback(async () => {
+    if (!authToken) return;
     try {
-      // Test the key by making a simple request
-      const response = await fetch(`${apiUrl}/v1/accounts?limit=1`, {
-        headers: {
-          'Authorization': `Bearer ${newApiKey}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Invalid API key');
-      }
-
-      setApiKey(newApiKey);
-      setNewApiKey('');
-      toast.success('API key saved successfully for programmatic access');
+      const res = await apiFetch(`${apiUrl}/v1/api-keys`);
+      const json = await res.json();
+      const data = json.data || json;
+      setKeys(Array.isArray(data) ? data : []);
     } catch {
-      toast.error('Failed to validate API key. Please check and try again.');
-    } finally {
-      setTesting(false);
+      // Non-fatal
+    }
+    setLoading(false);
+  }, [authToken, apiFetch, apiUrl]);
+
+  useEffect(() => {
+    fetchKeys();
+  }, [fetchKeys]);
+
+  const handleCreate = async (env: 'test' | 'live') => {
+    setCreating(true);
+    try {
+      const res = await apiFetch(`${apiUrl}/v1/api-keys`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: newKeyName.trim() || `${env === 'test' ? 'Sandbox' : 'Production'} Key`,
+          environment: env,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || 'Failed to create key');
+        setCreating(false);
+        return;
+      }
+      const data = json.data || json;
+      setNewlyCreatedKey(data.key);
+      setShowCreateForm(false);
+      setNewKeyName('');
+      toast.success(`${env === 'test' ? 'Sandbox' : 'Production'} API key created`);
+      await fetchKeys();
+    } catch {
+      toast.error('Failed to create key');
+    }
+    setCreating(false);
+  };
+
+  const handleRevoke = async (id: string) => {
+    try {
+      const res = await apiFetch(`${apiUrl}/v1/api-keys/${id}/revoke`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Revoked from dashboard' }),
+      });
+      if (!res.ok) {
+        toast.error('Failed to revoke key');
+        return;
+      }
+      toast.success('API key revoked');
+      await fetchKeys();
+    } catch {
+      toast.error('Failed to revoke key');
     }
   };
 
-  const handleCopyKey = () => {
-    if (apiKey) {
-      navigator.clipboard.writeText(apiKey);
-      toast.success('API key copied to clipboard');
-    }
+  const handleCopy = async (text: string, id: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    toast.success('Copied to clipboard');
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleRemoveKey = () => {
-    setApiKey(null);
-    toast.success('API key removed');
-  };
+  const activeKeys = keys.filter(k => k.status === 'active');
+  const revokedKeys = keys.filter(k => k.status === 'revoked');
 
-  const maskedKey = apiKey ? `${apiKey.slice(0, 12)}${'•'.repeat(20)}${apiKey.slice(-4)}` : '';
+  if (isLoading || loading) {
+    return (
+      <div className="p-6 max-w-4xl mx-auto">
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-8">
-      {/* Page Header */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">API Keys</h1>
-        <p className="text-muted-foreground">
-          Manage API keys for programmatic access to Sly (scripts, integrations, etc.)
-        </p>
-        {isAuthenticatedViaJWT && (
-          <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg">
-            <p className="text-sm text-blue-900 dark:text-blue-100">
-              ✅ <strong>Dashboard Access Active:</strong> You're logged in and can use the dashboard.
-              API keys are optional and only needed for programmatic access (command-line tools, scripts, external integrations).
-            </p>
-          </div>
-        )}
+    <div className="p-6 max-w-4xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">API Keys</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Manage API keys for programmatic access to Sly
+          </p>
+        </div>
+        <Button onClick={() => setShowCreateForm(!showCreateForm)}>
+          <Plus className="h-4 w-4 mr-2" />
+          Create Key
+        </Button>
       </div>
 
-      {/* Current Key Status */}
+      {/* Newly created key banner */}
+      {newlyCreatedKey && (
+        <Card className="border-amber-500/50 bg-amber-50 dark:bg-amber-950/20">
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1 space-y-2">
+                <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                  Save your API key now — it won&apos;t be shown again
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 bg-amber-100 dark:bg-amber-900/40 rounded px-3 py-2 text-xs font-mono text-amber-900 dark:text-amber-100 break-all">
+                    {newlyCreatedKey}
+                  </code>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleCopy(newlyCreatedKey, 'new')}
+                  >
+                    {copiedId === 'new' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-amber-700 dark:text-amber-300"
+                  onClick={() => setNewlyCreatedKey(null)}
+                >
+                  I&apos;ve saved it, dismiss
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Create form */}
+      {showCreateForm && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Create New API Key</CardTitle>
+            <CardDescription>Generate a new key for programmatic access</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="keyName">Key Name (optional)</Label>
+              <Input
+                id="keyName"
+                placeholder="e.g. CI/CD Pipeline, MCP Server"
+                value={newKeyName}
+                onChange={(e) => setNewKeyName(e.target.value)}
+              />
+            </div>
+            <div className="flex gap-3">
+              <Button
+                onClick={() => handleCreate('test')}
+                disabled={creating}
+                variant="outline"
+                className="flex-1"
+              >
+                {creating ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Shield className="h-4 w-4 mr-2" />}
+                Create Sandbox Key
+              </Button>
+              <Button
+                onClick={() => handleCreate('live')}
+                disabled={creating}
+                className="flex-1"
+              >
+                {creating ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Key className="h-4 w-4 mr-2" />}
+                Create Production Key
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Active keys */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle className="flex items-center gap-2 text-lg">
             <Key className="h-5 w-5" />
-            Current API Key
+            Active Keys
           </CardTitle>
           <CardDescription>
-            Your API key is used to authenticate requests to the Sly API
+            {activeKeys.length === 0
+              ? 'No active API keys. Create one to get started.'
+              : `${activeKeys.length} active key${activeKeys.length !== 1 ? 's' : ''}`}
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {isConfigured ? (
-            <>
-              <div className="flex items-center gap-2">
-                <Badge variant="success" className="gap-1">
-                  <Check className="h-3 w-3" />
-                  Configured
-                </Badge>
-                <Badge variant="outline">
-                  {apiKey?.startsWith('pk_test_') ? 'Test Mode' : 'Live Mode'}
-                </Badge>
-              </div>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 rounded bg-muted px-3 py-2 text-sm font-mono">
-                  {showKey ? apiKey : maskedKey}
-                </code>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setShowKey(!showKey)}
-                >
-                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </Button>
-                <Button variant="outline" size="icon" onClick={handleCopyKey}>
-                  <Copy className="h-4 w-4" />
-                </Button>
-              </div>
-              <Button variant="destructive" onClick={handleRemoveKey}>
-                Remove API Key
-              </Button>
-            </>
-          ) : isAuthenticatedViaJWT ? (
-            <div className="flex items-center gap-2 text-green-600 dark:text-green-500">
-              <CheckCircle2 className="h-5 w-5" />
-              <span>Dashboard access via login (no API key needed)</span>
+        <CardContent>
+          {activeKeys.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground text-sm">
+              No API keys yet. Click &quot;Create Key&quot; to generate one.
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-500">
-              <AlertTriangle className="h-5 w-5" />
-              <span>No authentication. Please log in or add an API key.</span>
+            <div className="space-y-3">
+              {activeKeys.map((key) => (
+                <div
+                  key={key.id}
+                  className="flex items-center justify-between p-3 rounded-lg border bg-card"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium truncate">{key.name}</span>
+                        <Badge variant={key.environment === 'live' ? 'default' : 'secondary'} className="text-[10px] shrink-0">
+                          {key.environment === 'live' ? 'Production' : 'Sandbox'}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                        <code className="font-mono">{key.key_prefix}••••</code>
+                        <span>Created {new Date(key.created_at).toLocaleDateString()}</span>
+                        {key.last_used_at && (
+                          <span>Last used {new Date(key.last_used_at).toLocaleDateString()}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleCopy(key.key_prefix, key.id)}
+                      title="Copy prefix"
+                    >
+                      {copiedId === key.id ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRevoke(key.id)}
+                      title="Revoke key"
+                      className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Add New Key */}
-      {!apiKey && (
+      {/* Revoked keys */}
+      {revokedKeys.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Add API Key (Optional)</CardTitle>
-            <CardDescription>
-              {isAuthenticatedViaJWT 
-                ? "Add an API key only if you need programmatic access to Sly from scripts or external tools."
-                : "Enter your Sly API key to enable dashboard features. You can find your API key in the Sly developer portal."
-              }
-            </CardDescription>
+            <CardTitle className="text-lg text-muted-foreground">Revoked Keys</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent>
             <div className="space-y-2">
-              <Label htmlFor="apiKey">API Key</Label>
-              <Input
-                id="apiKey"
-                type="password"
-                placeholder="pk_test_..."
-                value={newApiKey}
-                onChange={(e) => setNewApiKey(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Test keys start with <code>pk_test_</code>, live keys start with <code>pk_live_</code>
-              </p>
+              {revokedKeys.map((key) => (
+                <div
+                  key={key.id}
+                  className="flex items-center justify-between p-3 rounded-lg border border-dashed opacity-60"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium line-through">{key.name}</span>
+                      <Badge variant="destructive" className="text-[10px]">Revoked</Badge>
+                    </div>
+                    <code className="text-xs font-mono text-muted-foreground">{key.key_prefix}••••</code>
+                  </div>
+                </div>
+              ))}
             </div>
-            <Button onClick={handleSaveKey} disabled={!newApiKey || testing}>
-              {testing ? 'Validating...' : 'Save API Key'}
-            </Button>
           </CardContent>
         </Card>
       )}
 
-      {/* API Key Info */}
+      {/* Info */}
       <Card>
         <CardHeader>
-          <CardTitle>About API Keys</CardTitle>
+          <CardTitle className="text-lg">About API Keys</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4 text-sm text-muted-foreground">
-          <p>
-            Sly uses API keys to authenticate requests from your applications and
-            the dashboard. There are two types of keys:
-          </p>
-          <ul className="list-disc list-inside space-y-2">
-            <li>
-              <strong className="text-foreground">Test keys</strong> (pk_test_*): Use these for
-              development and testing. They work with test data only.
-            </li>
-            <li>
-              <strong className="text-foreground">Live keys</strong> (pk_live_*): Use these in
-              production. They work with real accounts and real money.
-            </li>
+        <CardContent className="space-y-3 text-sm text-muted-foreground">
+          <p>API keys authenticate requests from your applications, scripts, and agent integrations.</p>
+          <ul className="list-disc list-inside space-y-1.5">
+            <li><strong className="text-foreground">Sandbox keys</strong> (pk_test_*) — for development and testing with test data</li>
+            <li><strong className="text-foreground">Production keys</strong> (pk_live_*) — for real transactions with real funds</li>
           </ul>
-          <p>
-            Keep your API keys secure. Do not share them or commit them to version control.
-            If you believe a key has been compromised, rotate it immediately.
-          </p>
+          <p>Keys are shown only once when created. Store them securely and never commit them to version control.</p>
         </CardContent>
       </Card>
     </div>
   );
 }
-

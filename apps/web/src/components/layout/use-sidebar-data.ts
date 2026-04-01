@@ -30,7 +30,7 @@ export function useSidebarData() {
   });
 
   const me = meData?.data || meData;
-  const role = me?.user?.role ?? 'viewer';
+  const role = me?.role ?? 'viewer';
   const isAdmin = role === 'owner' || role === 'admin';
 
   const protocols = protocolData?.protocols;

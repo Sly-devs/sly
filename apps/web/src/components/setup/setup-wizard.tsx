@@ -13,6 +13,7 @@ import { SetupBackground } from './setup-background';
 import { SetupProgress } from './setup-progress';
 import { StepTransition } from './step-transition';
 import { GlowButton } from './shared/glow-button';
+import { ThemeToggleSimple } from '@/components/theme-toggle';
 import { ApiKeysStep } from './steps/api-keys-step';
 import { WalletsStep } from './steps/wallets-step';
 import { IntegrationStep } from './steps/integration-step';
@@ -274,6 +275,9 @@ export default function SetupWizard() {
     return (
       <div className="relative min-h-screen flex items-center justify-center p-4">
         <SetupBackground />
+        <div className="absolute top-4 right-4 z-10">
+          <ThemeToggleSimple />
+        </div>
         <div className="relative z-10 w-full max-w-md">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -341,7 +345,7 @@ export default function SetupWizard() {
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
-                  className="p-3 text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl"
+                  className="p-3 text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-xl"
                 >
                   {error}
                 </motion.div>
@@ -415,6 +419,10 @@ export default function SetupWizard() {
           <div className="flex-1 max-w-xs ml-8">
             <SetupProgress currentStep={step} completedSteps={completedSteps} />
           </div>
+          {/* Theme toggle */}
+          <div className="ml-4">
+            <ThemeToggleSimple />
+          </div>
         </div>
       </div>
 
@@ -425,7 +433,7 @@ export default function SetupWizard() {
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
-              className="p-3 mb-6 text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl"
+              className="p-3 mb-6 text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-xl"
             >
               {error}
             </motion.div>

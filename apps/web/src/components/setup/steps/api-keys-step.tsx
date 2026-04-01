@@ -112,7 +112,7 @@ export function ApiKeysStep({ apiKeys, orgName, onNext }: ApiKeysStepProps) {
       {/* Warning banner */}
       <motion.div
         variants={fadeUp}
-        className="flex items-center gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/[0.07] px-4 py-3 text-sm text-amber-200/90"
+        className="flex items-center gap-2.5 rounded-xl border border-amber-300 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/[0.07] px-4 py-3 text-sm text-amber-800 dark:text-amber-200/90"
       >
         <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
         These API keys are shown only once. Download or copy them now.

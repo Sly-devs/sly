@@ -2,15 +2,17 @@
 
 import { useState, useEffect } from 'react';
 import { useTheme } from 'next-themes';
+import { useQuery } from '@tanstack/react-query';
 import { User, Bell, Shield, Palette, Moon, Sun, Monitor, Check, Globe, Users, Bot, LayoutDashboard } from 'lucide-react';
 import { useLocale, type Locale } from '@/lib/locale';
-import { useApiConfig } from '@/lib/api-client';
+import { useApiConfig, useApiFetch } from '@/lib/api-client';
 import { useSidebarData } from '@/components/layout/use-sidebar-data';
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { locale, setLocale, formatCurrency, formatDate } = useLocale();
-  const { apiUrl } = useApiConfig();
+  const { apiUrl, authToken, isConfigured, apiEnvironment } = useApiConfig();
+  const apiFetch = useApiFetch();
   const { showFullSidebar, setShowFullSidebar } = useSidebarData();
   const [mounted, setMounted] = useState(false);
   const [resourceUsage, setResourceUsage] = useState<{
@@ -23,6 +25,22 @@ export default function SettingsPage() {
     streams: true,
     transfers: true,
   });
+
+  // Fetch user profile
+  const { data: meData } = useQuery({
+    queryKey: ['auth-me', apiEnvironment],
+    queryFn: async () => {
+      const res = await apiFetch(`${apiUrl}/v1/auth/me`);
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!authToken && isConfigured,
+    staleTime: 5 * 60_000,
+  });
+
+  const me = meData?.data || meData;
+  const userName = me?.name || '';
+  const userEmail = me?.email || '';
 
   // Prevent hydration mismatch by only showing theme-dependent content after mount
   useEffect(() => {
@@ -104,8 +122,9 @@ export default function SettingsPage() {
               </label>
               <input
                 type="text"
-                defaultValue="Admin User"
-                className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                value={userName}
+                readOnly
+                className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg text-gray-900 dark:text-white"
               />
             </div>
             <div>
@@ -114,9 +133,9 @@ export default function SettingsPage() {
               </label>
               <input
                 type="email"
-                defaultValue="admin@payos.io"
-                className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                disabled
+                value={userEmail}
+                readOnly
+                className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg text-gray-900 dark:text-white"
               />
               <p className="mt-1 text-xs text-gray-500">Email cannot be changed</p>
             </div>

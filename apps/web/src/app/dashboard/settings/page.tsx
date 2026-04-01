@@ -256,7 +256,7 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between py-2">
               <div>
                 <div className="text-sm font-medium text-gray-900 dark:text-white">Show all sidebar sections</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Display Operations and Developers sections in the sidebar</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Display the Operations section in the sidebar</div>
               </div>
               <button
                 onClick={() => setShowFullSidebar(!showFullSidebar)}

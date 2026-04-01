@@ -270,7 +270,6 @@ export function Sidebar() {
 
   const settingsNav: NavItemDef[] = [
     { href: '/dashboard/settings', label: 'Settings', icon: Settings },
-    { href: '/dashboard/settings/team', label: 'Team', icon: Users },
   ];
 
   // Filter agentic payments children by protocol status + role
@@ -463,8 +462,8 @@ export function Sidebar() {
           </>
         )}
 
-        {/* 6. Developers — owner/admin only + full sidebar setting, collapsible */}
-        {isAdmin && showFullSidebar && !collapsed && (
+        {/* 6. Developers — owner/admin only, collapsible */}
+        {isAdmin && !collapsed && (
           <>
             <SectionHeader
               label="Developers"

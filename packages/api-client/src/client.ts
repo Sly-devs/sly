@@ -50,6 +50,7 @@ import type {
   FundingSourceSummary,
   OnrampSessionInput,
   OnrampSessionResponse,
+  StripeOnrampSessionResponse,
   // x402 types
   X402Endpoint,
   CreateX402EndpointInput,
@@ -932,6 +933,14 @@ export class SlyClient {
      */
     createOnrampSession: (input: OnrampSessionInput) =>
       this.post<{ data: OnrampSessionResponse }>('/funding/onramp-session', {
+        wallet_id: input.walletId,
+      }).then(r => (r as any).data || r),
+
+    /**
+     * Create a Stripe Crypto Onramp session for embedded wallet funding
+     */
+    createStripeOnrampSession: (input: OnrampSessionInput) =>
+      this.post<{ data: StripeOnrampSessionResponse }>('/funding/stripe-onramp-session', {
         wallet_id: input.walletId,
       }).then(r => (r as any).data || r),
   };

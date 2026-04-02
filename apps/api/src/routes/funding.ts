@@ -17,6 +17,8 @@ import {
 import {
   createOnrampToken,
   BLOCKCHAIN_TO_COINBASE,
+  createStripeOnrampSession,
+  BLOCKCHAIN_TO_STRIPE,
 } from '../services/funding/stripe-payment-intent.js';
 import type {
   FundingSourceType,
@@ -466,6 +468,68 @@ app.post('/onramp-session', async (c) => {
 
     return c.json({
       session_token: tokenResult.token,
+      wallet_address: wallet.wallet_address,
+      blockchain: wallet.blockchain,
+      network,
+    }, 201);
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+/**
+ * POST /v1/funding/stripe-onramp-session - Create Stripe Crypto Onramp Session
+ *
+ * Returns a client_secret for embedding Stripe's crypto onramp widget.
+ * Stripe handles fiat payment, USDC purchase, and delivery to the wallet address.
+ */
+app.post('/stripe-onramp-session', async (c) => {
+  const ctx = c.get('ctx') as any;
+  const body = await c.req.json();
+  const parsed = onrampSessionSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
+  }
+
+  try {
+    const supabase = createClient();
+
+    const { data: wallet, error: walletError } = await supabase
+      .from('wallets')
+      .select('id, tenant_id, owner_account_id, status, wallet_address, blockchain, wallet_type')
+      .eq('id', parsed.data.wallet_id)
+      .eq('tenant_id', ctx.tenantId)
+      .single();
+
+    if (walletError || !wallet) {
+      return c.json({ error: 'Wallet not found' }, 404);
+    }
+
+    if (wallet.status !== 'active') {
+      return c.json({ error: `Wallet is ${wallet.status}, must be active` }, 400);
+    }
+
+    if (!wallet.wallet_address || wallet.wallet_address.startsWith('internal://')) {
+      return c.json({
+        error: 'no_onchain_address',
+        message: 'This wallet does not have an on-chain address. Create a Circle wallet to deposit real USDC.',
+      }, 400);
+    }
+
+    const sessionResult = await createStripeOnrampSession({
+      wallet_address: wallet.wallet_address,
+      blockchain: wallet.blockchain || 'base',
+      tenant_id: ctx.tenantId,
+      wallet_id: wallet.id,
+      account_id: wallet.owner_account_id,
+    });
+
+    const network = BLOCKCHAIN_TO_STRIPE[wallet.blockchain || 'base'] || 'base';
+
+    return c.json({
+      client_secret: sessionResult.client_secret,
+      session_id: sessionResult.session_id,
       wallet_address: wallet.wallet_address,
       blockchain: wallet.blockchain,
       network,

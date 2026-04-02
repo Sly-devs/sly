@@ -888,6 +888,14 @@ export interface OnrampSessionResponse {
   network: string;
 }
 
+export interface StripeOnrampSessionResponse {
+  client_secret: string;
+  session_id: string;
+  wallet_address: string;
+  blockchain: string;
+  network: string;
+}
+
 export interface Mandate {
   id: string;
   tenantId: string;

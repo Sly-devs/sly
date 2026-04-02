@@ -1,10 +1,11 @@
 /**
- * Coinbase Onramp Session Token Service
- * Generates session tokens for the Coinbase Onramp widget.
- * Handles fiat → USDC conversion and direct delivery to wallet address.
+ * Crypto Onramp Services
+ * Coinbase Onramp: Session token generation for popup widget
+ * Stripe Crypto Onramp: Session creation for embedded widget
  */
 
 import { CoinbaseAuthenticator } from '@coinbase/coinbase-sdk/dist/coinbase/authenticator.js';
+import Stripe from 'stripe';
 
 const CDP_API_KEY = () => process.env.CDP_API_KEY_NAME || '';
 const CDP_API_SECRET = () => process.env.CDP_API_KEY_PRIVATE_KEY || '';
@@ -68,4 +69,74 @@ export async function createOnrampToken(
 
   const data = await response.json();
   return { token: data.token };
+}
+
+// ============================================
+// Stripe Crypto Onramp
+// ============================================
+
+const BLOCKCHAIN_TO_STRIPE: Record<string, string> = {
+  base: 'base',
+  eth: 'ethereum',
+  ethereum: 'ethereum',
+  polygon: 'polygon',
+  sol: 'solana',
+  solana: 'solana',
+};
+
+export { BLOCKCHAIN_TO_STRIPE };
+
+const getStripe = (): Stripe | null => {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) return null;
+  return new Stripe(key, { apiVersion: '2024-12-18.acacia' as any });
+};
+
+export interface CreateStripeOnrampInput {
+  wallet_address: string;
+  blockchain: string;
+  tenant_id: string;
+  wallet_id: string;
+  account_id: string;
+}
+
+export interface StripeOnrampResult {
+  client_secret: string;
+  session_id: string;
+}
+
+/**
+ * Create a Stripe Crypto Onramp session.
+ * Returns a client_secret for the embeddable widget.
+ */
+export async function createStripeOnrampSession(
+  input: CreateStripeOnrampInput
+): Promise<StripeOnrampResult> {
+  const stripe = getStripe();
+  const network = BLOCKCHAIN_TO_STRIPE[input.blockchain] || 'base';
+
+  if (!stripe) {
+    const mockId = `cos_mock_${Date.now()}`;
+    return {
+      client_secret: `${mockId}_secret_mock`,
+      session_id: mockId,
+    };
+  }
+
+  const session = await stripe.rawRequest('POST', '/v1/crypto/onramp_sessions', {
+    [`wallet_addresses[${network}]`]: input.wallet_address,
+    lock_wallet_address: 'true',
+    'destination_currencies[]': 'usdc',
+    'destination_networks[]': network,
+    'metadata[tenant_id]': input.tenant_id,
+    'metadata[wallet_id]': input.wallet_id,
+    'metadata[account_id]': input.account_id,
+  });
+
+  const data = JSON.parse(session.rawResponse.toString());
+
+  return {
+    client_secret: data.client_secret,
+    session_id: data.id,
+  };
 }

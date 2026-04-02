@@ -100,6 +100,9 @@ export interface CreateStripeOnrampInput {
   tenant_id: string;
   wallet_id: string;
   account_id: string;
+  customer_email?: string;
+  customer_first_name?: string;
+  customer_last_name?: string;
 }
 
 export interface StripeOnrampResult {
@@ -133,9 +136,16 @@ export async function createStripeOnrampSession(
   params.append('lock_wallet_address', 'true');
   params.append('destination_currencies[]', 'usdc');
   params.append('destination_networks[]', network);
+  params.append('source_amount', '5');
+  params.append('source_currency', 'usd');
   params.append('metadata[tenant_id]', input.tenant_id);
   params.append('metadata[wallet_id]', input.wallet_id);
   params.append('metadata[account_id]', input.account_id);
+
+  // Pre-fill customer info to reduce KYC friction
+  if (input.customer_email) params.append('customer_information[email]', input.customer_email);
+  if (input.customer_first_name) params.append('customer_information[first_name]', input.customer_first_name);
+  if (input.customer_last_name) params.append('customer_information[last_name]', input.customer_last_name);
 
   const response = await fetch('https://api.stripe.com/v1/crypto/onramp_sessions', {
     method: 'POST',

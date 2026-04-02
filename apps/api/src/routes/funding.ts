@@ -517,12 +517,35 @@ app.post('/stripe-onramp-session', async (c) => {
       }, 400);
     }
 
+    // Get user profile for pre-filling customer info
+    let customerEmail: string | undefined;
+    let customerFirstName: string | undefined;
+    let customerLastName: string | undefined;
+
+    if (ctx.userId) {
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('email, full_name')
+        .eq('id', ctx.userId)
+        .single();
+
+      if (profile) {
+        customerEmail = profile.email;
+        const nameParts = (profile.full_name || '').trim().split(/\s+/);
+        customerFirstName = nameParts[0];
+        customerLastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : undefined;
+      }
+    }
+
     const sessionResult = await createStripeOnrampSession({
       wallet_address: wallet.wallet_address,
       blockchain: wallet.blockchain || 'base',
       tenant_id: ctx.tenantId,
       wallet_id: wallet.id,
       account_id: wallet.owner_account_id,
+      customer_email: customerEmail || ctx.userEmail,
+      customer_first_name: customerFirstName || ctx.userName?.split(' ')[0],
+      customer_last_name: customerLastName || ctx.userName?.split(' ').slice(1).join(' '),
     });
 
     const network = BLOCKCHAIN_TO_STRIPE[wallet.blockchain || 'base'] || 'base';

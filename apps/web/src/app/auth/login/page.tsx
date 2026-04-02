@@ -67,10 +67,10 @@ export default function LoginPage() {
       <div className="w-full max-w-md space-y-6">
         {/* Header */}
         <div className="text-center space-y-2">
-          <div className="flex justify-center mb-4">
-            <div className="flex items-center gap-2.5">
+          <div className="flex justify-center mb-6">
+            <div className="flex items-center gap-3">
               <div
-                className="w-9 h-9 bg-primary"
+                className="w-14 h-14 bg-primary"
                 style={{
                   WebkitMaskImage: 'url(/sly-logo.png)',
                   WebkitMaskSize: 'contain',
@@ -82,7 +82,7 @@ export default function LoginPage() {
                   maskPosition: 'center',
                 }}
               />
-              <span className="text-2xl font-bold text-foreground">Sly</span>
+              <span className="text-4xl font-bold text-foreground">Sly</span>
             </div>
           </div>
           <h1 className="text-3xl font-bold text-foreground">Welcome Back</h1>

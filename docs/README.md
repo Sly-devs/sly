@@ -1,6 +1,6 @@
 # PayOS Documentation
 
-This directory contains all documentation for the PayOS platform - a B2B stablecoin payout operating system with AI-native agent support and money streaming capabilities.
+This directory contains all documentation for the PayOS platform - the agentic economy platform with AI-native agent support and money streaming capabilities.
 
 ## Directory Structure
 
@@ -200,7 +200,7 @@ Every major directory should have a README.md with:
 
 ## Project Overview
 
-**PayOS** is a B2B stablecoin payout operating system for LATAM with:
+**Sly** is the agentic economy platform with:
 
 - **Multi-Tenant Architecture**: Row-Level Security (RLS) for data isolation
 - **Triple Authentication**: API keys, JWT sessions, agent tokens

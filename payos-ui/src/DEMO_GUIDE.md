@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a comprehensive B2B fintech demo showcasing PayOS - a stablecoin payout operating system for Latin America. The demo includes three distinct user interfaces with full light/dark mode support.
+This is a comprehensive B2B fintech demo showcasing Sly — the agentic economy platform. The demo includes three distinct user interfaces with full light/dark mode support.
 
 ## Demo Navigation
 

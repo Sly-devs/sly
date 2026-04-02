@@ -11,7 +11,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Sly Dashboard',
-  description: 'Stablecoin Payout Operating System for LATAM',
+  description: 'The Agentic Economy Platform',
   icons: {
     icon: '/favicon.ico',
   },

@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import '../styles/globals.css';
 
 export const metadata: Metadata = {
-  title: 'PayOS - B2B Stablecoin Payout Operating System',
+  title: 'Sly — The Agentic Economy Platform',
   description: 'Cross-border contractor payouts through white-label infrastructure',
 };
 

@@ -18,7 +18,7 @@ pnpm --filter @sly/web dev
 
 ## Project Overview
 
-Sly is a B2B stablecoin payout operating system for LATAM. It's a monorepo featuring a Hono-based API server, a Next.js dashboard UI, and shared packages. The system enables fintech partners to offer stablecoin-powered payouts with AI-native agent support and money streaming capabilities.
+Sly is the agentic economy platform. It's a monorepo featuring a Hono-based API server, a Next.js dashboard UI, and shared packages. The system enables fintech partners to offer stablecoin-powered payouts with AI-native agent support and money streaming capabilities.
 
 **Key Differentiators:**
 - **KYA (Know Your Agent) Framework**: AI agents are first-class actors with formal verification tiers

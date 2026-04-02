@@ -4,7 +4,7 @@ This directory contains system architecture, design patterns, and technical infr
 
 ## Overview
 
-PayOS is a multi-tenant B2B stablecoin payout operating system built with a modern, AI-native architecture. The system supports multiple payment protocols, agent-driven commerce, and real-time money streaming.
+Sly is a multi-tenant agentic economy platform built with a modern, AI-native architecture. The system supports multiple payment protocols, agent-driven commerce, and real-time money streaming.
 
 ## Documentation Index
 

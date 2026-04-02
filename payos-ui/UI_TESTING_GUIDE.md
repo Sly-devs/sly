@@ -95,7 +95,7 @@ curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
 
 ## Overview
 
-PayOS is a B2B stablecoin payout operating system. This guide covers all user flows for testing the dashboard UI.
+Sly is the agentic economy platform. This guide covers all user flows for testing the dashboard UI.
 
 ### Application URL
 - **Development:** http://localhost:3001 (updated port)

@@ -1,4 +1,4 @@
-# PayOS - B2B Stablecoin Payout Operating System
+# Sly — The Agentic Economy Platform
 
 A monorepo for PayOS, featuring a Hono API server and (coming soon) a Next.js dashboard.
 

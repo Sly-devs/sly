@@ -31,7 +31,7 @@ function emailLayout(content: string): string {
   </div>
   ${content}
   <hr style="border: none; border-top: 1px solid #eee; margin: 32px 0;" />
-  <p style="font-size: 12px; color: #999;">Sly — Stablecoin payout infrastructure for LATAM</p>
+  <p style="font-size: 12px; color: #999;">Sly — The Agentic Economy Platform</p>
 </body>
 </html>`;
 }

@@ -588,12 +588,14 @@ export class A2ATaskProcessor {
       return { error: 'kya_required' };
     }
 
-    // 2. Check caller's wallet has enough balance (read-only check)
+    // 2. Check caller's wallet has enough balance (no tenant filter — caller may be cross-tenant)
     const { data: callerWallet } = await this.supabase
       .from('wallets')
       .select('id, balance')
       .eq('managed_by_agent_id', callerAgentId)
-      .eq('tenant_id', this.tenantId)
+      .eq('status', 'active')
+      .order('balance', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (!callerWallet || Number(callerWallet.balance) < amount) {

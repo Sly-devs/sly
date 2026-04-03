@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@coinbase/cbpay-js": "^2.4.0",
+    "@crossmint/client-sdk-react-ui": "^4.0.7",
     "@hookform/resolvers": "^5.2.2",
     "@sly/api-client": "workspace:*",
     "@sly/types": "workspace:*",

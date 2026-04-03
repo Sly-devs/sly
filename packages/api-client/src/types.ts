@@ -896,6 +896,19 @@ export interface StripeOnrampSessionResponse {
   network: string;
 }
 
+export interface CrossmintOrderInput {
+  walletId: string;
+  amount?: string;
+  receiptEmail?: string;
+}
+
+export interface CrossmintOrderResponse {
+  order_id: string;
+  client_secret: string;
+  wallet_address: string;
+  blockchain: string;
+}
+
 export interface Mandate {
   id: string;
   tenantId: string;

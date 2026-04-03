@@ -17,6 +17,9 @@ import { initOnRamp, type CBPayInstanceType } from '@coinbase/cbpay-js';
 import { useApiClient, useApiConfig } from '@/lib/api-client';
 import { toast } from 'sonner';
 import { CryptoElements, OnrampElement } from '@/components/providers/stripe-crypto-provider';
+import dynamic from 'next/dynamic';
+
+const CROSSMINT_CLIENT_KEY = process.env.NEXT_PUBLIC_CROSSMINT_CLIENT_API_KEY || '';
 
 const CDP_PROJECT_ID = process.env.NEXT_PUBLIC_CDP_PROJECT_ID || '';
 
@@ -39,8 +42,8 @@ const NETWORK_DISPLAY: Record<string, string> = {
   polygon: 'Polygon', sol: 'Solana', solana: 'Solana',
 };
 
-type Provider = 'coinbase' | 'stripe' | 'qrcode';
-type Phase = 'select-provider' | 'coinbase-init' | 'coinbase-ready' | 'stripe-loading' | 'stripe-embedded' | 'qrcode' | 'success' | 'error';
+type Provider = 'coinbase' | 'stripe' | 'crossmint' | 'qrcode';
+type Phase = 'select-provider' | 'coinbase-init' | 'coinbase-ready' | 'stripe-loading' | 'stripe-embedded' | 'crossmint-loading' | 'crossmint-embedded' | 'qrcode' | 'success' | 'error';
 
 export function DepositModal({
   walletId, walletName, walletAddress, blockchain, walletType, onClose,
@@ -49,6 +52,8 @@ export function DepositModal({
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null);
+  const [crossmintOrderId, setCrossmintOrderId] = useState<string | null>(null);
+  const [crossmintClientSecret, setCrossmintClientSecret] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const instanceRef = useRef<CBPayInstanceType | null>(null);
@@ -160,6 +165,18 @@ export function DepositModal({
     } catch (err: any) { setError(err.message); setPhase('error'); }
   }, [api, walletId]);
 
+  // ── Crossmint flow ──
+  const initCrossmint = useCallback(async () => {
+    if (!api) return;
+    setPhase('crossmint-loading');
+    try {
+      const order = await api.fundingSources.createCrossmintOrder({ walletId, amount: '5.00' });
+      setCrossmintOrderId(order.order_id);
+      setCrossmintClientSecret(order.client_secret);
+      setPhase('crossmint-embedded');
+    } catch (err: any) { setError(err.message); setPhase('error'); }
+  }, [api, walletId]);
+
   // ── Copy address ──
   const copyAddress = useCallback(() => {
     if (walletAddress) {
@@ -175,8 +192,9 @@ export function DepositModal({
     setSelectedProvider(provider);
     if (provider === 'coinbase') initCoinbase();
     else if (provider === 'stripe') initStripe();
+    else if (provider === 'crossmint') initCrossmint();
     else if (provider === 'qrcode') setPhase('qrcode');
-  }, [initCoinbase, initStripe]);
+  }, [initCoinbase, initStripe, initCrossmint]);
 
   const handleClose = useCallback(() => { instanceRef.current?.destroy(); onClose(); }, [onClose]);
 
@@ -230,6 +248,16 @@ export function DepositModal({
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400">Card, bank, Apple Pay, Google Pay. Embedded — no popup.</p>
               </button>
+
+              {CROSSMINT_CLIENT_KEY && (
+                <button onClick={() => selectProvider('crossmint')} className="w-full p-4 rounded-xl border-2 border-gray-200 dark:border-gray-700 hover:border-orange-500 dark:hover:border-orange-500 transition-colors text-left">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-semibold text-gray-900 dark:text-white">Crossmint</span>
+                    <span className="text-sm font-medium text-gray-500 dark:text-gray-400">~2.9% fee</span>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Card payment. Embedded — no popup. Light KYC under $100.</p>
+                </button>
+              )}
 
               <button onClick={() => selectProvider('qrcode')} className="w-full p-4 rounded-xl border-2 border-gray-200 dark:border-gray-700 hover:border-green-500 dark:hover:border-green-500 transition-colors text-left">
                 <div className="flex items-center justify-between mb-1">
@@ -334,6 +362,40 @@ export function DepositModal({
               <OnrampElement clientSecret={stripeClientSecret} onComplete={handleDepositComplete} onError={(msg) => { setError(msg); setPhase('error'); }} />
             </CryptoElements>
           )}
+
+          {/* ── Crossmint Loading ── */}
+          {phase === 'crossmint-loading' && (
+            <div className="text-center py-12">
+              <Loader2 className="w-8 h-8 text-orange-600 animate-spin mx-auto mb-4" />
+              <p className="text-gray-500 dark:text-gray-400">Loading Crossmint checkout...</p>
+            </div>
+          )}
+
+          {/* ── Crossmint Embedded ── */}
+          {phase === 'crossmint-embedded' && crossmintOrderId && crossmintClientSecret && CROSSMINT_CLIENT_KEY && (() => {
+            // Dynamic import to avoid SSR issues
+            const CrossmintProvider = require('@crossmint/client-sdk-react-ui').CrossmintProvider;
+            const CrossmintCheckoutProvider = require('@crossmint/client-sdk-react-ui').CrossmintCheckoutProvider;
+            const CrossmintEmbeddedCheckout = require('@crossmint/client-sdk-react-ui').CrossmintEmbeddedCheckout;
+
+            return (
+              <CrossmintProvider apiKey={CROSSMINT_CLIENT_KEY}>
+                <CrossmintCheckoutProvider>
+                  <div className="max-w-[450px] mx-auto">
+                    <CrossmintEmbeddedCheckout
+                      orderId={crossmintOrderId}
+                      clientSecret={crossmintClientSecret}
+                      payment={{
+                        fiat: { enabled: true },
+                        crypto: { enabled: false },
+                        defaultMethod: 'fiat',
+                      }}
+                    />
+                  </div>
+                </CrossmintCheckoutProvider>
+              </CrossmintProvider>
+            );
+          })()}
 
           {/* ── Error ── */}
           {phase === 'error' && isOnChain && (

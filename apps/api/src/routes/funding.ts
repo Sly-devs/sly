@@ -20,6 +20,9 @@ import {
   createStripeOnrampSession,
   BLOCKCHAIN_TO_STRIPE,
 } from '../services/funding/stripe-payment-intent.js';
+import {
+  createCrossmintOrder,
+} from '../services/funding/crossmint.js';
 import type {
   FundingSourceType,
   FundingProvider,
@@ -63,6 +66,12 @@ const onrampSessionSchema = z.object({
   wallet_id: z.string().uuid(),
   source_amount: z.string().optional(),
   source_currency: z.string().optional(),
+});
+
+const crossmintOrderSchema = z.object({
+  wallet_id: z.string().uuid(),
+  amount: z.string().default('5.00'),
+  receipt_email: z.string().email().optional(),
 });
 
 const estimateFeesSchema = z.object({
@@ -556,6 +565,57 @@ app.post('/stripe-onramp-session', async (c) => {
       wallet_address: wallet.wallet_address,
       blockchain: wallet.blockchain,
       network,
+    }, 201);
+  } catch (error: any) {
+    return c.json({ error: error.message }, 500);
+  }
+});
+
+/**
+ * POST /v1/funding/crossmint-order - Create Crossmint Onramp Order
+ *
+ * Returns orderId and clientSecret for the embedded checkout component.
+ * Crossmint handles fiat payment, USDC purchase, and delivery to wallet.
+ */
+app.post('/crossmint-order', async (c) => {
+  const ctx = c.get('ctx') as any;
+  const body = await c.req.json();
+  const parsed = crossmintOrderSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
+  }
+
+  try {
+    const supabase = createClient();
+
+    const { data: wallet, error: walletError } = await supabase
+      .from('wallets')
+      .select('id, tenant_id, owner_account_id, status, wallet_address, blockchain, wallet_type')
+      .eq('id', parsed.data.wallet_id)
+      .eq('tenant_id', ctx.tenantId)
+      .single();
+
+    if (walletError || !wallet) {
+      return c.json({ error: 'Wallet not found' }, 404);
+    }
+
+    if (!wallet.wallet_address || wallet.wallet_address.startsWith('internal://')) {
+      return c.json({ error: 'no_onchain_address', message: 'Wallet needs an on-chain address.' }, 400);
+    }
+
+    const orderResult = await createCrossmintOrder({
+      wallet_address: wallet.wallet_address,
+      blockchain: wallet.blockchain || 'base',
+      amount: parsed.data.amount,
+      receipt_email: parsed.data.receipt_email,
+    });
+
+    return c.json({
+      order_id: orderResult.order_id,
+      client_secret: orderResult.client_secret,
+      wallet_address: wallet.wallet_address,
+      blockchain: wallet.blockchain,
     }, 201);
   } catch (error: any) {
     return c.json({ error: error.message }, 500);

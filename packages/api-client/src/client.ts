@@ -51,6 +51,8 @@ import type {
   OnrampSessionInput,
   OnrampSessionResponse,
   StripeOnrampSessionResponse,
+  CrossmintOrderInput,
+  CrossmintOrderResponse,
   // x402 types
   X402Endpoint,
   CreateX402EndpointInput,
@@ -942,6 +944,16 @@ export class SlyClient {
     createStripeOnrampSession: (input: OnrampSessionInput) =>
       this.post<{ data: StripeOnrampSessionResponse }>('/funding/stripe-onramp-session', {
         wallet_id: input.walletId,
+      }).then(r => (r as any).data || r),
+
+    /**
+     * Create a Crossmint onramp order for embedded checkout
+     */
+    createCrossmintOrder: (input: CrossmintOrderInput) =>
+      this.post<{ data: CrossmintOrderResponse }>('/funding/crossmint-order', {
+        wallet_id: input.walletId,
+        amount: input.amount || '5.00',
+        receipt_email: input.receiptEmail,
       }).then(r => (r as any).data || r),
   };
 

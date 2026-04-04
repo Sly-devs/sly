@@ -292,6 +292,12 @@ export class A2ATaskWorker {
           await this.handleManual(supabase, task, agent as any);
           break;
 
+        case 'autonomous':
+          // Autonomous mode: process like managed but task-processor will
+          // leave tasks in 'working' for local agent backends to pick up
+          await this.handleManaged(supabase, task, agent as any, config);
+          break;
+
         default:
           await this.failTask(supabase, task, `Unknown processing mode: ${mode}`);
       }

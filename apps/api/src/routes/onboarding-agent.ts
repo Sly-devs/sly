@@ -26,7 +26,7 @@ import {
 import { logAudit } from '../utils/helpers.js';
 import { checkRateLimit, logSecurityEvent } from '../utils/auth.js';
 import { isFeatureEnabled } from '../config/environment.js';
-import { getCircleService } from '../services/circle-mock.js';
+import { getCircleServiceForTenant } from '../services/circle/index.js';
 
 function getClientInfo(c: any): { ip: string; userAgent: string } {
   const ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
@@ -257,13 +257,14 @@ router.post('/one-click', async (c) => {
     // 4b. Create Base sandbox wallet (Circle custodial) — same as human onboarding
     let baseWallet: { id: string; address: string; balance: number } | null = null;
     try {
-      const mockCircle = getCircleService(tenant.id);
+      const circleService = getCircleServiceForTenant(tenant.id, 'test');
 
-      const circleWallet = await mockCircle.createWallet({
-        walletSetId: mockCircle.getDefaultWalletSetId(),
-        blockchain: 'BASE',
+      const circleWallet = await circleService.createWallet({
+        blockchain: 'base' as any,
         name: `${name} Base Sandbox`,
         refId: account.id,
+        accountType,
+        testnet: true,
       });
 
       const { data: baseWalletRow } = await (supabase.from('wallets') as any)

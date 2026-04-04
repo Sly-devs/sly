@@ -1595,6 +1595,14 @@ a2aRouter.post('/tasks/:taskId/complete', async (c) => {
     }, 400);
   }
 
+  // Authorization: agent can only complete tasks assigned to them, API key must match tenant
+  if (ctx.actorType === 'agent' && ctx.actorId !== (task as any).agent_id) {
+    return c.json({ error: 'Agent can only complete tasks assigned to them' }, 403);
+  }
+  if (ctx.actorType === 'api_key' && ctx.tenantId !== (task as any).tenant_id) {
+    return c.json({ error: 'API key tenant does not match task tenant' }, 403);
+  }
+
   // Extract response text
   let responseText: string | undefined;
   if (typeof body.message === 'string') {

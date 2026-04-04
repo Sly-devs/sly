@@ -23,7 +23,7 @@ import { createStripeHandler } from './stripe.js';
 import { createPayPalHandler } from './paypal.js';
 import { createCircleHandler } from './circle.js';
 
-export type HandlerType = 'stripe' | 'paypal' | 'circle' | 'payos_native' | 'visa_vic' | 'mastercard_agent_pay';
+export type HandlerType = 'stripe' | 'paypal' | 'circle' | 'sly_native' | 'visa_vic' | 'mastercard_agent_pay';
 
 interface ConnectedAccount {
   id: string;
@@ -51,7 +51,7 @@ export function createHandlerFromAccount(
     case 'circle':
       return createCircleHandler(credentials as CircleCredentials);
 
-    case 'payos_native':
+    case 'sly_native':
       // TODO: Implement PayOS native handler (Pix/SPEI)
       console.warn('PayOS Native handler not yet implemented');
       return null;

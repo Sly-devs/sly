@@ -270,7 +270,7 @@ async function handleOrderCreated(
   );
 
   // If there's a PayOS settlement, link it
-  if (data.payment?.handler_id === 'payos_latam' && data.payment.settlement_id) {
+  if (data.payment?.handler_id === 'sly_latam' && data.payment.settlement_id) {
     console.log(
       `[UCP Webhook] Linked to settlement: ${data.payment.settlement_id}`
     );

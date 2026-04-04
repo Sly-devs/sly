@@ -173,7 +173,7 @@ export function validateCredentialStructure(
       }
       break;
 
-    case 'payos_native':
+    case 'sly_native':
       // PayOS native may have Pix keys or CLABE accounts
       // At least one must be present
       if (!credentials.pix_key && !credentials.clabe) {

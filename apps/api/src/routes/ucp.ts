@@ -598,7 +598,7 @@ router.get('/info', (c) => {
 
   return c.json({
     handler: {
-      id: 'payos_latam',
+      id: 'sly_latam',
       name: 'com.payos.latam_settlement',
       version: '2026-01-11',
     },

@@ -21,7 +21,7 @@ import type {
   RefundPaymentResult,
   PaymentStatus,
 } from './types.js';
-import { payosHandler, clearPayosStores } from './payos.js';
+import { payosHandler, clearPayosStores } from './sly.js';
 import { createDatabaseHandler, type PaymentHandlerRow } from './database-handler.js';
 
 // Re-export types
@@ -213,7 +213,7 @@ export function getDefaultHandler(options: {
   currency?: string;
 }): PaymentHandler | undefined {
   const matching = findHandlers(options);
-  return matching.find((h) => h.id === 'payos_latam') || matching[0];
+  return matching.find((h) => h.id === 'sly_latam') || matching[0];
 }
 
 // =============================================================================
@@ -277,7 +277,7 @@ export async function refreshHandlers(supabase: SupabaseClient): Promise<void> {
  */
 export function initializeHandlers(): void {
   // Register PayOS as a custom plugin for 'custom' mode delegation
-  registerCustomPlugin('payos_latam', payosHandler);
+  registerCustomPlugin('sly_latam', payosHandler);
 
   // Also register it directly so it works before DB loads
   registerHandler(payosHandler);

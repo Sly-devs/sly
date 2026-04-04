@@ -26,7 +26,7 @@ import { validateCircleCredentials } from '../../services/handlers/circle.js';
 const connectedAccounts = new Hono();
 
 // Validation schemas
-const HARDCODED_HANDLERS = ['stripe', 'paypal', 'circle', 'payos_native'] as const;
+const HARDCODED_HANDLERS = ['stripe', 'paypal', 'circle', 'sly_native'] as const;
 
 const createConnectedAccountSchema = z.object({
   handler_type: z.string().min(1).max(100),

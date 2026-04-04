@@ -733,7 +733,7 @@ export async function completeCheckout(
       // Determine handler and instrument
       // Prefer handler from selected instrument, fall back to payment_config
       const instrumentId = existing.selected_instrument_id || undefined;
-      let handlerId = existing.payment_config?.handlers?.[0] || 'payos_latam';
+      let handlerId = existing.payment_config?.handlers?.[0] || 'sly_latam';
       if (instrumentId && existing.payment_instruments) {
         const selectedInstrument = existing.payment_instruments.find(
           (pi: any) => pi.id === instrumentId

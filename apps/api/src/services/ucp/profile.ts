@@ -191,7 +191,7 @@ const getPaymentHandlers = (): UCPPaymentHandler[] => {
   const docsUrl = getDocsUrl();
 
   return [{
-    id: 'payos_latam',
+    id: 'sly_latam',
     name: 'com.payos.latam_settlement',
     version: UCP_VERSION,
     spec: `${docsUrl}/ucp/handlers/payment`,

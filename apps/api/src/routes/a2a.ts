@@ -1117,6 +1117,7 @@ a2aRouter.post('/tasks', async (c) => {
 a2aRouter.get('/tasks', async (c) => {
   const ctx = c.get('ctx');
   const agentId = c.req.query('agent_id');
+  const callerAgentId = c.req.query('caller_agent_id');
   const state = c.req.query('state');
   const direction = c.req.query('direction') as 'inbound' | 'outbound' | undefined;
   const contextId = c.req.query('context_id');
@@ -1128,6 +1129,7 @@ a2aRouter.get('/tasks', async (c) => {
 
   const result = await taskService.listTasks({
     agentId,
+    callerAgentId,
     state: state as any,
     direction,
     contextId,
@@ -1578,11 +1580,13 @@ a2aRouter.post('/tasks/:taskId/complete', async (c) => {
 
   const supabase = createClient();
 
-  // Verify task exists and is in working state
+  // Verify task exists, belongs to caller's tenant, and is in working state
   const { data: task, error: fetchError } = await supabase
     .from('a2a_tasks')
     .select('id, state, tenant_id, agent_id')
     .eq('id', taskId)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
     .single();
 
   if (fetchError || !task) {
@@ -1595,12 +1599,9 @@ a2aRouter.post('/tasks/:taskId/complete', async (c) => {
     }, 400);
   }
 
-  // Authorization: agent can only complete tasks assigned to them, API key must match tenant
+  // Authorization: agent can only complete tasks assigned to them
   if (ctx.actorType === 'agent' && ctx.actorId !== (task as any).agent_id) {
     return c.json({ error: 'Agent can only complete tasks assigned to them' }, 403);
-  }
-  if (ctx.actorType === 'api_key' && ctx.tenantId !== (task as any).tenant_id) {
-    return c.json({ error: 'API key tenant does not match task tenant' }, 403);
   }
 
   // Extract response text

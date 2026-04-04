@@ -299,7 +299,7 @@ export class A2ATaskWorker {
           break;
 
         default:
-          await this.failTask(supabase, task, `Unknown processing mode: ${mode}`);
+          await this.failTask(supabase, task, 'Task processing failed: unsupported agent configuration');
       }
     } catch (err: any) {
       this.log(task.id, 'error', `Task failed: ${err.message}`);

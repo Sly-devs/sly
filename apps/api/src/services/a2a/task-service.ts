@@ -27,6 +27,7 @@ const DEFAULT_MAX_CONTEXT_MESSAGES = 100;
 
 export interface ListTasksFilters {
   agentId?: string | null;
+  callerAgentId?: string | null;
   state?: A2ATaskState;
   direction?: 'inbound' | 'outbound';
   contextId?: string | null;
@@ -359,7 +360,7 @@ export class A2ATaskService {
    * List tasks with filtering and pagination.
    */
   async listTasks(filters: ListTasksFilters = {}) {
-    const { agentId, state, direction, contextId, page = 1, limit = 20 } = filters;
+    const { agentId, callerAgentId, state, direction, contextId, page = 1, limit = 20 } = filters;
     const offset = (page - 1) * limit;
 
     let query = this.supabase
@@ -371,6 +372,7 @@ export class A2ATaskService {
       .range(offset, offset + limit - 1);
 
     if (agentId) query = query.eq('agent_id', agentId);
+    if (callerAgentId) query = query.eq('client_agent_id', callerAgentId);
     if (state) query = query.eq('state', state);
     if (direction) query = query.eq('direction', direction);
     if (contextId) query = query.eq('context_id', contextId);

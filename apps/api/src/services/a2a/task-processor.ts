@@ -1173,6 +1173,36 @@ export class A2ATaskProcessor {
       return this.releaseForRetry(taskId, 'Agent circuit breaker open', taskRow2?.retry_count ?? 0);
     }
 
+    // Check if agent endpoint points back to this Sly platform (self-referencing)
+    // If so, use auto-responder instead of forwarding (which would loop)
+    const isSelfReferencing = agent.endpoint_url?.includes('/a2a/') &&
+      (agent.endpoint_url.includes('getsly.ai') || agent.endpoint_url.includes('localhost'));
+
+    if (isSelfReferencing || (!agent.endpoint_url && agent.endpoint_type !== 'x402')) {
+      // Auto-respond: generate skill response and complete immediately
+      try {
+        const { autoRespondToTask } = await import('./auto-responder.js');
+        const autoResult = await autoRespondToTask(this.supabase, taskId, agent.id, messageText, skill.skill_id);
+        if (autoResult.success) {
+          await this.taskService.addMessage(taskId, 'agent', [{ text: autoResult.response }]);
+
+          // Execute settlement if present
+          if (settlementMandateId) {
+            try {
+              await this.resolveSettlementMandate(taskId, settlementMandateId, 'completed');
+            } catch (e: any) {
+              this.log(taskId, 'warn', `Settlement failed: ${e.message}`);
+            }
+          }
+
+          await this.taskService.updateTaskState(taskId, 'completed', 'Task completed');
+          return this.taskService.getTask(taskId);
+        }
+      } catch (autoErr: any) {
+        this.log(taskId, 'warn', `Auto-responder failed: ${autoErr.message}`);
+      }
+    }
+
     if (agent.endpoint_type === 'a2a') {
       return await this.forwardViaA2A(taskId, messageText, agent, skill, callerMetadata, settlementMandateId);
     } else if (agent.endpoint_type === 'webhook') {

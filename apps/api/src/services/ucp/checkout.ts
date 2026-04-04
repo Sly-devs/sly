@@ -809,8 +809,10 @@ export async function completeCheckout(
         }
       }
 
-      const handler = !walletPaymentUsed ? getHandler(handlerId) : null;
-      if (!walletPaymentUsed && handler && instrumentId) {
+      // Skip external handler if wallet payment was used or agent has a wallet
+      const skipHandler = walletPaymentUsed || (agentId && paymentStatus === 'completed');
+      const handler = !skipHandler ? getHandler(handlerId) : null;
+      if (!skipHandler && handler && instrumentId) {
         console.log(`[UCP Checkout] Processing payment via handler "${handlerId}" for ${totalAmount} ${existing.currency}`);
         const paymentResult = await handlerProcessPayment(handlerId, {
           instrumentId,

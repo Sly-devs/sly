@@ -175,13 +175,15 @@ router.post('/one-click', async (c) => {
       return c.json({ error: 'Failed to register agent' }, 500);
     }
 
-    // 2. Create account
+    // 2. Create account (verification_tier 1 so agents can transact immediately)
     const { data: account, error: accountError } = await (supabase.from('accounts') as any)
       .insert({
         tenant_id: tenant.id,
         type: 'business',
         name,
         email: email || null,
+        verification_tier: 1,
+        verification_status: 'verified',
         agent_config: {
           purpose: description || null,
           model: model || null,
@@ -204,6 +206,13 @@ router.post('/one-click', async (c) => {
     const authTokenHash = hashApiKey(authToken);
     const authTokenPrefix = getKeyPrefix(authToken);
 
+    // Fetch tier 0 limits so agent can transact from the start
+    const { data: tier0Limits } = await (supabase.from('kya_tier_limits') as any)
+      .select('per_transaction, daily, monthly')
+      .eq('tier', 0)
+      .single();
+    const t0 = tier0Limits || { per_transaction: 20, daily: 100, monthly: 500 };
+
     const { data: agent, error: agentError } = await (supabase.from('agents') as any)
       .insert({
         tenant_id: tenant.id,
@@ -218,6 +227,12 @@ router.post('/one-click', async (c) => {
         auth_client_id: authTokenPrefix,
         auth_token_hash: authTokenHash,
         auth_token_prefix: authTokenPrefix,
+        limit_per_transaction: t0.per_transaction,
+        limit_daily: t0.daily,
+        limit_monthly: t0.monthly,
+        effective_limit_per_tx: t0.per_transaction,
+        effective_limit_daily: t0.daily,
+        effective_limit_monthly: t0.monthly,
         permissions: {
           transactions: { initiate: true, approve: false, view: true },
           streams: { initiate: true, modify: true, pause: true, terminate: true, view: true },

@@ -139,8 +139,8 @@ export class LimitService {
       monthly: parseFloat(agent.effective_limit_monthly) || 0,
     };
 
-    // Check KYA tier (tier 0 cannot transact)
-    if (agent.kya_tier === 0) {
+    // Check KYA tier (tier 0 blocked only if no effective limits set)
+    if (agent.kya_tier === 0 && effectiveLimits.perTransaction <= 0) {
       const result: LimitCheckResult = {
         allowed: false,
         reason: 'kya_verification_required',

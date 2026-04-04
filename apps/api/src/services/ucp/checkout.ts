@@ -751,8 +751,9 @@ export async function completeCheckout(
       // Try wallet payment first if agent_id is present
       let walletPaymentUsed = false;
       const agentId = existing.agent_id || existing.metadata?.agent_id;
+      console.log(`[UCP Checkout] Wallet path: agentId=${agentId}, totalAmount=${totalAmount}`);
       if (agentId) {
-        const { data: agentWallet } = await supabase
+        const { data: agentWallet, error: walletQueryErr } = await supabase
           .from('wallets')
           .select('id, balance, wallet_type, wallet_address, provider_wallet_id, owner_account_id')
           .eq('managed_by_agent_id', agentId)
@@ -761,6 +762,7 @@ export async function completeCheckout(
           .limit(1)
           .maybeSingle();
 
+        console.log(`[UCP Checkout] Wallet query: found=${!!agentWallet}, err=${walletQueryErr?.message || 'none'}, balance=${agentWallet?.balance || 'N/A'}`);
         const amountInUnits = totalAmount / 100; // UCP amounts are in cents
         if (agentWallet && parseFloat(agentWallet.balance) >= amountInUnits) {
           try {

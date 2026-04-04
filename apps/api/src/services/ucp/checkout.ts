@@ -801,8 +801,11 @@ export async function completeCheckout(
               }
             }
           } catch (walletErr: any) {
-            console.warn('[UCP Checkout] Wallet payment failed, falling through to handler:', walletErr.message);
+            console.warn('[UCP Checkout] Wallet payment failed:', walletErr.message);
+            throw new Error(`Payment failed: wallet debit error — ${walletErr.message}`);
           }
+        } else if (agentId) {
+          throw new Error('Payment failed: agent wallet not found or insufficient balance');
         }
       }
 

@@ -339,6 +339,40 @@ router.post('/one-click', async (c) => {
       console.warn('[agent-onboard] Base wallet creation skipped:', e.message);
     }
 
+    // 4b. Provision secp256k1 EOA for x402 spec compliance (non-blocking)
+    // Each agent gets a managed EVM keypair so they can sign EIP-3009 payloads
+    // to pay external x402-protected endpoints. Private key is encrypted via
+    // credential-vault, stored alongside any existing card-network keys.
+    let evmKey: { address: string; keyId: string } | undefined;
+    try {
+      const { generateAgentEvmKey, getAgentEvmKey } = await import('../services/x402/signer.js');
+      // Skip if somehow already exists (idempotent)
+      const existing = await getAgentEvmKey(supabase as any, agent.id);
+      if (existing) {
+        evmKey = { address: existing.ethereum_address, keyId: existing.key_id };
+      } else {
+        const keyRecord = generateAgentEvmKey(agent.id);
+        const { error: keyErr } = await (supabase.from('agent_signing_keys') as any).insert({
+          tenant_id: tenant.id,
+          agent_id: agent.id,
+          key_id: keyRecord.key_id,
+          algorithm: 'secp256k1',
+          private_key_encrypted: keyRecord.private_key_encrypted,
+          public_key: keyRecord.public_key,
+          ethereum_address: keyRecord.ethereum_address,
+          status: 'active',
+        });
+        if (!keyErr) {
+          evmKey = { address: keyRecord.ethereum_address, keyId: keyRecord.key_id };
+          console.log(`[agent-onboard] EVM key provisioned: ${keyRecord.ethereum_address}`);
+        } else {
+          console.warn('[agent-onboard] EVM key insert failed:', keyErr.message);
+        }
+      }
+    } catch (e: any) {
+      console.warn('[agent-onboard] EVM key provisioning skipped:', e.message);
+    }
+
     // 5. Fetch limits
     const { data: kyaLimits } = await (supabase.from('kya_tier_limits') as any)
       .select('per_transaction, daily, monthly')
@@ -456,6 +490,13 @@ router.post('/one-click', async (c) => {
         network: 'base',
         type: 'circle_custodial',
         explorer: `https://basescan.org/address/${baseWallet.address}`,
+      } : null,
+      evmKey: evmKey ? {
+        address: evmKey.address,
+        keyId: evmKey.keyId,
+        chain: 'base-sepolia',
+        purpose: 'x402 EIP-3009 signing',
+        explorer: `https://sepolia.basescan.org/address/${evmKey.address}`,
       } : null,
       limits: kyaLimits ? {
         tier: 0,

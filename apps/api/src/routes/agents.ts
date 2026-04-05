@@ -2202,6 +2202,120 @@ agents.post('/:id/evm-keys', async (c) => {
 });
 
 // ============================================
+// POST /v1/agents/:id/fund-eoa
+// Bridge USDC from the agent's Circle custodial wallet to their EVM EOA
+// so they can pay external x402-protected resources on-chain.
+// ============================================
+agents.post('/:id/fund-eoa', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+
+  if (!isValidUUID(id)) {
+    throw new ValidationError('Invalid agent ID format');
+  }
+
+  if (ctx.actorType === 'agent' && ctx.actorId !== id) {
+    return c.json({ error: 'Agent can only fund their own EOA' }, 403);
+  }
+
+  let body: any = {};
+  try { body = await c.req.json(); } catch {}
+  const amount = body.amount ? String(body.amount) : '1';
+
+  const supabase = createClient();
+
+  // Verify agent exists and is active
+  const { data: agent } = await supabase
+    .from('agents')
+    .select('id, tenant_id, status')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (!agent) throw new NotFoundError('Agent', id);
+  if ((agent as any).status !== 'active') throw new ValidationError('Agent is not active');
+
+  // Get the agent's EVM key (destination)
+  const { getAgentEvmKey } = await import('../services/x402/signer.js');
+  const keyRecord = await getAgentEvmKey(supabase, id);
+  if (!keyRecord) {
+    return c.json({
+      error: 'Agent has no EVM key. Provision one first via POST /v1/agents/:id/evm-keys',
+      code: 'NO_EVM_KEY',
+    }, 400);
+  }
+
+  // Find the agent's Circle custodial wallet (source)
+  const { data: circleWallet } = await (supabase.from('wallets') as any)
+    .select('id, provider_wallet_id, balance, wallet_address')
+    .eq('managed_by_agent_id', id)
+    .eq('wallet_type', 'circle_custodial')
+    .eq('status', 'active')
+    .maybeSingle();
+
+  if (!circleWallet || !circleWallet.provider_wallet_id) {
+    return c.json({
+      error: 'Agent has no Circle custodial wallet to fund from',
+      code: 'NO_CIRCLE_WALLET',
+    }, 400);
+  }
+
+  // Execute the Circle transfer
+  try {
+    const { getCircleClient } = await import('../services/circle/client.js');
+    const circle = getCircleClient();
+
+    // Resolve the USDC token id for this wallet (Circle uses different IDs per chain)
+    const balances = await circle.getWalletBalances(circleWallet.provider_wallet_id);
+    const usdcBalance = balances.find((b: any) => b.token.symbol === 'USDC');
+    if (!usdcBalance) {
+      return c.json({
+        error: 'Circle wallet has no USDC token record',
+        code: 'NO_USDC_TOKEN',
+      }, 400);
+    }
+
+    const onChainBalance = parseFloat(usdcBalance.amount);
+    if (onChainBalance < parseFloat(amount)) {
+      return c.json({
+        error: `Insufficient on-chain USDC in Circle wallet. Have: ${onChainBalance}, need: ${amount}`,
+        code: 'INSUFFICIENT_ONCHAIN_BALANCE',
+        available: onChainBalance,
+        requested: parseFloat(amount),
+      }, 400);
+    }
+
+    const tx = await circle.transferTokens(
+      circleWallet.provider_wallet_id,
+      usdcBalance.token.id,
+      keyRecord.ethereum_address,
+      amount,
+      'LOW',
+    );
+
+    return c.json({
+      success: true,
+      txId: tx.id,
+      state: tx.state,
+      sourceWallet: {
+        id: circleWallet.id,
+        providerWalletId: circleWallet.provider_wallet_id,
+        address: circleWallet.wallet_address,
+      },
+      destinationAddress: keyRecord.ethereum_address,
+      amount,
+      currency: 'USDC',
+      note: 'Transfer initiated on Base Sepolia. Check txId for on-chain confirmation.',
+    });
+  } catch (e: any) {
+    return c.json({
+      error: `Circle transfer failed: ${e.message}`,
+      code: 'CIRCLE_TRANSFER_FAILED',
+    }, 500);
+  }
+});
+
+// ============================================
 // AGENT SKILLS CRUD
 // ============================================
 

@@ -2202,6 +2202,167 @@ agents.post('/:id/evm-keys', async (c) => {
 });
 
 // ============================================
+// POST /v1/agents/:id/smart-wallet
+// Derive (or fetch) the agent's Coinbase Smart Wallet address.
+// The smart wallet is owned by the agent's existing secp256k1 EOA key
+// (provisioned in Step 2). CREATE2-deterministic — no deployment required
+// to know the address. ERC-4337 compatible for gas abstraction + paymaster,
+// ERC-1271 compatible for contract signatures, and the foundation for
+// ERC-7710 delegation flows in x402.
+// ============================================
+agents.post('/:id/smart-wallet', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+
+  if (!isValidUUID(id)) {
+    throw new ValidationError('Invalid agent ID format');
+  }
+
+  if (ctx.actorType === 'agent' && ctx.actorId !== id) {
+    return c.json({ error: 'Agent can only provision their own smart wallet' }, 403);
+  }
+
+  let body: any = {};
+  try { body = await c.req.json(); } catch {}
+  const chainId = Number(body.chainId || 84532);
+
+  const supabase = createClient();
+
+  const { data: agent } = await supabase
+    .from('agents')
+    .select('id, tenant_id, status')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (!agent) throw new NotFoundError('Agent', id);
+  if ((agent as any).status !== 'active') throw new ValidationError('Agent is not active');
+
+  try {
+    const { getAgentSmartAccount } = await import('../services/x402/smart-account.js');
+    const smartAccount = await getAgentSmartAccount(supabase, id, chainId);
+
+    if (!smartAccount) {
+      return c.json({
+        error: 'Agent has no EVM key. Provision one first via POST /v1/agents/:id/evm-keys',
+        code: 'NO_EVM_KEY',
+      }, 400);
+    }
+
+    // Persist the smart account address on the agent_signing_keys row
+    await (supabase.from('agent_signing_keys') as any)
+      .update({
+        smart_account_address: smartAccount.address,
+        smart_account_deployed: smartAccount.deployed,
+        smart_account_chain_id: chainId,
+      })
+      .eq('agent_id', id)
+      .eq('algorithm', 'secp256k1')
+      .eq('status', 'active');
+
+    return c.json({
+      success: true,
+      smartAccountAddress: smartAccount.address,
+      ownerAddress: smartAccount.ownerAddress,
+      chainId,
+      deployed: smartAccount.deployed,
+      factoryAddress: smartAccount.factoryAddress,
+      explorer: chainId === 84532
+        ? `https://sepolia.basescan.org/address/${smartAccount.address}`
+        : `https://basescan.org/address/${smartAccount.address}`,
+      note: smartAccount.deployed
+        ? 'Smart account is deployed on-chain.'
+        : 'Smart account address is CREATE2-deterministic; will deploy on first on-chain interaction.',
+    });
+  } catch (e: any) {
+    return c.json({
+      error: `Smart wallet derivation failed: ${e.message}`,
+      code: 'SMART_WALLET_FAILED',
+    }, 500);
+  }
+});
+
+// ============================================
+// POST /v1/agents/:id/smart-wallet-sign
+// Sign a message or EIP-712 typed data via the agent's smart wallet.
+// Produces an ERC-1271 compatible signature that verifiers check via
+// IERC1271.isValidSignature() on the smart account contract.
+// ============================================
+agents.post('/:id/smart-wallet-sign', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+
+  if (!isValidUUID(id)) {
+    throw new ValidationError('Invalid agent ID format');
+  }
+
+  if (ctx.actorType === 'agent' && ctx.actorId !== id) {
+    return c.json({ error: 'Agent can only sign with their own smart wallet' }, 403);
+  }
+
+  let body: any;
+  try { body = await c.req.json(); } catch {
+    throw new ValidationError('Invalid JSON body');
+  }
+
+  const { message, typedData, chainId = 84532 } = body;
+
+  if (!message && !typedData) {
+    throw new ValidationError('Either message or typedData is required');
+  }
+
+  const supabase = createClient();
+
+  const { data: agent } = await supabase
+    .from('agents')
+    .select('id, tenant_id, status')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .single();
+
+  if (!agent) throw new NotFoundError('Agent', id);
+  if ((agent as any).status !== 'active') throw new ValidationError('Agent is not active');
+
+  const { data: keyRow } = await (supabase.from('agent_signing_keys') as any)
+    .select('private_key_encrypted, ethereum_address')
+    .eq('agent_id', id)
+    .eq('algorithm', 'secp256k1')
+    .eq('status', 'active')
+    .maybeSingle();
+
+  if (!keyRow) {
+    return c.json({ error: 'Agent has no EVM key', code: 'NO_EVM_KEY' }, 400);
+  }
+
+  try {
+    const { signMessageViaSmartAccount, signTypedDataViaSmartAccount } =
+      await import('../services/x402/smart-account.js');
+    const { deserializeAndDecrypt } = await import('../services/credential-vault/index.js');
+
+    const decrypted = deserializeAndDecrypt(keyRow.private_key_encrypted);
+    const privateKey = decrypted.privateKey as `0x${string}`;
+
+    const result = message
+      ? await signMessageViaSmartAccount(privateKey, message, Number(chainId))
+      : await signTypedDataViaSmartAccount(privateKey, typedData, Number(chainId));
+
+    return c.json({
+      success: true,
+      signature: result.signature,
+      smartAccountAddress: result.smartAccountAddress,
+      ownerAddress: result.ownerAddress,
+      chainId: Number(chainId),
+      note: 'This is an ERC-1271 contract signature. Verify via IERC1271.isValidSignature() on the smart account contract, NOT via ecrecover.',
+    });
+  } catch (e: any) {
+    return c.json({
+      error: `Smart wallet signing failed: ${e.message}`,
+      code: 'SMART_SIGN_FAILED',
+    }, 500);
+  }
+});
+
+// ============================================
 // POST /v1/agents/:id/wallet/refill-faucet
 // Request a Circle faucet drip to top up the agent's Circle custodial wallet
 // with testnet USDC + native gas. Idempotency: Circle's faucet has its own

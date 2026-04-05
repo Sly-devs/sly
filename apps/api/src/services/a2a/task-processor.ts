@@ -257,7 +257,41 @@ export class A2ATaskProcessor {
 
     // --- Routing: Sly-native vs agent forwarding ---
     const msgMetadata = lastUserMsg.metadata;
-    const explicitSkillId = msgMetadata?.skillId as string | undefined;
+    const explicitSkillId = (msgMetadata?.skillId || msgMetadata?.skill_id) as string | undefined;
+
+    // SHORT-CIRCUIT: If caller explicitly specified a skillId in metadata, trust it
+    // and forward directly to the agent's skill handler. This prevents regex-based
+    // intent extraction from mis-routing to Sly-native handlers (e.g. a "translation"
+    // request being hijacked by the `balance` intent regex and returning a wallet
+    // balance instead of a translation).
+    if (explicitSkillId) {
+      const { data: skillRow } = await this.supabase
+        .from('agent_skills')
+        .select('skill_id, handler_type, base_price, currency, x402_endpoint_id')
+        .eq('agent_id', agentCtx.agentId)
+        .eq('skill_id', explicitSkillId)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (skillRow) {
+        // Skill exists — forward to agent using the registered skill config
+        const skill = {
+          skill_id: skillRow.skill_id,
+          handler_type: skillRow.handler_type || 'agent_provided',
+          base_price: Number(skillRow.base_price),
+          currency: skillRow.currency || 'USDC',
+          x402_endpoint_id: skillRow.x402_endpoint_id,
+        };
+        this.log(taskId, 'info', `Explicit skillId "${explicitSkillId}" — forwarding to agent (bypass intent regex)`);
+        return await this.forwardToAgent(taskId, text, skill, agentCtx, msgMetadata);
+      }
+      // Explicit skillId was provided but the agent doesn't have it registered — fail fast
+      await this.taskService.addMessage(taskId, 'agent', [
+        { text: `Skill "${explicitSkillId}" not found on this agent. Available skills can be discovered via the agent card.` },
+      ]);
+      await this.taskService.updateTaskState(taskId, 'failed', `Unknown skill: ${explicitSkillId}`);
+      return this.taskService.getTask(taskId);
+    }
 
     // Auto-detect processing_mode from DB so callers don't need to pass the flag
     let slyFirst = opts?.slyFirst === true;

@@ -19,7 +19,7 @@ import { toolHandlers } from './tools/handlers.js';
 import type { AgentContext } from './tools/context-injector.js';
 import type { A2ATask, AcceptancePolicy } from './types.js';
 import { DEFAULT_ACCEPTANCE_POLICY } from './types.js';
-import { authorizeWalletTransfer, isOnChainCapable } from '../wallet-settlement.js';
+import { authorizeWalletTransfer } from '../wallet-settlement.js';
 import { A2AClient } from './client.js';
 import { A2AWebhookHandler } from './webhook-handler.js';
 import { createPaymentProofJWT } from '../../routes/x402-payments.js';
@@ -866,8 +866,18 @@ export class A2ATaskProcessor {
       }
 
       if (callerWallet) {
-        const destAddress = providerWallet?.wallet_address;
-        const onChainCapable = isOnChainCapable(callerWallet, destAddress);
+        const settlementMetadata = {
+          protocol: 'a2a',
+          settlement: true,
+          mandateId,
+          taskId,
+          // Canonical keys for async settlement worker
+          source_wallet_id: callerWallet.id,
+          destination_wallet_id: providerWallet?.id,
+          // Legacy aliases (kept for backward compat)
+          wallet_id: callerWallet.id,
+          provider_wallet_id: providerWallet?.id,
+        };
 
         // Create transfer record first
         const { data: transfer } = await this.supabase
@@ -888,20 +898,16 @@ export class A2ATaskProcessor {
             description: `A2A settlement: task ${taskId.slice(0, 8)}`,
             initiated_by_type: 'agent',
             initiated_by_id: mandate.agent_id,
-            protocol_metadata: {
-              protocol: 'a2a',
-              settlement: true,
-              mandateId,
-              taskId,
-              wallet_id: callerWallet.id,
-              provider_wallet_id: providerWallet?.id,
-            },
+            protocol_metadata: settlementMetadata,
           })
           .select('id')
           .single();
 
         if (transfer) {
-          // Fast ledger authorization — on-chain deferred to async worker (Epic 38, Story 38.2)
+          // Fast ledger authorization — on-chain deferred to async settlement worker
+          // authorizeWalletTransfer debits/credits wallets and sets status='authorized'.
+          // The async settlement worker picks up 'authorized' transfers, checks on-chain
+          // capability, executes Circle transferTokens() if possible, then marks 'completed'.
           const authorization = await authorizeWalletTransfer({
             supabase: this.supabase,
             tenantId: callerTenantId,
@@ -910,38 +916,11 @@ export class A2ATaskProcessor {
             destinationWallet: providerWallet,
             amount,
             transferId: transfer.id,
-            protocolMetadata: {
-              protocol: 'a2a',
-              settlement: true,
-              mandateId,
-              taskId,
-              wallet_id: callerWallet.id,
-              provider_wallet_id: providerWallet?.id,
-            },
+            protocolMetadata: settlementMetadata,
           });
 
           if (!authorization.success) {
             this.log(taskId, 'warn', `A2A ledger authorization failed: ${authorization.error}`);
-          }
-
-          // If not on-chain capable, mark as completed (ledger-only is final)
-          if (authorization.success && !onChainCapable) {
-            await this.supabase
-              .from('transfers')
-              .update({
-                status: 'completed',
-                completed_at: new Date().toISOString(),
-                protocol_metadata: {
-                  protocol: 'a2a',
-                  settlement: true,
-                  mandateId,
-                  taskId,
-                  wallet_id: callerWallet.id,
-                  provider_wallet_id: providerWallet?.id,
-                  settlement_type: 'ledger',
-                },
-              })
-              .eq('id', transfer.id);
           }
 
           // Link transfer to task

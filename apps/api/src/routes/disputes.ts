@@ -174,16 +174,37 @@ disputes.post('/', async (c) => {
   } = parsed.data;
   
   // Get original transfer
-  const { data: transfer, error: transferError } = await supabase
+  // For agents, the transfer may belong to a different tenant (cross-tenant),
+  // so look up by ID first, then verify the agent is a party to the transfer.
+  let transferQuery = supabase
     .from('transfers')
     .select('*')
     .eq('id', transferId)
-    .eq('tenant_id', ctx.tenantId)
-    .eq('environment', getEnv(ctx))
-    .single();
-  
+    .eq('environment', getEnv(ctx));
+
+  // Non-agent actors: strict tenant scoping
+  if (ctx.actorType !== 'agent') {
+    transferQuery = transferQuery.eq('tenant_id', ctx.tenantId);
+  }
+
+  const { data: transfer, error: transferError } = await transferQuery.single();
+
   if (transferError || !transfer) {
     throw new NotFoundError('Transfer', transferId);
+  }
+
+  // For agent actors, verify they are a party to the transfer
+  if (ctx.actorType === 'agent') {
+    const parentAccountId = ctx.parentAccountId;
+    const isParty =
+      transfer.initiated_by_id === ctx.actorId ||
+      (parentAccountId && (
+        transfer.from_account_id === parentAccountId ||
+        transfer.to_account_id === parentAccountId
+      ));
+    if (!isParty) {
+      throw new NotFoundError('Transfer', transferId);
+    }
   }
   
   // Check if transfer is completed
@@ -198,11 +219,14 @@ disputes.post('/', async (c) => {
     throw error;
   }
   
+  // For cross-tenant agent disputes, use the transfer's tenant for lookups
+  const disputeTenantId = transfer.tenant_id || ctx.tenantId;
+
   // Get tenant settings for dispute windows
   const { data: settings } = await supabase
     .from('tenant_settings')
     .select('disputes_filing_window_days, disputes_response_window_days')
-    .eq('tenant_id', ctx.tenantId)
+    .eq('tenant_id', disputeTenantId)
     .single();
   
   const filingWindowDays = settings?.disputes_filing_window_days || 120;
@@ -230,7 +254,7 @@ disputes.post('/', async (c) => {
     .from('disputes')
     .select('id, status, due_date')
     .eq('transfer_id', transferId)
-    .eq('tenant_id', ctx.tenantId)
+    .eq('tenant_id', disputeTenantId)
     .eq('environment', getEnv(ctx))
     .in('status', ['open', 'under_review'])
     .single();
@@ -274,7 +298,7 @@ disputes.post('/', async (c) => {
   const { data: dispute, error: createError } = await supabase
     .from('disputes')
     .insert({
-      tenant_id: ctx.tenantId,
+      tenant_id: disputeTenantId,
       environment: getEnv(ctx),
       transfer_id: transferId,
       status: 'open',
@@ -303,7 +327,7 @@ disputes.post('/', async (c) => {
   
   // Audit log
   await logAudit(supabase, {
-    tenantId: ctx.tenantId,
+    tenantId: disputeTenantId,
     entityType: 'dispute',
     entityId: dispute.id,
     action: 'created',

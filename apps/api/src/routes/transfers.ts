@@ -74,14 +74,28 @@ transfers.get('/', async (c) => {
   let dbQuery = supabase
     .from('transfers')
     .select('*', { count: 'exact' })
-    .eq('tenant_id', ctx.tenantId)
     .eq('environment', getEnv(ctx))
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
 
-  // Agent tokens: scope to transfers initiated by this agent
+  // Agent tokens: scope to transfers the agent initiated OR where
+  // the agent's parent account is a party (from/to), including cross-tenant.
   if (ctx.actorType === 'agent' && ctx.actorId) {
-    dbQuery = dbQuery.eq('initiated_by_id', ctx.actorId);
+    const parentAccountId = ctx.parentAccountId;
+    if (parentAccountId) {
+      // Agent can see transfers it initiated OR where its parent account is sender/receiver
+      dbQuery = dbQuery.or(
+        `initiated_by_id.eq.${ctx.actorId},from_account_id.eq.${parentAccountId},to_account_id.eq.${parentAccountId}`
+      );
+    } else {
+      // No parent account — only transfers this agent initiated, scoped to tenant
+      dbQuery = dbQuery
+        .eq('tenant_id', ctx.tenantId)
+        .eq('initiated_by_id', ctx.actorId);
+    }
+  } else {
+    // Non-agent actors: strict tenant scoping
+    dbQuery = dbQuery.eq('tenant_id', ctx.tenantId);
   }
 
   if (status) {
@@ -494,16 +508,35 @@ transfers.get('/:id', async (c) => {
     throw new ValidationError('Invalid transfer ID format');
   }
   
-  const { data, error } = await supabase
+  let singleQuery = supabase
     .from('transfers')
     .select('*')
     .eq('id', id)
-    .eq('tenant_id', ctx.tenantId)
-    .eq('environment', getEnv(ctx))
-    .single();
+    .eq('environment', getEnv(ctx));
+
+  // For agents, allow cross-tenant access (verified below); others get strict tenant scoping
+  if (ctx.actorType !== 'agent') {
+    singleQuery = singleQuery.eq('tenant_id', ctx.tenantId);
+  }
+
+  const { data, error } = await singleQuery.single();
 
   if (error || !data) {
     throw new NotFoundError('Transfer', id);
+  }
+
+  // For agent actors, verify they are a party to this transfer
+  if (ctx.actorType === 'agent') {
+    const parentAccountId = ctx.parentAccountId;
+    const isParty =
+      data.initiated_by_id === ctx.actorId ||
+      (parentAccountId && (
+        data.from_account_id === parentAccountId ||
+        data.to_account_id === parentAccountId
+      ));
+    if (!isParty) {
+      throw new NotFoundError('Transfer', id);
+    }
   }
 
   // Enrich missing account names

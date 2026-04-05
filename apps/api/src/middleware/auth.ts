@@ -20,6 +20,7 @@ export interface RequestContext {
   actorId?: string;
   actorName?: string;
   kyaTier?: number;
+  parentAccountId?: string;
   // For portal token auth (Epic 65)
   portalTokenId?: string;
   portalScopes?: string[];
@@ -419,7 +420,7 @@ export async function authMiddleware(c: Context, next: Next) {
     // First, try the new secure method (prefix + hash)
     let { data: agent, error } = await (supabase
       .from('agents') as any)
-      .select('id, name, tenant_id, status, kya_tier, kya_status, auth_token_hash')
+      .select('id, name, tenant_id, status, kya_tier, kya_status, auth_token_hash, parent_account_id')
       .eq('auth_token_prefix', tokenPrefix)
       .single();
 
@@ -433,7 +434,7 @@ export async function authMiddleware(c: Context, next: Next) {
       // Fallback to legacy plaintext lookup (for backwards compatibility during migration)
       const legacyResult = await (supabase
         .from('agents') as any)
-        .select('id, name, tenant_id, status, kya_tier, kya_status')
+        .select('id, name, tenant_id, status, kya_tier, kya_status, parent_account_id')
         .eq('auth_client_id', token)
         .single();
 
@@ -460,6 +461,7 @@ export async function authMiddleware(c: Context, next: Next) {
       actorId: agent.id,
       actorName: agent.name,
       kyaTier: agent.kya_tier,
+      parentAccountId: agent.parent_account_id,
       apiKeyEnvironment: agent.environment || 'test',
     });
 

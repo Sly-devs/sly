@@ -24,6 +24,27 @@ export interface StreamLimits {
   maxTotalOutflow: number;
 }
 
+// Per-agent mutex to prevent concurrent limit-check race conditions.
+// When two requests for the same agent arrive simultaneously, the second
+// waits for the first to complete its limit check + transfer creation
+// before reading usage, ensuring daily/monthly caps can't be bypassed.
+const AGENT_LIMIT_LOCKS = new Map<string, Promise<void>>();
+
+function withAgentLock<T>(agentId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = AGENT_LIMIT_LOCKS.get(agentId) || Promise.resolve();
+  let resolve: () => void;
+  const next = new Promise<void>(r => { resolve = r; });
+  AGENT_LIMIT_LOCKS.set(agentId, next);
+
+  return prev.then(fn).finally(() => {
+    resolve!();
+    // Cleanup lock entry if this is the latest promise
+    if (AGENT_LIMIT_LOCKS.get(agentId) === next) {
+      AGENT_LIMIT_LOCKS.delete(agentId);
+    }
+  });
+}
+
 export class LimitService {
   constructor(
     private supabase: SupabaseClient,
@@ -109,6 +130,16 @@ export class LimitService {
    * Check if a transaction amount is within agent limits
    */
   async checkTransactionLimit(
+    agentId: string,
+    amount: number,
+    correlationId?: string
+  ): Promise<LimitCheckResult> {
+    // Serialize concurrent limit checks per agent to prevent race conditions
+    // where parallel requests both read "under limit" before either writes usage
+    return withAgentLock(agentId, () => this._checkTransactionLimitInner(agentId, amount, correlationId));
+  }
+
+  private async _checkTransactionLimitInner(
     agentId: string,
     amount: number,
     correlationId?: string

@@ -132,7 +132,7 @@ export class A2ATaskService {
    * recent N (not oldest N). Applies a default cap of 100 if no explicit
    * historyLength is provided and the agent hasn't configured one.
    */
-  async getTask(taskId: string, historyLength?: number): Promise<A2ATask | null> {
+  async getTask(taskId: string, historyLength?: number, callerAgentId?: string): Promise<A2ATask | null> {
     const { data: taskRow, error: taskError } = await this.supabase
       .from('a2a_tasks')
       .select('*')
@@ -142,6 +142,11 @@ export class A2ATaskService {
       .single();
 
     if (taskError || !taskRow) return null;
+
+    // Ownership check: if caller is an agent, they must be either the target or the initiator
+    if (callerAgentId && taskRow.agent_id !== callerAgentId && taskRow.client_agent_id !== callerAgentId) {
+      return null; // Treat as not found — don't leak existence of other agents' tasks
+    }
 
     // Resolve effective context window limit:
     // 1. Explicit historyLength from caller (e.g. A2AConfiguration)
@@ -193,6 +198,7 @@ export class A2ATaskService {
     state: A2ATaskState,
     statusMessage?: string,
     metadata?: Record<string, unknown>,
+    callerAgentId?: string,
   ): Promise<A2ATask | null> {
     const updateData: Record<string, unknown> = { state };
     if (statusMessage !== undefined) updateData.status_message = statusMessage;
@@ -200,11 +206,17 @@ export class A2ATaskService {
     // Read current state + metadata before the update (for audit trail from_state)
     const { data: currentRow } = await this.supabase
       .from('a2a_tasks')
-      .select('state, metadata')
+      .select('state, metadata, agent_id, client_agent_id')
       .eq('id', taskId)
       .eq('tenant_id', this.tenantId)
       .eq('environment', this.environment)
       .single();
+
+    // Ownership check: if caller is an agent, they must be the target or initiator
+    if (callerAgentId && currentRow &&
+        currentRow.agent_id !== callerAgentId && currentRow.client_agent_id !== callerAgentId) {
+      return null; // Not authorized to update this task
+    }
 
     const previousState = currentRow?.state !== state ? currentRow?.state : undefined;
 
@@ -384,8 +396,8 @@ export class A2ATaskService {
   /**
    * List tasks with filtering and pagination.
    */
-  async listTasks(filters: ListTasksFilters = {}) {
-    const { agentId, callerAgentId, state, direction, contextId, page = 1, limit = 20 } = filters;
+  async listTasks(filters: ListTasksFilters & { scopeToAgentId?: string } = {}) {
+    const { agentId, callerAgentId, scopeToAgentId, state, direction, contextId, page = 1, limit = 20 } = filters;
     const offset = (page - 1) * limit;
 
     let query = this.supabase
@@ -395,6 +407,11 @@ export class A2ATaskService {
       .eq('environment', this.environment)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
+
+    // Ownership scoping: when an agent calls listTasks, only show tasks they're involved in
+    if (scopeToAgentId) {
+      query = query.or(`agent_id.eq.${scopeToAgentId},client_agent_id.eq.${scopeToAgentId}`);
+    }
 
     if (agentId) query = query.eq('agent_id', agentId);
     if (callerAgentId) query = query.eq('client_agent_id', callerAgentId);

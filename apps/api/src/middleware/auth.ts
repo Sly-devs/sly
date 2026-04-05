@@ -88,6 +88,65 @@ function setCachedJWT(token: string, ctx: RequestContext): void {
   });
 }
 
+// ============================================
+// Agent Token Cache (mirrors JWT cache pattern)
+// ============================================
+
+interface AgentCacheEntry {
+  ctx: RequestContext;
+  agentRow: Record<string, unknown>;
+  tokenHash: string;
+  expiresAt: number;
+}
+
+const AGENT_TOKEN_CACHE = new Map<string, AgentCacheEntry>();
+const AGENT_TOKEN_CACHE_TTL_MS = 60 * 1000; // 60 second TTL
+const AGENT_TOKEN_CACHE_MAX_SIZE = 1000;
+
+function getAgentCacheKey(tokenPrefix: string): string {
+  return tokenPrefix;
+}
+
+function getCachedAgent(tokenPrefix: string, tokenHash: string): { ctx: RequestContext; agentRow: Record<string, unknown> } | null {
+  const entry = AGENT_TOKEN_CACHE.get(getAgentCacheKey(tokenPrefix));
+  if (!entry) return null;
+
+  if (Date.now() > entry.expiresAt) {
+    AGENT_TOKEN_CACHE.delete(getAgentCacheKey(tokenPrefix));
+    return null;
+  }
+
+  // Verify hash still matches (constant-time comparison happens in caller)
+  if (entry.tokenHash !== tokenHash) return null;
+
+  return { ctx: entry.ctx, agentRow: entry.agentRow };
+}
+
+function setCachedAgent(tokenPrefix: string, tokenHash: string, ctx: RequestContext, agentRow: Record<string, unknown>): void {
+  if (AGENT_TOKEN_CACHE.size >= AGENT_TOKEN_CACHE_MAX_SIZE) {
+    const now = Date.now();
+    const keysToDelete: string[] = [];
+    AGENT_TOKEN_CACHE.forEach((entry, key) => {
+      if (now > entry.expiresAt) keysToDelete.push(key);
+    });
+    keysToDelete.forEach(key => AGENT_TOKEN_CACHE.delete(key));
+
+    if (AGENT_TOKEN_CACHE.size >= AGENT_TOKEN_CACHE_MAX_SIZE) {
+      const entries = Array.from(AGENT_TOKEN_CACHE.entries());
+      entries.sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+      const toDelete = entries.slice(0, Math.floor(AGENT_TOKEN_CACHE_MAX_SIZE / 2));
+      toDelete.forEach(([key]) => AGENT_TOKEN_CACHE.delete(key));
+    }
+  }
+
+  AGENT_TOKEN_CACHE.set(getAgentCacheKey(tokenPrefix), {
+    ctx,
+    agentRow,
+    tokenHash,
+    expiresAt: Date.now() + AGENT_TOKEN_CACHE_TTL_MS,
+  });
+}
+
 /**
  * Log authentication attempts for security monitoring
  */
@@ -417,7 +476,15 @@ export async function authMiddleware(c: Context, next: Next) {
     const tokenPrefix = getKeyPrefix(token);
     const tokenHash = hashApiKey(token);
 
-    // First, try the new secure method (prefix + hash)
+    // Check agent token cache first (avoids DB round-trip on repeat requests)
+    const cached = getCachedAgent(tokenPrefix, tokenHash);
+    if (cached) {
+      c.set('ctx', cached.ctx);
+      c.set('agentRow', cached.agentRow);
+      return next();
+    }
+
+    // Cache miss — query DB
     let { data: agent, error } = await (supabase
       .from('agents') as any)
       .select('id, name, tenant_id, status, kya_tier, kya_status, auth_token_hash, parent_account_id, environment')
@@ -452,9 +519,9 @@ export async function authMiddleware(c: Context, next: Next) {
       return c.json({ error: 'Agent is not active', status: agent.status }, 403);
     }
 
-    await logAuthAttempt(true, 'agent', agent.tenant_id, agent.id, ip, userAgent);
+    logAuthAttempt(true, 'agent', agent.tenant_id, agent.id, ip, userAgent).catch(() => {});
 
-    c.set('ctx', {
+    const ctx: RequestContext = {
       tenantId: agent.tenant_id,
       actorType: 'agent',
       environment: agent.environment || 'test',
@@ -463,7 +530,12 @@ export async function authMiddleware(c: Context, next: Next) {
       kyaTier: agent.kya_tier,
       parentAccountId: agent.parent_account_id,
       apiKeyEnvironment: agent.environment || 'test',
-    });
+    };
+
+    // Cache the agent row + context for subsequent requests
+    setCachedAgent(tokenPrefix, tokenHash, ctx, agent);
+    c.set('ctx', ctx);
+    c.set('agentRow', agent);
 
     // Track first API call for beta funnel (fire-and-forget)
     trackFirstEvent(agent.tenant_id, 'first_api_call').catch(() => {});

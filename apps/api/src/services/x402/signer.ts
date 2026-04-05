@@ -47,20 +47,34 @@ export function generateAgentEvmKey(agentId: string): Omit<Secp256k1KeyRecord, '
   };
 }
 
+// Per-agent signing key cache (keys rotate very rarely — 30s TTL is safe)
+const EVM_KEY_CACHE = new Map<string, { record: Secp256k1KeyRecord; expiresAt: number }>();
+const EVM_KEY_CACHE_TTL_MS = 30_000;
+
 /**
  * Fetch the active secp256k1 key for an agent from the DB.
- * Returns null if no key exists.
+ * Returns null if no key exists. Results are cached for 30 seconds.
  */
 export async function getAgentEvmKey(
   supabase: SupabaseClient,
   agentId: string,
 ): Promise<Secp256k1KeyRecord | null> {
+  // Check cache first
+  const cached = EVM_KEY_CACHE.get(agentId);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.record;
+  }
+
   const { data } = await (supabase.from('agent_signing_keys') as any)
     .select('key_id, public_key, ethereum_address, private_key_encrypted')
     .eq('agent_id', agentId)
     .eq('algorithm', 'secp256k1')
     .eq('status', 'active')
     .maybeSingle();
+
+  if (data) {
+    EVM_KEY_CACHE.set(agentId, { record: data, expiresAt: Date.now() + EVM_KEY_CACHE_TTL_MS });
+  }
   return data || null;
 }
 

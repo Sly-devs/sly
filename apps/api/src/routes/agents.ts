@@ -2055,20 +2055,33 @@ agents.post('/:id/x402-sign', async (c) => {
     return c.json({ error: 'Agent can only sign with their own key' }, 403);
   }
 
-  // Verify agent exists and is active
-  const { data: agent, error: agentError } = await supabase
-    .from('agents')
-    .select('id, name, status, kya_tier, tenant_id')
-    .eq('id', id)
-    .eq('tenant_id', ctx.tenantId)
-    .single();
+  // Use cached agent row from auth middleware if available (avoids re-query)
+  const cachedAgent = ctx.actorType === 'agent' && ctx.actorId === id ? c.get('agentRow') : null;
+  if (!cachedAgent) {
+    const { data: agent, error: agentError } = await supabase
+      .from('agents')
+      .select('id, name, status, kya_tier, tenant_id')
+      .eq('id', id)
+      .eq('tenant_id', ctx.tenantId)
+      .single();
 
-  if (agentError || !agent) {
-    throw new NotFoundError('Agent', id);
+    if (agentError || !agent) {
+      throw new NotFoundError('Agent', id);
+    }
+    if (agent.status !== 'active') {
+      throw new ValidationError('Agent is not active');
+    }
   }
 
-  if (agent.status !== 'active') {
-    throw new ValidationError('Agent is not active');
+  // Check wallet freeze status — block signing if agent's wallet is frozen
+  const { data: agentWallet } = await supabase
+    .from('wallets')
+    .select('status')
+    .eq('managed_by_agent_id', id)
+    .eq('status', 'frozen')
+    .maybeSingle();
+  if (agentWallet) {
+    return c.json({ error: 'Agent wallet is frozen — signing blocked', code: 'WALLET_FROZEN' }, 403);
   }
 
   // Fetch the agent's secp256k1 key
@@ -2391,14 +2404,30 @@ agents.post('/:id/smart-wallet/send-usdc', async (c) => {
   }
 
   const supabase = createClient();
-  const { data: agent } = await supabase
-    .from('agents')
-    .select('id, tenant_id, status')
-    .eq('id', id)
-    .eq('tenant_id', ctx.tenantId)
-    .single();
-  if (!agent) throw new NotFoundError('Agent', id);
-  if ((agent as any).status !== 'active') throw new ValidationError('Agent is not active');
+
+  // Use cached agent row from auth middleware if available (avoids re-query)
+  const cachedAgent = ctx.actorType === 'agent' && ctx.actorId === id ? c.get('agentRow') : null;
+  if (!cachedAgent) {
+    const { data: agent } = await supabase
+      .from('agents')
+      .select('id, tenant_id, status')
+      .eq('id', id)
+      .eq('tenant_id', ctx.tenantId)
+      .single();
+    if (!agent) throw new NotFoundError('Agent', id);
+    if ((agent as any).status !== 'active') throw new ValidationError('Agent is not active');
+  }
+
+  // Check wallet freeze status — block UserOp execution if frozen
+  const { data: frozenWallet } = await supabase
+    .from('wallets')
+    .select('status')
+    .eq('managed_by_agent_id', id)
+    .eq('status', 'frozen')
+    .maybeSingle();
+  if (frozenWallet) {
+    return c.json({ error: 'Agent wallet is frozen — UserOp execution blocked', code: 'WALLET_FROZEN' }, 403);
+  }
 
   const { data: keyRow } = await (supabase.from('agent_signing_keys') as any)
     .select('private_key_encrypted, smart_account_address')

@@ -504,11 +504,218 @@ export class X402Client {
    */
   updateConfig(config: Partial<X402ClientConfig>): void {
     Object.assign(this.config, config);
-    
+
     // Clear resolved wallet if apiKey changed
     if (config.apiKey) {
       this.resolvedWalletId = undefined;
     }
+  }
+
+  // ==========================================================================
+  // SPEC-COMPLIANT x402 (EIP-3009) — for paying EXTERNAL x402 endpoints
+  //
+  // The methods above (fetch/pay) talk to the Sly platform's internal
+  // /v1/x402/pay API. The methods below talk to EXTERNAL x402-protected
+  // resources using spec-compliant EIP-3009 signatures produced by the
+  // agent's Sly-custodial EVM key.
+  // ==========================================================================
+
+  /**
+   * Get the agent's managed EVM address (used as the payer for x402 payments).
+   * Provisions a key automatically if the agent doesn't have one yet.
+   */
+  async getEvmAddress(): Promise<string> {
+    if (!this.config.agentId) {
+      throw new Error('agentId is required for EVM signing');
+    }
+    const response = await this.config.fetcher(
+      `${this.config.apiUrl}/v1/agents/${this.config.agentId}/evm-keys`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+        body: '{}',
+      },
+    );
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(`getEvmAddress failed: ${err.error || response.statusText}`);
+    }
+    const body = await response.json() as { data?: { ethereumAddress: string } };
+    const addr = body.data?.ethereumAddress;
+    if (!addr) throw new Error('No EVM address in response');
+    return addr;
+  }
+
+  /**
+   * Sign an EIP-3009 transferWithAuthorization payload using the agent's
+   * managed EVM key. The resulting signature is spec-compliant and can be
+   * submitted to any x402 server that verifies EIP-3009 payloads, or used
+   * directly on-chain via the USDC contract's transferWithAuthorization()
+   * function.
+   */
+  async signTransferAuth(params: {
+    to: string;
+    value: string;        // token units as decimal string (e.g. "100000" for 0.1 USDC)
+    chainId?: number;     // defaults to 84532 (Base Sepolia)
+    validBefore: number;  // unix seconds deadline
+    validAfter?: number;  // unix seconds start (defaults to 0)
+    nonce?: string;       // 32-byte hex, auto-generated if omitted
+  }): Promise<{
+    signature: `0x${string}`;
+    v: number;
+    r: `0x${string}`;
+    s: `0x${string}`;
+    from: string;
+    to: string;
+    value: string;
+    chainId: number;
+    tokenAddress: string;
+    validAfter: number;
+    validBefore: number;
+    nonce: string;
+  }> {
+    if (!this.config.agentId) {
+      throw new Error('agentId is required for EVM signing');
+    }
+    const response = await this.config.fetcher(
+      `${this.config.apiUrl}/v1/agents/${this.config.agentId}/x402-sign`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+        body: JSON.stringify({
+          to: params.to,
+          value: params.value,
+          chainId: params.chainId || 84532,
+          validBefore: params.validBefore,
+          validAfter: params.validAfter || 0,
+          nonce: params.nonce,
+        }),
+      },
+    );
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(`signTransferAuth failed: ${err.error || response.statusText}`);
+    }
+    return await response.json() as any;
+  }
+
+  /**
+   * Fund the agent's managed EVM EOA by bridging USDC from its Circle custodial
+   * wallet. Required before the EOA can pay external x402 endpoints — the
+   * signature it produces is only redeemable if the EOA actually holds USDC.
+   */
+  async fundEvmAddress(amount: string = '1'): Promise<{
+    txId: string;
+    destinationAddress: string;
+    amount: string;
+  }> {
+    if (!this.config.agentId) {
+      throw new Error('agentId is required for EVM funding');
+    }
+    const response = await this.config.fetcher(
+      `${this.config.apiUrl}/v1/agents/${this.config.agentId}/fund-eoa`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+        body: JSON.stringify({ amount }),
+      },
+    );
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(`fundEvmAddress failed: ${err.error || response.statusText}`);
+    }
+    const body = await response.json() as { data?: any };
+    return body.data || body as any;
+  }
+
+  /**
+   * Fetch an EXTERNAL x402-protected URL and handle the payment using a
+   * spec-compliant EIP-3009 signature. This is the opposite of `fetch()`
+   * above: fetch() uses Sly's internal /v1/x402/pay flow; this uses the
+   * actual x402 protocol so Sly agents can pay non-Sly x402 endpoints.
+   *
+   * Flow:
+   * 1. Fetch the URL
+   * 2. If 402, parse payment requirements from the response
+   * 3. Get a signed EIP-3009 payload from Sly's signing endpoint
+   * 4. Retry with the PAYMENT-SIGNATURE header
+   */
+  async fetchExternal(url: string, options: X402FetchOptions = {}): Promise<Response> {
+    const { autoRetry = true, ...fetchOptions } = options;
+
+    // Initial request
+    const response = await this.config.fetcher(url, fetchOptions);
+    if (response.status !== 402 || !autoRetry) return response;
+
+    // Parse 402 payment instructions. The x402 spec uses accept/payment fields.
+    // We try multiple header conventions since different servers emit slightly
+    // different shapes during the protocol's current evolution.
+    const amount = response.headers.get('x-payment-amount') ||
+                   response.headers.get('x-amount') ||
+                   '0';
+    const to = response.headers.get('x-payment-to') ||
+               response.headers.get('x-pay-to') ||
+               '';
+    const chainId = parseInt(
+      response.headers.get('x-chain-id') || '84532',
+      10,
+    );
+
+    if (!to || !amount || amount === '0') {
+      this.log('402 received but no payment headers present — returning raw 402');
+      return response;
+    }
+
+    // Convert decimal amount to token units (USDC has 6 decimals)
+    const valueUnits = String(Math.floor(parseFloat(amount) * 1_000_000));
+
+    // Sign the EIP-3009 payload
+    const validBefore = Math.floor(Date.now() / 1000) + 3600;
+    const signed = await this.signTransferAuth({
+      to,
+      value: valueUnits,
+      chainId,
+      validBefore,
+    });
+
+    // Retry with PAYMENT-SIGNATURE header. The header encoding follows the
+    // x402 spec's `scheme=exact` convention — the payload is a base64-encoded
+    // JSON object containing the signature + all the parameters the server
+    // needs to verify and settle on-chain.
+    const paymentPayload = {
+      scheme: 'exact',
+      network: chainId === 84532 ? 'base-sepolia' : 'base',
+      payload: {
+        signature: signed.signature,
+        authorization: {
+          from: signed.from,
+          to: signed.to,
+          value: signed.value,
+          validAfter: signed.validAfter,
+          validBefore: signed.validBefore,
+          nonce: signed.nonce,
+        },
+      },
+    };
+    const encoded = typeof Buffer !== 'undefined'
+      ? Buffer.from(JSON.stringify(paymentPayload)).toString('base64')
+      : btoa(JSON.stringify(paymentPayload));
+
+    const retryHeaders = new Headers(fetchOptions.headers);
+    retryHeaders.set('X-PAYMENT', encoded);
+    retryHeaders.set('PAYMENT-SIGNATURE', encoded); // legacy header name
+
+    this.log('Retrying with EIP-3009 PAYMENT-SIGNATURE header');
+    return await this.config.fetcher(url, { ...fetchOptions, headers: retryHeaders });
   }
   
   /**

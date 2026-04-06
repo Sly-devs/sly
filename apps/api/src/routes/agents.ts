@@ -2285,7 +2285,7 @@ agents.post('/:id/smart-wallet', async (c) => {
     // Also register in the wallets table so the smart wallet is visible
     // alongside Circle, Tempo, BYOW wallets in the unified wallet registry.
     const network = chainId === 84532 ? 'base-sepolia' : 'base-mainnet';
-    await supabase.from('wallets').upsert({
+    const walletData = {
       tenant_id: ctx.tenantId,
       owner_account_id: (agent as any).parent_account_id || ctx.tenantId,
       managed_by_agent_id: id,
@@ -2306,7 +2306,15 @@ agents.post('/:id/smart-wallet', async (c) => {
         deployed: smartAccount.deployed,
         chain_id: chainId,
       },
-    } as any, { onConflict: 'managed_by_agent_id,wallet_type' } as any).then(() => {}, () => {});
+    };
+    // Check-then-insert (upsert requires a unique constraint we don't have)
+    const { data: existingSwRow } = await supabase.from('wallets')
+      .select('id').eq('managed_by_agent_id', id).eq('wallet_type', 'smart_wallet').limit(1);
+    if (existingSwRow && existingSwRow.length > 0) {
+      await supabase.from('wallets').update(walletData as any).eq('id', existingSwRow[0].id).then(() => {}, () => {});
+    } else {
+      await supabase.from('wallets').insert(walletData as any).then(() => {}, () => {});
+    }
 
     return c.json({
       success: true,

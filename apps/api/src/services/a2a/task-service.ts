@@ -505,8 +505,8 @@ export class A2ATaskService {
   /**
    * Find an existing task by contextId for multi-turn conversations.
    */
-  async findTaskByContext(agentId: string, contextId: string): Promise<A2ATask | null> {
-    const { data: taskRow } = await this.supabase
+  async findTaskByContext(agentId: string, contextId: string, callerAgentId?: string): Promise<A2ATask | null> {
+    let query = this.supabase
       .from('a2a_tasks')
       .select('*')
       .eq('agent_id', agentId)
@@ -514,8 +514,16 @@ export class A2ATaskService {
       .eq('tenant_id', this.tenantId)
       .eq('environment', this.environment)
       .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+
+    // Ownership check: if caller is known, verify they initiated the conversation.
+    // Prevents contextId hijacking where an attacker injects messages into an
+    // existing conversation by reusing its contextId.
+    if (callerAgentId) {
+      query = query.eq('client_agent_id', callerAgentId);
+    }
+
+    const { data: taskRow } = await query.maybeSingle();
 
     if (!taskRow) return null;
     return this.getTask(taskRow.id);

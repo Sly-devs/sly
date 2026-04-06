@@ -734,7 +734,7 @@ async function handleMessageStream(
       }
       task = await taskService.getTask(taskId, configuration?.historyLength);
     } else if (contextId) {
-      const existing = await taskService.findTaskByContext(agentId, contextId);
+      const existing = await taskService.findTaskByContext(agentId, contextId, callerAgentId);
       if (existing && !TERMINAL_STATES.has(existing.status.state)) {
         await taskService.addMessage(existing.id, role, message.parts, message.metadata);
         if (existing.status.state === 'input-required') {
@@ -914,9 +914,12 @@ a2aRouter.get('/agents/:agentId/config', async (c) => {
     return c.json({ error: 'Agent not found' }, 404);
   }
 
+  // Only return processing_mode to the agent itself (self-query).
+  // Other callers see a generic config response without internal architecture details.
+  const isSelf = ctx.actorType === 'agent' && ctx.actorId === agentId;
   return c.json({
-    processingMode: (agent as any).processing_mode || 'managed',
-    processingConfig: (agent as any).processing_config || {},
+    ...(isSelf ? { processingMode: (agent as any).processing_mode || 'managed' } : {}),
+    processingConfig: isSelf ? ((agent as any).processing_config || {}) : {},
   });
 });
 

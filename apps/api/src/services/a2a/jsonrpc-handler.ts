@@ -198,7 +198,7 @@ async function handleMessageSend(
 
   // If contextId matches an existing task, add message (multi-turn)
   if (contextId) {
-    const existingTask = await taskService.findTaskByContext(agentId, contextId);
+    const existingTask = await taskService.findTaskByContext(agentId, contextId, callerAgentId);
     if (existingTask && !['completed', 'failed', 'canceled', 'rejected'].includes(existingTask.status.state)) {
       await taskService.addMessage(existingTask.id, role, message.parts, message.metadata);
 

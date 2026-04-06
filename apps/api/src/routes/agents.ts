@@ -731,8 +731,17 @@ agents.patch('/:id', async (c) => {
     parsed.data.perTransactionLimit !== undefined;
 
   if (hasLimitUpdate) {
-    // Story 59.15: Only fetch parent limits if agent has a parent account
-    let parentLimits = { per_transaction: Infinity, daily: Infinity, monthly: Infinity };
+    // When no parent account exists, use safe KYA-tier-based defaults instead of
+    // Infinity. This prevents unbounded limits for orphaned or parentless agents.
+    // Tier 0: $10/$50/$200, Tier 1: $100/$500/$2000, Tier 2: $1000/$5000/$20000, Tier 3: $10000/$50000/$200000
+    const KYA_DEFAULTS: Record<number, { per_transaction: number; daily: number; monthly: number }> = {
+      0: { per_transaction: 10, daily: 50, monthly: 200 },
+      1: { per_transaction: 100, daily: 500, monthly: 2000 },
+      2: { per_transaction: 1000, daily: 5000, monthly: 20000 },
+      3: { per_transaction: 10000, daily: 50000, monthly: 200000 },
+    };
+    const kyaTier = existing.kya_tier ?? 0;
+    let parentLimits = KYA_DEFAULTS[kyaTier] || KYA_DEFAULTS[0];
     if (existing.parent_account_id) {
       const { data: parentAccount } = await supabase
         .from('accounts')

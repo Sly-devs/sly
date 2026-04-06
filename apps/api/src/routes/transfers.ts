@@ -326,6 +326,29 @@ transfers.post('/', async (c) => {
     destinationAmount = (amount - feeAmount) * fxRate;
   }
   
+  // Resolve on-chain wallets for both accounts so the settlement worker
+  // can call Circle.transferTokens() or route through smart wallets.
+  // Without these IDs, the worker falls back to ledger-only settlement.
+  const { data: srcWallet } = await supabase
+    .from('wallets')
+    .select('id')
+    .eq('owner_account_id', fromAccountId)
+    .in('wallet_type', ['circle_custodial', 'smart_wallet'])
+    .eq('status', 'active')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  const { data: dstWallet } = await supabase
+    .from('wallets')
+    .select('id')
+    .eq('owner_account_id', toAccountId)
+    .in('wallet_type', ['circle_custodial', 'smart_wallet'])
+    .eq('status', 'active')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
   // Create transfer
   const { data: transfer, error: createError } = await supabase
     .from('transfers')
@@ -356,6 +379,11 @@ transfers.post('/', async (c) => {
       idempotency_key: idempotencyKey,
       processing_at: new Date().toISOString(),
       completed_at: null,
+      protocol_metadata: {
+        protocol: transferType,
+        source_wallet_id: srcWallet?.id || null,
+        destination_wallet_id: dstWallet?.id || null,
+      },
     })
     .select()
     .single();

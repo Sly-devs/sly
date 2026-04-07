@@ -359,7 +359,7 @@ export interface AcceptancePolicy {
 }
 
 export const DEFAULT_ACCEPTANCE_POLICY: AcceptancePolicy = {
-  requires_acceptance: false,
-  auto_accept_below: 0,
-  review_timeout_minutes: 60,
+  requires_acceptance: true,   // Buyer must accept before payment settles
+  auto_accept_below: 0.10,     // Auto-accept tasks under $0.10 (micropayments skip review)
+  review_timeout_minutes: 60,  // Auto-accept after 60 min if buyer doesn't respond
 };

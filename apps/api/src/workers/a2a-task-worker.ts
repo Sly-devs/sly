@@ -269,10 +269,13 @@ export class A2ATaskWorker {
         return;
       }
 
-      const mode = (agent as any).processing_mode || 'manual';
+      // Multi-hop child tasks always use managed mode so the auto-responder
+      // can generate a response — the parent agent is waiting for this result.
+      const isMultiHop = !!(task.metadata as any)?.multiHop;
+      const mode = isMultiHop ? 'managed' : ((agent as any).processing_mode || 'manual');
       const config = (agent as any).processing_config || {};
 
-      this.log(task.id, 'info', `Dispatching via '${mode}' handler`);
+      this.log(task.id, 'info', `Dispatching via '${mode}' handler${isMultiHop ? ' (multi-hop child)' : ''}`);
 
       switch (mode) {
         case 'managed':

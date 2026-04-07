@@ -358,21 +358,20 @@ async function handleSendA2aTask(
     }
   }
 
-  // Intra-platform: verify target agent exists in same tenant
+  // Intra-platform: verify target agent exists (cross-tenant OK for marketplace)
   const { data: targetAgent } = await supabase
     .from('agents')
     .select('id, status, tenant_id')
     .eq('id', targetAgentId)
-    .eq('tenant_id', ctx.tenantId)
     .single();
 
   if (!targetAgent || targetAgent.status !== 'active') {
     return { success: false, error: { code: 'AGENT_NOT_FOUND', message: `Agent ${targetAgentId} not found or inactive` } };
   }
 
-  // Create child task directly via TaskService
+  // Create child task in the TARGET agent's tenant (cross-tenant support)
   const { A2ATaskService } = await import('../task-service.js');
-  const taskService = new A2ATaskService(supabase, ctx.tenantId);
+  const taskService = new A2ATaskService(supabase, targetAgent.tenant_id);
 
   const childTask = await taskService.createTask(
     targetAgentId,

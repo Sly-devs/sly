@@ -10,6 +10,13 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+interface PeerAgent {
+  id: string;
+  name: string;
+  tenantId: string;
+  skills: string[];
+}
+
 interface TaskContext {
   taskId: string;
   agentId: string;
@@ -21,6 +28,8 @@ interface TaskContext {
   callerAgentId?: string;
   callerName?: string;
   peerDirectory?: string;
+  peerAgents?: PeerAgent[];
+  supabase?: SupabaseClient;
 }
 
 // Agent personality profiles for richer AI responses
@@ -75,23 +84,91 @@ IMPORTANT RULES:
 - If you need input from a peer agent to complete this task well, mention what you would request and from whom. For example: "I would request market_data from DataMiner to supplement this analysis."
 ${ctx.callerName ? `The requesting agent is "${ctx.callerName}".` : ''}`;
 
-    const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 512,
-      system: systemPrompt,
-      messages: [
-        { role: 'user', content: ctx.messageText },
-      ],
-    });
+    // Build tool definitions for multi-hop — let Claude call peers
+    const tools: any[] = [];
+    if (ctx.peerAgents && ctx.peerAgents.length > 0) {
+      tools.push({
+        name: 'a2a_send_task',
+        description: 'Send a task to another agent in the Sly marketplace and wait for their response. Use this when you need data, analysis, or work from a peer agent to complete your task.',
+        input_schema: {
+          type: 'object' as const,
+          properties: {
+            agent_name: { type: 'string', description: 'Name of the peer agent to call (e.g., "DataMiner", "CodeSmith")' },
+            message: { type: 'string', description: 'The task description / request to send to the peer agent' },
+          },
+          required: ['agent_name', 'message'],
+        },
+      });
+    }
 
-    const text = response.content
-      .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
-      .map(block => block.text)
-      .join('\n');
+    // Multi-turn tool-use loop (max 3 hops to prevent infinite chains)
+    const MAX_HOPS = 3;
+    let messages: any[] = [{ role: 'user', content: ctx.messageText }];
+    let finalText = '';
 
-    if (text) {
-      console.log(`[AutoResponder] Claude response for ${ctx.agentName}/${ctx.skillId} (${text.length} chars)`);
-      return text;
+    for (let hop = 0; hop <= MAX_HOPS; hop++) {
+      const response = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages,
+        ...(tools.length > 0 ? { tools } : {}),
+      });
+
+      // Collect text blocks
+      const textBlocks = response.content
+        .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+        .map(block => block.text);
+      if (textBlocks.length > 0) finalText += textBlocks.join('\n');
+
+      // Check for tool use
+      const toolUseBlocks = response.content.filter((block): block is any => block.type === 'tool_use');
+      if (toolUseBlocks.length === 0 || response.stop_reason !== 'tool_use') break; // No more tool calls
+
+      // Execute tool calls and build results
+      const toolResults: any[] = [];
+      for (const toolCall of toolUseBlocks) {
+        if (toolCall.name === 'a2a_send_task' && ctx.peerAgents) {
+          const targetName = toolCall.input?.agent_name as string;
+          const taskMessage = toolCall.input?.message as string;
+          const peer = ctx.peerAgents.find((p: any) => p.name.toLowerCase() === targetName.toLowerCase());
+
+          if (peer && taskMessage) {
+            console.log(`[AutoResponder] ${ctx.agentName} → ${peer.name}: multi-hop task`);
+            try {
+              const peerResult = await executeMultiHopTask(ctx.supabase!, peer.id, peer.tenantId, taskMessage, ctx.agentId, ctx.taskId);
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolCall.id,
+                content: peerResult || 'Peer agent did not return a response.',
+              });
+            } catch (err: any) {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolCall.id,
+                content: `Error calling ${targetName}: ${err.message}`,
+                is_error: true,
+              });
+            }
+          } else {
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolCall.id,
+              content: `Agent "${targetName}" not found in peer directory.`,
+              is_error: true,
+            });
+          }
+        }
+      }
+
+      // Add assistant response + tool results for next turn
+      messages.push({ role: 'assistant', content: response.content });
+      messages.push({ role: 'user', content: toolResults });
+    }
+
+    if (finalText) {
+      console.log(`[AutoResponder] Claude response for ${ctx.agentName}/${ctx.skillId} (${finalText.length} chars)`);
+      return finalText;
     }
 
     // Empty response — fall through to fallback
@@ -101,6 +178,81 @@ ${ctx.callerName ? `The requesting agent is "${ctx.callerName}".` : ''}`;
   }
 
   return generateFallbackResponse(ctx);
+}
+
+/**
+ * Execute a multi-hop task: create a child task to a peer agent and wait for completion.
+ * Cross-tenant: creates the task in the TARGET agent's tenant.
+ */
+async function executeMultiHopTask(
+  supabase: SupabaseClient,
+  targetAgentId: string,
+  targetTenantId: string,
+  messageText: string,
+  callerAgentId: string,
+  parentTaskId: string,
+): Promise<string> {
+  const { A2ATaskService } = await import('./task-service.js');
+  const { taskEventBus } = await import('./task-event-bus.js');
+
+  // Create child task in the target agent's tenant
+  const taskService = new A2ATaskService(supabase, targetTenantId);
+  const childTask = await taskService.createTask(
+    targetAgentId,
+    {
+      role: 'user',
+      parts: [{ text: messageText }],
+      metadata: { initiatingAgentId: callerAgentId, initiatingTaskId: parentTaskId, multiHop: true },
+    },
+    undefined, // new context
+    'inbound',
+  );
+
+  console.log(`[MultiHop] Created child task ${childTask.id.slice(0, 8)} for agent ${targetAgentId.slice(0, 8)}`);
+
+  // Wait for child task to complete (up to 45s — longer than single-hop)
+  const WAIT_TIMEOUT = 45_000;
+  const TERMINAL = new Set(['completed', 'failed', 'canceled', 'rejected']);
+
+  const finalState = await new Promise<string | null>((resolve) => {
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; unsub(); resolve(null); }
+    }, WAIT_TIMEOUT);
+
+    const unsub = taskEventBus.subscribe(childTask.id, (event) => {
+      if (!settled && event.type === 'status' && TERMINAL.has(event.data.state as string)) {
+        settled = true;
+        clearTimeout(timer);
+        unsub();
+        resolve(event.data.state as string);
+      }
+    });
+
+    if (TERMINAL.has(childTask.status.state)) {
+      settled = true; clearTimeout(timer); unsub();
+      resolve(childTask.status.state);
+    }
+  });
+
+  // Fetch final task with messages
+  const result = await taskService.getTask(childTask.id);
+  if (!result) return 'Child task not found after completion.';
+
+  // Extract agent response text from history
+  const agentMessages = result.history
+    .filter((m: any) => m.role === 'agent')
+    .flatMap((m: any) => m.parts)
+    .filter((p: any) => p.text)
+    .map((p: any) => p.text);
+
+  if (agentMessages.length > 0) {
+    return agentMessages.join('\n');
+  }
+
+  if (!finalState) return 'Peer agent did not respond within 45 seconds.';
+  return `Peer task ended in state: ${finalState}`;
 }
 
 /**
@@ -184,6 +336,7 @@ export async function autoRespondToTask(
   // This gives the agent awareness of who else exists and what they offer,
   // enabling multi-hop task chains (e.g., TradingBot calls DataMiner for data)
   let peerDirectory = '';
+  let peerAgents: PeerAgent[] = [];
   try {
     const { data: allSkills } = await supabase
       .from('agent_skills')
@@ -192,31 +345,38 @@ export async function autoRespondToTask(
       .limit(100);
     const { data: allAgents } = await supabase
       .from('agents')
-      .select('id, name, description')
+      .select('id, name, description, tenant_id')
       .eq('status', 'active')
       .neq('id', agentId) // exclude self
       .limit(20);
 
     if (allAgents && allAgents.length > 0) {
-      const agentSkillMap: Record<string, { name: string; desc?: string; skills: string[] }> = {};
+      const agentSkillMap: Record<string, { name: string; desc?: string; tenantId: string; skills: string[] }> = {};
       for (const a of allAgents) {
-        agentSkillMap[a.id] = { name: a.name, desc: a.description, skills: [] };
+        agentSkillMap[a.id] = { name: a.name, desc: a.description, tenantId: a.tenant_id, skills: [] };
       }
       for (const s of (allSkills || [])) {
         if (agentSkillMap[s.agent_id]) {
           agentSkillMap[s.agent_id].skills.push(`${s.skill_id} ($${s.base_price} ${s.currency || 'USDC'})`);
         }
       }
-      const lines = Object.values(agentSkillMap)
-        .filter(a => a.skills.length > 0)
-        .map(a => `- ${a.name}: ${a.skills.join(', ')}${a.desc ? ' — ' + a.desc.slice(0, 60) : ''}`);
+
+      // Build structured peer list for tool calls
+      peerAgents = Object.entries(agentSkillMap)
+        .filter(([, a]) => a.skills.length > 0)
+        .map(([id, a]) => ({ id, name: a.name, tenantId: a.tenantId, skills: a.skills }));
+
+      const lines = peerAgents.map(a =>
+        `- ${a.name}: ${a.skills.join(', ')}${agentSkillMap[a.id]?.desc ? ' — ' + agentSkillMap[a.id].desc!.slice(0, 60) : ''}`
+      );
       if (lines.length > 0) {
-        peerDirectory = `\n\nAVAILABLE PEERS (other agents you can request help from):
+        peerDirectory = `\n\nAVAILABLE PEERS you can call via the a2a_send_task tool:
 ${lines.join('\n')}
 
-If you need data, analysis, or capabilities from a peer to better complete this task,
-mention which peer you would call and what you would request. In a real multi-hop scenario,
-you would use the a2a_send_task tool to request their help and incorporate their output.`;
+If you need data, analysis, or capabilities from a peer to complete this task,
+use the a2a_send_task tool with agent_name and your request message.
+The peer will process your request and return their output, which you should
+incorporate into your final response.`;
       }
     }
   } catch { /* peer directory is best-effort */ }
@@ -232,6 +392,8 @@ you would use the a2a_send_task tool to request their help and incorporate their
     callerAgentId: task?.caller_agent_id,
     callerName,
     peerDirectory,
+    peerAgents,
+    supabase,
   });
 
   return { success: true, response };

@@ -1226,20 +1226,12 @@ export class A2ATaskProcessor {
       (agent.endpoint_url.includes('getsly.ai') || agent.endpoint_url.includes('localhost'));
 
     if (isSelfReferencing || (!agent.endpoint_url && agent.endpoint_type !== 'x402')) {
-      // Autonomous mode: handle settlement but leave task in 'working' for local agent to pick up
-      if (agent.processing_mode === 'autonomous') {
-        if (settlementMandateId) {
-          try {
-            await this.resolveSettlementMandate(taskId, settlementMandateId, 'completed');
-            this.log(taskId, 'info', `Settlement mandate executed: ${settlementMandateId}`);
-          } catch (e: any) {
-            this.log(taskId, 'warn', `Settlement failed: ${e.message}`);
-          }
-        }
-        await this.taskService.updateTaskState(taskId, 'working', 'Awaiting autonomous agent response');
-        this.log(taskId, 'info', 'Autonomous agent — task left in working state for local pickup');
-        return this.taskService.getTask(taskId);
-      }
+      // For self-referencing autonomous agents (endpoint points back to Sly),
+      // fall through to auto-responder instead of leaving in 'working' forever.
+      // The auto-responder has peer awareness and will generate a real response.
+      // External autonomous agents (with non-Sly endpoints) would be handled
+      // by the forwardViaA2A path above, not here.
+      this.log(taskId, 'info', `Self-referencing agent (${agent.processing_mode}) — using auto-responder`);
 
       // Auto-respond: generate skill response and complete immediately
       try {
@@ -1532,10 +1524,10 @@ export class A2ATaskProcessor {
           ]);
           await this.taskService.updateTaskState(taskId, 'completed', 'Task completed (settlement pending)');
         }
-      } else if (agent.processing_mode === 'autonomous') {
-        // Autonomous mode: leave in working for local agent to process
-        await this.taskService.updateTaskState(taskId, 'working', 'Awaiting autonomous agent response');
-        this.log(taskId, 'info', 'Autonomous agent — task left in working state for local pickup');
+      } else if (agent.processing_mode === 'autonomous' && agent.endpoint_url && !agent.endpoint_url.includes('getsly.ai') && !agent.endpoint_url.includes('localhost')) {
+        // External autonomous agent with real endpoint — leave in working for external pickup
+        await this.taskService.updateTaskState(taskId, 'working', 'Awaiting external autonomous agent');
+        this.log(taskId, 'info', 'External autonomous agent — task left in working for external pickup');
       } else {
         // Auto-respond for managed agents — generate AI response and complete immediately
         try {

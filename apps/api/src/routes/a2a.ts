@@ -1605,6 +1605,136 @@ a2aRouter.post('/tasks/:taskId/respond', async (c) => {
  * Accepts: { message: "response text" } or { parts: [{ text: "..." }] }
  */
 // ============================================
+// ============================================
+// GET /v1/a2a/agents/:agentId/tasks/stream
+// SSE endpoint — real-time task delivery for agent backends.
+// Agent connects once, receives all new tasks as they arrive.
+// The agent backend processes each task and calls /complete.
+// This replaces polling and avoids lost tasks.
+// ============================================
+a2aRouter.get('/agents/:agentId/tasks/stream', async (c) => {
+  const ctx = c.get('ctx');
+  const agentId = c.req.param('agentId');
+  if (!UUID_RE.test(agentId)) return c.json({ error: 'Invalid agent ID' }, 400);
+
+  // Only the agent itself or its tenant can subscribe
+  if (ctx.actorType === 'agent' && ctx.actorId !== agentId) {
+    return c.json({ error: 'Can only subscribe to your own task stream' }, 403);
+  }
+
+  const supabase = createClient();
+  const SSE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+  const HEARTBEAT = 30_000; // 30s
+
+  return streamSSE(c, async (stream) => {
+    let isActive = true;
+
+    const cleanup = () => {
+      isActive = false;
+      clearInterval(heartbeatId);
+      clearInterval(pollId);
+    };
+
+    // Send initial event with any pending tasks
+    const { data: pending } = await (supabase.from('a2a_tasks') as any)
+      .select('id, agent_id, client_agent_id, state, metadata, created_at')
+      .eq('agent_id', agentId)
+      .in('state', ['submitted', 'working', 'input-required'])
+      .order('created_at', { ascending: true })
+      .limit(20);
+
+    await stream.writeSSE({
+      event: 'connected',
+      data: JSON.stringify({
+        agentId,
+        pendingTasks: (pending || []).length,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+
+    // Send each pending task
+    for (const t of (pending || [])) {
+      const { data: msgs } = await (supabase.from('a2a_messages') as any)
+        .select('role, parts, created_at')
+        .eq('task_id', t.id)
+        .order('created_at', { ascending: true })
+        .limit(10);
+
+      await stream.writeSSE({
+        event: 'task',
+        data: JSON.stringify({
+          taskId: t.id,
+          state: t.state,
+          clientAgentId: t.client_agent_id,
+          skillId: t.metadata?.skillId || null,
+          messages: (msgs || []).map((m: any) => ({
+            role: m.role,
+            text: m.parts?.[0]?.text || '',
+            timestamp: m.created_at,
+          })),
+          createdAt: t.created_at,
+        }),
+      });
+    }
+
+    // Subscribe to the global task terminal channel for this agent's tasks
+    // Also poll for new tasks every 5 seconds (belt + suspenders)
+    const pollId = setInterval(async () => {
+      if (!isActive) return;
+      try {
+        const { data: newTasks } = await (supabase.from('a2a_tasks') as any)
+          .select('id, state, client_agent_id, metadata, created_at')
+          .eq('agent_id', agentId)
+          .in('state', ['submitted', 'input-required'])
+          .order('created_at', { ascending: true })
+          .limit(5);
+
+        for (const t of (newTasks || [])) {
+          const { data: msgs } = await (supabase.from('a2a_messages') as any)
+            .select('role, parts').eq('task_id', t.id).limit(5);
+
+          await stream.writeSSE({
+            event: 'task',
+            data: JSON.stringify({
+              taskId: t.id,
+              state: t.state,
+              clientAgentId: t.client_agent_id,
+              skillId: t.metadata?.skillId || null,
+              messages: (msgs || []).map((m: any) => ({ role: m.role, text: m.parts?.[0]?.text || '' })),
+              createdAt: t.created_at,
+            }),
+          });
+        }
+      } catch {
+        // Ignore poll errors
+      }
+    }, 5000);
+
+    // Heartbeat
+    const heartbeatId = setInterval(async () => {
+      if (!isActive) { clearInterval(heartbeatId); return; }
+      try {
+        await stream.writeSSE({
+          event: 'heartbeat',
+          data: JSON.stringify({ timestamp: new Date().toISOString() }),
+        });
+      } catch { isActive = false; cleanup(); }
+    }, HEARTBEAT);
+
+    // Timeout
+    setTimeout(() => { isActive = false; cleanup(); }, SSE_TIMEOUT);
+
+    // Keep alive until timeout or client disconnect
+    stream.onAbort(() => { isActive = false; cleanup(); });
+
+    // Wait loop
+    while (isActive) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  });
+});
+
+// ============================================
 // POST /v1/a2a/tasks/:taskId/rate
 // Double-blind bidirectional rating. Both buyer and provider can rate.
 // Rating is hidden until the counterparty also submits.

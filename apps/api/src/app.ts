@@ -242,6 +242,9 @@ app.route('/.well-known/ucp', wellKnownUcpRouter);
 // Epic 57: Google A2A Protocol Integration
 app.route('/.well-known/agent.json', wellKnownA2aRouter);
 
+// Agent webhook backend (public — verifies HMAC signature internally)
+app.route('/v1/agent-backend', backendRouter);
+
 // A2A public routes (agent card discovery + JSON-RPC endpoint)
 // Epic 57: Google A2A Protocol Integration
 app.route('/a2a', a2aPublicRouter);
@@ -335,7 +338,6 @@ v1.route('/webhooks', webhooksRouter);
 v1.route('/agentic-payments', agenticPaymentsRouter);
 v1.route('/ap2', ap2Router);
 v1.route('/a2a', a2aRouter); // Google A2A protocol management (Epic 57)
-v1.route('/agent-backend', backendRouter); // Built-in webhook backend for marketplace agents
 v1.route('/acp', acpRouter);
 v1.route('/reconciliation', reconciliationRouter);
 v1.route('/settlement-windows', settlementWindowsRouter);

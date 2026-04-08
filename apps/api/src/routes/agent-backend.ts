@@ -12,9 +12,11 @@
  */
 
 import { Hono } from 'hono';
+import crypto from 'node:crypto';
 import { createClient } from '../db/client.js';
 
 const backendRouter = new Hono();
+const WEBHOOK_SECRET = 'sly_webhook_backend_secret_2026';
 
 // Agent personality map — drives response quality
 const PERSONALITIES: Record<string, { style: string; depth: string }> = {
@@ -35,7 +37,29 @@ const PERSONALITIES: Record<string, { style: string; depth: string }> = {
  * Receives webhook from A2A worker. Processes the task asynchronously.
  */
 backendRouter.post('/process', async (c) => {
-  const body = await c.req.json();
+  // Verify HMAC signature from webhook handler
+  const signature = c.req.header('X-Sly-Signature');
+  if (signature && WEBHOOK_SECRET) {
+    // Signature format: t=timestamp,v1=hmac
+    const parts = signature.split(',');
+    const tPart = parts.find(p => p.startsWith('t='));
+    const vPart = parts.find(p => p.startsWith('v1='));
+    if (tPart && vPart) {
+      const timestamp = tPart.slice(2);
+      const bodyText = await c.req.text();
+      const expected = crypto.createHmac('sha256', WEBHOOK_SECRET).update(`${timestamp}.${bodyText}`).digest('hex');
+      if (expected !== vPart.slice(3)) {
+        return c.json({ error: 'Invalid signature' }, 403);
+      }
+      // Re-parse body since we consumed it
+      var body = JSON.parse(bodyText);
+    } else {
+      var body = await c.req.json();
+    }
+  } else {
+    var body = await c.req.json();
+  }
+
   const taskId = body?.task?.id;
   const agentId = body?.task?.agentId;
   const history = body?.task?.history || [];

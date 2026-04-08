@@ -27,7 +27,7 @@ export interface RateLimitConfig {
 
 const defaultConfig: RateLimitConfig = {
   windowMs: 60000,     // 1 minute
-  maxRequests: 1000,   // 1000 requests per minute (increased for dashboard multi-fetch patterns)
+  maxRequests: 100,    // 100 requests per minute per IP
 };
 
 /**

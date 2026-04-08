@@ -1,5 +1,6 @@
 import { Context, Next } from 'hono';
 import { createClient } from '../db/client.js';
+import crypto from 'node:crypto';
 import { hashApiKey, getKeyPrefix, verifyApiKey } from '../utils/crypto.js';
 import { logSecurityEvent } from '../utils/auth.js';
 import { trackFirstEvent } from '../services/beta-access.js';
@@ -46,8 +47,8 @@ const JWT_CACHE_TTL_MS = 60 * 1000; // 1 minute cache
 const JWT_CACHE_MAX_SIZE = 1000;
 
 function getJWTCacheKey(token: string): string {
-  // Use last 20 chars of token as cache key (faster than hashing)
-  return token.slice(-20);
+  // Hash the full token to avoid cache key collisions
+  return crypto.createHash('sha256').update(token).digest('hex').slice(0, 32);
 }
 
 function getCachedJWT(token: string): RequestContext | null {
@@ -116,8 +117,9 @@ function getCachedAgent(tokenPrefix: string, tokenHash: string): { ctx: RequestC
     return null;
   }
 
-  // Verify hash still matches (constant-time comparison happens in caller)
-  if (entry.tokenHash !== tokenHash) return null;
+  // Constant-time hash comparison to prevent timing attacks
+  if (entry.tokenHash.length !== tokenHash.length ||
+      !crypto.timingSafeEqual(Buffer.from(entry.tokenHash), Buffer.from(tokenHash))) return null;
 
   return { ctx: entry.ctx, agentRow: entry.agentRow };
 }
@@ -224,7 +226,7 @@ export async function authMiddleware(c: Context, next: Next) {
     // Check the new api_keys table first
     const { data: apiKey, error: apiKeyError } = await (supabase
       .from('api_keys') as any)
-      .select('id, tenant_id, environment, status, expires_at, key_hash')
+      .select('id, tenant_id, environment, status, expires_at, key_hash, name')
       .eq('key_prefix', keyPrefix)
       .single();
 
@@ -327,7 +329,7 @@ export async function authMiddleware(c: Context, next: Next) {
         return c.json({ error: 'Invalid API key' }, 401);
       }
     } else {
-      // Fallback to legacy plaintext lookup (for backwards compatibility during migration)
+      // Fallback to legacy plaintext lookup — DEPRECATED, schedule removal
       const legacyResult = await (supabase
         .from('tenants') as any)
         .select('id, name, status')
@@ -336,6 +338,9 @@ export async function authMiddleware(c: Context, next: Next) {
 
       tenant = legacyResult.data;
       error = legacyResult.error;
+      if (tenant) {
+        console.warn(`[Auth] DEPRECATED: Tenant ${tenant.id} using plaintext API key. Migrate to hashed key.`);
+      }
     }
 
     if (error || !tenant) {
@@ -507,6 +512,9 @@ export async function authMiddleware(c: Context, next: Next) {
 
       agent = legacyResult.data;
       error = legacyResult.error;
+      if (agent) {
+        console.warn(`[Auth] DEPRECATED: Agent ${agent.id} using plaintext auth_client_id. Migrate to hashed token.`);
+      }
     }
 
     if (error || !agent) {

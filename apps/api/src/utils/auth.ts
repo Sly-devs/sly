@@ -145,14 +145,7 @@ export async function checkRateLimit(
   windowMs: number,
   maxAttempts: number
 ): Promise<RateLimitResult> {
-  // FORCE BYPASS FOR TESTING
-  if (true) {
-    return {
-      allowed: true,
-      remaining: 999,
-      resetAt: new Date(Date.now() + windowMs)
-    };
-  }
+  // Rate limit bypass removed — was `if (true)` which disabled all rate limiting
 
   const now = new Date();
   const record = rateLimitStore.get(key);

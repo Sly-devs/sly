@@ -89,7 +89,9 @@ async function processTaskAsync(taskId: string, agentId: string, history: any[])
     .single();
 
   if (!agent) {
-    console.error(`[AgentBackend] Agent ${agentId} not found`);
+    // Debug: log the error
+    const { error: dbErr } = await supabase.from('agents').select('id').eq('id', agentId).single();
+    console.error(`[AgentBackend] Agent ${agentId} not found. DB error: ${dbErr?.message || 'no error, just no data'}. URL: ${process.env.SUPABASE_URL?.slice(0, 30)}`);
     return;
   }
 

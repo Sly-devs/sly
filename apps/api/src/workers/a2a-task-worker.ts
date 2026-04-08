@@ -626,23 +626,19 @@ export class A2ATaskWorker {
     const autonomousCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     const { data: stuckTasks } = await supabase
       .from('a2a_tasks')
-      .select('id, tenant_id, metadata, remote_task_id, agent_id')
+      .select('id, tenant_id, metadata, remote_task_id, agent_id, webhook_status')
       .eq('state', 'working')
       .lt('processing_started_at', localCutoff)
       .limit(20);
 
     if (!stuckTasks?.length) return;
 
-    // Filter: forwarded tasks only count as stuck if past the longer cutoff
+    // Filter out tasks that were successfully delivered to a webhook backend.
+    // These are actively being processed by external agents — not stuck.
+    // Also filter forwarded tasks within their longer timeout budget.
     const actuallyStuck = stuckTasks.filter((task: any) => {
-      if (task.remote_task_id) {
-        // Forwarded task — check against longer cutoff
-        // We already filtered by localCutoff, so re-check against forwardedCutoff
-        // by comparing processing_started_at. Since we don't have it in select,
-        // the forwardedCutoff is stricter (older), so if task is past localCutoff
-        // but not forwardedCutoff, skip it.
-        return true; // Will be filtered by atomic claim below if needed
-      }
+      // Webhook-delivered tasks are being worked on externally — don't kill them
+      if (task.webhook_status === 'delivered') return false;
       return true;
     });
 

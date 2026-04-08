@@ -13,7 +13,13 @@
 
 import { Hono } from 'hono';
 import crypto from 'node:crypto';
-import { createClient } from '../db/client.js';
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
+
+function freshClient() {
+  return createSupabaseClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
 
 const backendRouter = new Hono();
 const WEBHOOK_SECRET = 'sly_webhook_backend_secret_2026';
@@ -79,7 +85,7 @@ backendRouter.post('/process', async (c) => {
 });
 
 async function processTaskAsync(taskId: string, agentId: string, history: any[]): Promise<void> {
-  const supabase = createClient();
+  const supabase = freshClient();
 
   // Look up agent name
   const { data: agent, error: agentErr } = await supabase

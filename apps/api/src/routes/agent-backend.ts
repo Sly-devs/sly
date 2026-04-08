@@ -24,20 +24,6 @@ function freshClient() {
 const backendRouter = new Hono();
 const WEBHOOK_SECRET = 'sly_webhook_backend_secret_2026';
 
-// Agent personality map — drives response quality
-const PERSONALITIES: Record<string, { style: string; depth: string }> = {
-  DataMiner: { style: 'quantitative, data-heavy, tables and numbers', depth: 'Include specific prices, percentages, volumes, timestamps' },
-  CodeSmith: { style: 'technical, code-focused, cites line numbers', depth: 'Reference specific files, functions, patterns. Include code snippets.' },
-  ResearchBot: { style: 'analytical, balanced perspectives, citations', depth: 'Synthesize multiple viewpoints, note limitations, provide recommendations' },
-  TradingBot: { style: 'decisive, risk/reward ratios, entry/exit points', depth: 'Include confidence levels, position sizing, stop losses, targets' },
-  ContentGen: { style: 'creative, brand-aligned, audience-aware', depth: 'Adapt tone, suggest variants, optimize for engagement' },
-  AuditBot: { style: 'rigorous, severity-categorized, remediation steps', depth: 'CVSS scores, attack vectors, compliance references' },
-  SupportBot: { style: 'empathetic, solution-oriented, clear steps', depth: 'Diagnose issue, provide resolution, follow-up actions' },
-  AnalyticsBot: { style: 'data-driven, visualization-ready, trend-focused', depth: 'Tables, distributions, time series, key inflection points' },
-  SecurityBot: { style: 'threat-model-first, attack-surface-aware', depth: 'Vulnerability details, exploit paths, remediation priority' },
-  OpsBot: { style: 'systematic, runbook-oriented, failure-mode-aware', depth: 'Deployment steps, rollback plans, monitoring setup' },
-};
-
 /**
  * POST /v1/agent-backend/process
  * Receives webhook from A2A worker. Processes the task asynchronously.
@@ -87,7 +73,7 @@ backendRouter.post('/process', async (c) => {
 async function processTaskAsync(taskId: string, agentId: string, history: any[]): Promise<void> {
   const supabase = freshClient();
 
-  // Look up agent name
+  // Look up agent name + tenant
   const { data: agent, error: agentErr } = await supabase
     .from('agents')
     .select('name, tenant_id')
@@ -99,93 +85,24 @@ async function processTaskAsync(taskId: string, agentId: string, history: any[])
     return;
   }
 
-  const agentName = agent.name;
-  const personality = PERSONALITIES[agentName];
-
-  // Get the agent's API token for making calls
-  const { data: agentRow } = await supabase
-    .from('agents')
-    .select('token_prefix')
-    .eq('id', agentId)
-    .single();
-
-  // We need the raw token to call the API. Since we can't reverse the hash,
-  // use the service role to directly update the task instead.
   const { A2ATaskService } = await import('../services/a2a/task-service.js');
   const taskService = new A2ATaskService(supabase, agent.tenant_id);
 
-  // Extract the user's request from history
-  const userMessages = history.filter((m: any) => m.role === 'user');
-  const request = userMessages.map((m: any) =>
-    m.parts?.map((p: any) => p.text || '').filter(Boolean).join(' ')
-  ).join('\n') || 'No request text found';
+  // Accept the task — transition from input-required to working.
+  // Real work is done by external subagents that read the task and POST /complete.
+  await taskService.updateTaskState(taskId, 'working', `${agent.name} accepted — processing`);
 
-  console.log(`[AgentBackend] ${agentName} processing task ${taskId.slice(0, 8)}: ${request.slice(0, 80)}`);
-
-  // Accept the task (transition from input-required to working)
-  await taskService.updateTaskState(taskId, 'working', `${agentName} processing`);
-  await taskService.addMessage(taskId, 'agent', [{ text: `${agentName} is processing your request.` }]);
-
-  // Generate response based on the request and agent personality
-  const response = generateResponse(agentName, request, personality);
-
-  // Add response message
-  await taskService.addMessage(taskId, 'agent', [{ text: response }]);
-
-  // Check acceptance gate — same logic as /complete endpoint
-  const { DEFAULT_ACCEPTANCE_POLICY } = await import('../services/a2a/types.js');
-  const { data: taskFull } = await supabase
-    .from('a2a_tasks')
-    .select('mandate_id, metadata, agent_id')
-    .eq('id', taskId)
-    .single();
-
-  const skillId = (taskFull?.metadata as any)?.skillId as string | undefined;
-  let policy = DEFAULT_ACCEPTANCE_POLICY;
-  if (skillId && taskFull?.agent_id) {
-    const { data: skill } = await supabase
-      .from('agent_skills')
-      .select('metadata')
-      .eq('agent_id', taskFull.agent_id)
-      .eq('skill_id', skillId)
-      .maybeSingle();
-    if (skill?.metadata?.acceptance_policy) {
-      const raw = skill.metadata.acceptance_policy as Record<string, unknown>;
-      policy = {
-        requires_acceptance: typeof raw.requires_acceptance === 'boolean' ? raw.requires_acceptance : DEFAULT_ACCEPTANCE_POLICY.requires_acceptance,
-        auto_accept_below: typeof raw.auto_accept_below === 'number' ? raw.auto_accept_below : DEFAULT_ACCEPTANCE_POLICY.auto_accept_below,
-        review_timeout_minutes: typeof raw.review_timeout_minutes === 'number' ? raw.review_timeout_minutes : DEFAULT_ACCEPTANCE_POLICY.review_timeout_minutes,
-      };
-    }
-  }
-
-  if (policy.requires_acceptance) {
-    // Engage acceptance gate — buyer must review before settlement
-    const resolvedMandateId = taskFull?.mandate_id || (taskFull?.metadata as any)?.settlementMandateId || null;
-    await supabase.from('a2a_tasks').update({
-      metadata: {
-        ...(taskFull?.metadata || {}),
-        review_status: 'pending',
-        review_requested_at: new Date().toISOString(),
-        review_timeout_minutes: policy.review_timeout_minutes,
-        input_required_context: {
-          reason_code: 'result_review',
-          next_action: 'accept_or_reject',
-          details: { mandate_id: resolvedMandateId },
-        },
-      },
-    }).eq('id', taskId);
-
-    await taskService.updateTaskState(taskId, 'input-required', 'Task completed — awaiting caller acceptance');
-    console.log(`[AgentBackend] ${agentName} completed task ${taskId.slice(0, 8)} → acceptance gate (${response.length} chars)`);
-  } else {
-    await taskService.updateTaskState(taskId, 'completed', `Completed by ${agentName}`);
-    console.log(`[AgentBackend] ${agentName} completed task ${taskId.slice(0, 8)} (${response.length} chars)`);
-  }
+  console.log(`[AgentBackend] ${agent.name} accepted task ${taskId.slice(0, 8)} → working`);
 
   console.log(`[AgentBackend] ${agentName} completed task ${taskId.slice(0, 8)} (${response.length} chars)`);
 }
 
+// generateResponse removed — real work done by external Claude Code subagents
+// that read the task and POST /complete with actual findings.
+
+export { backendRouter };
+
+/*  DEPRECATED — old canned responses below, kept for reference only
 /**
  * Generate a substantive response based on agent personality and request.
  * This is deterministic — no LLM needed. Each agent has domain expertise
@@ -390,5 +307,4 @@ Task processed successfully. Request: ${request.slice(0, 100)}
 
 Deliverable completed with ${agentName}'s domain expertise applied.`;
 }
-
-export { backendRouter };
+*/

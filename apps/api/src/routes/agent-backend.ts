@@ -82,16 +82,14 @@ async function processTaskAsync(taskId: string, agentId: string, history: any[])
   const supabase = createClient();
 
   // Look up agent name
-  const { data: agent } = await supabase
+  const { data: agent, error: agentErr } = await supabase
     .from('agents')
-    .select('name, token_hash, tenant_id')
+    .select('name, tenant_id')
     .eq('id', agentId)
     .single();
 
   if (!agent) {
-    // Debug: log the error
-    const { error: dbErr } = await supabase.from('agents').select('id').eq('id', agentId).single();
-    console.error(`[AgentBackend] Agent ${agentId} not found. DB error: ${dbErr?.message || 'no error, just no data'}. URL: ${process.env.SUPABASE_URL?.slice(0, 30)}`);
+    console.error(`[AgentBackend] Agent ${agentId} not found. Error: ${agentErr?.message || 'null result'}`);
     return;
   }
 

@@ -937,29 +937,27 @@ export class A2ATaskProcessor {
         completed_at: new Date().toISOString(),
       });
 
-      // Fetch both wallets using their respective tenant_ids
-      const { data: callerWallet } = await this.supabase
-        .from('wallets')
-        .select('id, balance, owner_account_id, wallet_type, wallet_address, provider_wallet_id')
-        .eq('managed_by_agent_id', mandate.agent_id)
-        .eq('tenant_id', callerTenantId)
-        .eq('status', 'active')
-        .order('balance', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      // Fetch on-chain wallets preferring circle_custodial > smart_wallet > internal.
+      // This ensures settlements go on-chain instead of staying on internal ledger.
+      const pickOnChainWallet = async (agentId: string, tenantId: string) => {
+        const { data: wallets } = await this.supabase
+          .from('wallets')
+          .select('id, balance, owner_account_id, wallet_type, wallet_address, provider_wallet_id')
+          .eq('managed_by_agent_id', agentId)
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active');
+        if (!wallets?.length) return null;
+        // Prefer on-chain wallets
+        const priority: Record<string, number> = { circle_custodial: 1, smart_wallet: 2, external: 3, internal: 4 };
+        wallets.sort((a: any, b: any) => (priority[a.wallet_type] || 5) - (priority[b.wallet_type] || 5));
+        return wallets[0];
+      };
+
+      const callerWallet = await pickOnChainWallet(mandate.agent_id, callerTenantId);
 
       let providerWallet: any = null;
       if (providerAgentId) {
-        const { data } = await this.supabase
-          .from('wallets')
-          .select('id, balance, wallet_type, wallet_address, provider_wallet_id')
-          .eq('managed_by_agent_id', providerAgentId)
-          .eq('tenant_id', providerTenantId)
-          .eq('status', 'active')
-          .order('balance', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        providerWallet = data;
+        providerWallet = await pickOnChainWallet(providerAgentId, providerTenantId);
       }
 
       if (callerWallet) {

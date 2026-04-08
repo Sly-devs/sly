@@ -65,6 +65,7 @@ import x402BridgeRouter from './routes/x402-bridge.js';
 import wellKnownUcpRouter from './routes/well-known-ucp.js';
 import wellKnownA2aRouter from './routes/well-known-a2a.js';
 import { a2aPublicRouter, a2aRouter } from './routes/a2a.js';
+import { backendRouter } from './routes/agent-backend.js';
 import ucpSchemasRouter from './routes/ucp-schemas.js';
 import ucpRouter from './routes/ucp.js';
 import ucpCheckoutRouter from './routes/ucp-checkout.js';
@@ -334,6 +335,7 @@ v1.route('/webhooks', webhooksRouter);
 v1.route('/agentic-payments', agenticPaymentsRouter);
 v1.route('/ap2', ap2Router);
 v1.route('/a2a', a2aRouter); // Google A2A protocol management (Epic 57)
+v1.route('/agent-backend', backendRouter); // Built-in webhook backend for marketplace agents
 v1.route('/acp', acpRouter);
 v1.route('/reconciliation', reconciliationRouter);
 v1.route('/settlement-windows', settlementWindowsRouter);

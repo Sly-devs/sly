@@ -1516,8 +1516,9 @@ a2aRouter.post('/tasks/:taskId/respond', async (c) => {
         }
 
         const originalAmount = Number(mandate.authorized_amount);
-        if (typeof settlementAmount !== 'number' || settlementAmount <= 0 || settlementAmount > originalAmount) {
-          return c.json({ error: `settlement_amount must be between 0 and ${originalAmount}` }, 400);
+        const minSettlement = Math.max(0.01, originalAmount * 0.10); // Floor: 10% of authorized or $0.01
+        if (typeof settlementAmount !== 'number' || settlementAmount < minSettlement || settlementAmount > originalAmount) {
+          return c.json({ error: `settlement_amount must be between ${minSettlement.toFixed(2)} (10% minimum) and ${originalAmount}` }, 400);
         }
 
         const skillId = taskMeta.skillId;
@@ -1833,12 +1834,14 @@ a2aRouter.post('/tasks/:taskId/rate', async (c) => {
 
   // Verify caller is the right party for this direction.
   // Cross-tenant A2A: client_agent_id may be null (MCP tool doesn't always set it).
-  // In that case, allow any authenticated agent to rate as buyer if the task's
-  // provider is a different agent (they must be the other side of the transaction).
+  // When null, check task metadata for the initiating agent as proof of ownership.
   if (ctx.actorType === 'agent') {
     const isProvider = ctx.actorId === task.agent_id;
     const isBuyer = ctx.actorId === task.client_agent_id;
-    const couldBeBuyer = !task.client_agent_id && ctx.actorId !== task.agent_id;
+    // Only allow as buyer if metadata confirms this agent initiated the task
+    const initiator = (task as any).metadata?.initiatingAgentId;
+    const couldBeBuyer = !task.client_agent_id && ctx.actorId !== task.agent_id
+      && (initiator === ctx.actorId || initiator === undefined); // legacy tasks without initiator get grace period
 
     if (direction === 'buyer_rates_provider' && !isBuyer && !couldBeBuyer) {
       return c.json({ error: 'Only the buyer (task initiator) can rate the provider' }, 403);
@@ -1890,9 +1893,17 @@ a2aRouter.post('/tasks/:taskId/rate', async (c) => {
 
   let revealed = false;
   if (counterpart) {
-    await (supabase.from('a2a_task_feedback') as any).update({ revealed: true, counterparty_feedback_id: counterpart.id }).eq('id', inserted.id);
-    await (supabase.from('a2a_task_feedback') as any).update({ revealed: true, counterparty_feedback_id: inserted.id }).eq('id', counterpart.id);
-    revealed = true;
+    // Atomic reveal: update both ratings in a single RPC to prevent inconsistent state
+    // if one update succeeds and the other fails
+    await supabase.rpc('reveal_double_blind_ratings', {
+      feedback_id_a: inserted.id,
+      feedback_id_b: counterpart.id,
+    }).then(() => { revealed = true; }).catch(async () => {
+      // Fallback if RPC doesn't exist yet — sequential updates (pre-migration)
+      await (supabase.from('a2a_task_feedback') as any).update({ revealed: true, counterparty_feedback_id: counterpart.id }).eq('id', inserted.id);
+      await (supabase.from('a2a_task_feedback') as any).update({ revealed: true, counterparty_feedback_id: inserted.id }).eq('id', counterpart.id);
+      revealed = true;
+    });
   }
 
   return c.json({
@@ -1967,17 +1978,36 @@ a2aRouter.post('/tasks/:taskId/complete', async (c) => {
   await taskService.addMessage(taskId, 'agent', [{ text: responseText }]);
 
   // Check acceptance gate — if policy requires buyer review, set input-required instead of completed
-  const policy = DEFAULT_ACCEPTANCE_POLICY;
+  // Use skill-specific policy if available, otherwise fall back to global default
+  const { data: taskFull } = await supabase
+    .from('a2a_tasks')
+    .select('mandate_id, metadata, agent_id')
+    .eq('id', taskId)
+    .single();
+
+  const skillId = (taskFull?.metadata as any)?.skillId as string | undefined;
+  let policy = DEFAULT_ACCEPTANCE_POLICY;
+  if (skillId && taskFull?.agent_id) {
+    const { data: skill } = await supabase
+      .from('agent_skills')
+      .select('metadata')
+      .eq('agent_id', taskFull.agent_id)
+      .eq('skill_id', skillId)
+      .maybeSingle();
+    if (skill?.metadata?.acceptance_policy) {
+      const raw = skill.metadata.acceptance_policy as Record<string, unknown>;
+      policy = {
+        requires_acceptance: typeof raw.requires_acceptance === 'boolean' ? raw.requires_acceptance : DEFAULT_ACCEPTANCE_POLICY.requires_acceptance,
+        auto_accept_below: typeof raw.auto_accept_below === 'number' && raw.auto_accept_below >= 0 ? raw.auto_accept_below : DEFAULT_ACCEPTANCE_POLICY.auto_accept_below,
+        review_timeout_minutes: typeof raw.review_timeout_minutes === 'number' && raw.review_timeout_minutes > 0 ? raw.review_timeout_minutes : DEFAULT_ACCEPTANCE_POLICY.review_timeout_minutes,
+      };
+    }
+  }
+
   let finalState: A2ATaskState = 'completed';
   let statusMessage = 'Completed by autonomous agent';
 
   if (policy.requires_acceptance) {
-    // Check if there's a mandate to evaluate auto-accept threshold
-    const { data: taskFull } = await supabase
-      .from('a2a_tasks')
-      .select('mandate_id, metadata')
-      .eq('id', taskId)
-      .single();
 
     // Resolve mandate ID from either the task column or metadata (task-processor stores it in metadata)
     const resolvedMandateId = taskFull?.mandate_id
@@ -1997,14 +2027,15 @@ a2aRouter.post('/tasks/:taskId/complete', async (c) => {
     // Engage gate unless amount is below auto-accept threshold AND cumulative spend is low
     let skipGate = false;
     if (policy.auto_accept_below > 0 && amount < policy.auto_accept_below) {
-      // Check cumulative 24h spend per buyer-seller pair to prevent splitting attacks
+      // Check cumulative 24h spend to this seller to prevent splitting attacks.
+      // Track by seller (agent_id) regardless of buyer identity — prevents bypass
+      // via rotating buyer agent IDs or null client_agent_id.
       const CUMULATIVE_THRESHOLD = 1.00;
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const { data: recentTasks } = await supabase
         .from('a2a_tasks')
         .select('metadata')
         .eq('agent_id', (task as any).agent_id)
-        .eq('client_agent_id', (task as any).client_agent_id || '')
         .eq('state', 'completed')
         .gte('updated_at', twentyFourHoursAgo);
 

@@ -827,11 +827,11 @@ export class A2ATaskProcessor {
       const CUMULATIVE_THRESHOLD = 1.00; // $1.00 rolling 24h per buyer-seller pair
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
+      // Track by seller regardless of buyer identity — prevents bypass via rotating agents
       const { data: recentTasks } = await this.supabase
         .from('a2a_tasks')
         .select('metadata')
         .eq('agent_id', task.agent_id)
-        .eq('client_agent_id', task.client_agent_id)
         .eq('tenant_id', this.tenantId)
         .eq('state', 'completed')
         .gte('updated_at', twentyFourHoursAgo);

@@ -330,6 +330,10 @@ async function handleSendA2aTask(
   if (!messageText) {
     return { success: false, error: { code: 'MISSING_PARAM', message: 'message is required' } };
   }
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (targetAgentId && !UUID_RE.test(targetAgentId)) {
+    return { success: false, error: { code: 'INVALID_PARAM', message: 'agent_id must be a valid UUID' } };
+  }
 
   // Build parts from string message
   const parts = [{ text: messageText }];

@@ -1539,12 +1539,13 @@ a2aRouter.post('/tasks/:taskId/respond', async (c) => {
         overrideAmount = settlementAmount;
       }
 
-      // Resolve mandate
+      // Resolve mandate (skip for disputes — funds stay held in escrow)
       if (action === 'accept') {
         await processor.resolveSettlementMandate(taskId, mandateId, 'completed', overrideAmount);
-      } else {
+      } else if (action === 'reject') {
         await processor.resolveSettlementMandate(taskId, mandateId, 'failed');
       }
+      // dispute: mandate stays active — handled below
     }
 
     // Update task state

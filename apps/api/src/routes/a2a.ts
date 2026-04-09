@@ -220,17 +220,20 @@ a2aPublicRouter.post('/', async (c) => {
         .select('id, tenant_id, auth_token_hash, status')
         .eq('auth_token_prefix', prefix)
         .single();
-      if (agentRow && agentRow.auth_token_hash && verifyApiKey(token, agentRow.auth_token_hash)) {
-        // Block suspended/inactive agents from creating tasks
+      if (agentRow) {
+        const hashValid = agentRow.auth_token_hash && verifyApiKey(token, agentRow.auth_token_hash);
+        // Block suspended/inactive agents regardless of hash validity
         if (agentRow.status !== 'active') {
-          console.log(`[A2A Gateway] Blocked ${agentRow.status} agent ${agentRow.id.slice(0, 8)} from creating task`);
+          console.log(`[A2A Gateway] Blocked ${agentRow.status} agent ${agentRow.id.slice(0, 8)}`);
           return c.json({
             jsonrpc: '2.0',
             error: { code: -32004, message: `Agent is ${agentRow.status}. Cannot create tasks.` },
             id: rpcRequest?.id ?? null,
           }, 403);
         }
-        authContext = { tenantId: agentRow.tenant_id, authType: 'agent', agentId: agentRow.id };
+        if (hashValid) {
+          authContext = { tenantId: agentRow.tenant_id, authType: 'agent', agentId: agentRow.id };
+        }
       }
     }
   }

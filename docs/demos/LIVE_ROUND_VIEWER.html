@@ -241,18 +241,23 @@ function handleEvent(type, event) {
   const taskId = event.taskId || '';
   const data = event.data || {};
 
+  // Look up agent IDs from snapshot cache (SSE events don't include them)
+  const cachedTask = state.tasks.find(t => t.id === taskId);
+  const fromId = data.clientAgentId || data.callerAgentId || cachedTask?.client_agent_id;
+  const toId = data.agentId || data.providerAgentId || data._agentId || cachedTask?.agent_id;
+
   if (type === 'status') {
     const toState = data.state || data.toState;
-    const from = N(data.clientAgentId || data.callerAgentId);
-    const to = N(data.agentId || data.providerAgentId);
+    const from = N(fromId);
+    const to = N(toId);
 
     if (toState === 'submitted' || toState === 'working') {
       addFeedItem('arrow', `${from} → ${to} (${toState})`, 'created');
-      addEdge(data.clientAgentId, data.agentId, 'working');
+      addEdge(fromId, toId, 'working');
     } else if (toState === 'completed') {
       addFeedItem('check', `${to} completed task`, 'completed');
       state.metrics.completed++;
-      updateEdge(data.clientAgentId, data.agentId, 'completed');
+      updateEdge(fromId, toId, 'completed');
     } else if (toState === 'failed') {
       addFeedItem('cross', `Task failed: ${data.message || toState}`, 'rejected');
       state.metrics.failed++;

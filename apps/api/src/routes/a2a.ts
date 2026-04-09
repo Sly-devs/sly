@@ -223,7 +223,8 @@ a2aPublicRouter.post('/', async (c) => {
       if (agentRow && agentRow.auth_token_hash && verifyApiKey(token, agentRow.auth_token_hash)) {
         // Block suspended/inactive agents from creating tasks
         if (agentRow.status !== 'active') {
-          return jsonRpc({
+          console.log(`[A2A Gateway] Blocked ${agentRow.status} agent ${agentRow.id.slice(0, 8)} from creating task`);
+          return c.json({
             jsonrpc: '2.0',
             error: { code: -32004, message: `Agent is ${agentRow.status}. Cannot create tasks.` },
             id: rpcRequest?.id ?? null,

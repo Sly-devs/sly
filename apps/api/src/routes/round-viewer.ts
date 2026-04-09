@@ -13,6 +13,16 @@ import { taskEventBus } from '../services/a2a/task-event-bus.js';
 
 const roundViewerRouter = new Hono();
 
+// CORS: allow any origin for the demo viewer (auth via admin key protects access)
+roundViewerRouter.use('*', async (c, next) => {
+  c.header('Access-Control-Allow-Origin', c.req.header('Origin') || '*');
+  c.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  c.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  c.header('Access-Control-Allow-Credentials', 'true');
+  if (c.req.method === 'OPTIONS') return c.text('', 204);
+  return next();
+});
+
 // All routes require platform admin auth.
 // SSE endpoints can't send headers, so also accept ?token= query param.
 roundViewerRouter.use('*', async (c, next) => {

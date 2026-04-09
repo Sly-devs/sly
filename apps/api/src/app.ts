@@ -136,6 +136,7 @@ app.use(
       'http://localhost:3000',
       'http://localhost:5173',
       'http://localhost:3001',
+      'http://localhost:8889', // Live round viewer (demo)
       'https://payos-web.vercel.app', // Production dashboard (legacy)
       'https://sly-ai.vercel.app',    // Production dashboard
       'https://app.getsly.ai',        // Production dashboard (primary)

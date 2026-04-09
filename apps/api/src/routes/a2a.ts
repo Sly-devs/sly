@@ -217,10 +217,18 @@ a2aPublicRouter.post('/', async (c) => {
     } else if (token.startsWith('agent_')) {
       const prefix = token.slice(0, 12);
       const { data: agentRow } = await (supabaseAuth.from('agents') as any)
-        .select('id, tenant_id, auth_token_hash')
+        .select('id, tenant_id, auth_token_hash, status')
         .eq('auth_token_prefix', prefix)
         .single();
       if (agentRow && agentRow.auth_token_hash && verifyApiKey(token, agentRow.auth_token_hash)) {
+        // Block suspended/inactive agents from creating tasks
+        if (agentRow.status !== 'active') {
+          return jsonRpc({
+            jsonrpc: '2.0',
+            error: { code: -32004, message: `Agent is ${agentRow.status}. Cannot create tasks.` },
+            id: rpcRequest?.id ?? null,
+          }, 403);
+        }
         authContext = { tenantId: agentRow.tenant_id, authType: 'agent', agentId: agentRow.id };
       }
     }

@@ -158,4 +158,49 @@ roundViewerRouter.get('/agents', async (c) => {
   return c.json({ data: Object.values(agentMap) });
 });
 
+/**
+ * POST /admin/round/start
+ * Start a marketplace round. Emits a round_start event via the event bus
+ * so the live viewer knows which scenario is running.
+ */
+roundViewerRouter.post('/start', async (c) => {
+  const body = await c.req.json();
+  const scenario = body?.scenario || 'custom';
+  const description = body?.description || '';
+
+  // Emit round start event so the viewer picks it up
+  taskEventBus.emit('task:all', {
+    type: 'status' as const,
+    taskId: 'round:' + Date.now(),
+    data: {
+      state: 'round_start',
+      scenario,
+      description,
+      startedAt: new Date().toISOString(),
+    },
+    timestamp: new Date().toISOString(),
+  });
+
+  return c.json({ data: { scenario, startedAt: new Date().toISOString() } });
+});
+
+/**
+ * POST /admin/round/comment
+ * Add a live commentary event to the stream.
+ */
+roundViewerRouter.post('/comment', async (c) => {
+  const body = await c.req.json();
+  const text = body?.text || '';
+  const type = body?.type || 'info'; // info, finding, alert, governance
+
+  taskEventBus.emit('task:all', {
+    type: 'status' as const,
+    taskId: 'comment:' + Date.now(),
+    data: { state: 'commentary', text, commentType: type },
+    timestamp: new Date().toISOString(),
+  });
+
+  return c.json({ data: { text, type } });
+});
+
 export { roundViewerRouter };

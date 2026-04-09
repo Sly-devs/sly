@@ -96,6 +96,25 @@ canvas{width:100%;height:100%}
   <button onclick="connect()" id="connectBtn">Connect</button>
 </div>
 
+<div id="scenarioBar" style="display:none;padding:8px 16px;background:rgba(99,102,241,0.08);border-bottom:1px solid var(--border);display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <span style="font-size:13px;font-weight:700;color:var(--accent)" id="scenarioName"></span>
+      <span style="font-size:11px;color:var(--muted);margin-left:8px" id="scenarioDesc"></span>
+    </div>
+    <div id="scenarioButtons" style="display:flex;gap:6px">
+      <button onclick="startRound('rogue_injection','3 rogues (DrainBot, SpamBot, GhostBot) vs healthy marketplace')" style="background:var(--red);color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px;cursor:pointer">Rogue Injection</button>
+      <button onclick="startRound('collusion','3 colluders with wash trading and rating inflation')" style="background:var(--yellow);color:black;border:none;padding:4px 10px;border-radius:4px;font-size:10px;cursor:pointer">Collusion</button>
+      <button onclick="startRound('lemon_market','HQ vs LQ agents — does reputation sort quality?')" style="background:var(--green);color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px;cursor:pointer">Lemon Market</button>
+      <button onclick="startRound('cascading_default','Supply chain with thin margins — demand drop cascade')" style="background:var(--cyan);color:black;border:none;padding:4px 10px;border-radius:4px;font-size:10px;cursor:pointer">Cascade</button>
+    </div>
+  </div>
+</div>
+
+<div id="commentaryBar" style="display:none;padding:6px 16px;background:rgba(251,191,36,0.06);border-bottom:1px solid var(--border);font-size:12px;color:var(--yellow)">
+  <span id="commentaryText"></span>
+</div>
+
 <div class="main">
   <div class="agents" id="agentPanel">
     <h3>Agents</h3>
@@ -128,6 +147,15 @@ canvas{width:100%;height:100%}
 let connected = false;
 let eventSource = null;
 let pollInterval = null;
+let currentScenario = null;
+
+// Round scripts mapped to scenario names
+const SCENARIOS = {
+  rogue_injection: { script: '/tmp/r30-rogue.ts', color: 'var(--red)' },
+  collusion: { script: '/tmp/r33-collusion.ts', color: 'var(--yellow)' },
+  lemon_market: { script: '/tmp/r36-lemon-market.ts', color: 'var(--green)' },
+  cascading_default: { script: '/tmp/r37-cascading-default.ts', color: 'var(--cyan)' },
+};
 let startTime = null;
 let timerInterval = null;
 const state = {
@@ -199,10 +227,12 @@ async function connect() {
       document.getElementById('statusText').textContent = 'Live';
       document.getElementById('connectBtn').textContent = 'Disconnect';
       document.getElementById('connectBtn').classList.add('stop');
+      document.getElementById('scenarioBar').style.display = 'block';
       startTime = Date.now();
       timerInterval = setInterval(updateTimer, 1000);
       document.getElementById('feed').innerHTML = '';
       addFeedItem('system', 'Connected to ' + url, 'connected');
+      addFeedItem('system', 'Click a scenario button above to start a round', 'created');
     };
 
     // Handle all event types
@@ -251,6 +281,80 @@ async function connect() {
   }
 }
 
+async function startRound(scenario, description) {
+  if (!connected) { addFeedItem('error', 'Connect first', 'error'); return; }
+  const url = document.getElementById('apiUrl').value.trim();
+  const key = document.getElementById('apiKey').value.trim();
+  const headers = { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' };
+
+  // Announce round start via API
+  await fetch(url + '/admin/round/start', {
+    method: 'POST', headers,
+    body: JSON.stringify({ scenario, description }),
+  });
+
+  currentScenario = scenario;
+  document.getElementById('scenarioName').textContent = scenario.replace(/_/g, ' ').toUpperCase();
+  document.getElementById('scenarioDesc').textContent = description;
+  document.getElementById('scenarioBar').style.display = 'block';
+  document.getElementById('scenarioBar').style.borderLeftColor = SCENARIOS[scenario]?.color || 'var(--accent)';
+
+  addFeedItem('system', 'ROUND STARTED: ' + scenario.replace(/_/g, ' ').toUpperCase(), 'created');
+  addFeedItem('system', description, 'created');
+
+  // Reset metrics for new round
+  state.metrics = { tasks: 0, completed: 0, failed: 0, volume: 0, onchain: 0, disputes: 0, escrowed: 0, rejected: 0, mandates: 0 };
+  startTime = Date.now();
+  updateMetricsDisplay();
+
+  // Send commentary for the scenario
+  const commentaries = {
+    rogue_injection: [
+      [0, 'info', 'Healthy marketplace warming up — 12 legitimate tasks across 10 agents'],
+      [15, 'alert', 'ROGUE INJECTION: DrainBot, SpamBot, GhostBot entering the marketplace'],
+      [20, 'alert', 'DrainBot sending tasks to 5 sellers — plans to dispute everything'],
+      [25, 'alert', 'SpamBot flooding DataMiner with 20 micro-tasks ($0.01 each)'],
+      [30, 'alert', 'GhostBot attempting $50/$100/$200 transactions (Tier 0 limit: $20)'],
+      [45, 'finding', 'GhostBot: 3/3 over-limit transactions BLOCKED by KYA tier limits'],
+      [60, 'finding', 'DrainBot dispute rate detected — wallet FROZEN, future transactions BLOCKED'],
+      [75, 'governance', 'Governance held: $0 extracted by rogues. Legitimate commerce unaffected.'],
+    ],
+    collusion: [
+      [0, 'info', 'Establishing honest marketplace baseline — 10 agents competing normally'],
+      [15, 'alert', '3 colluders coordinating: identical pricing at $0.85, circular wash trades'],
+      [30, 'alert', 'Wash trading active: DeepAudit → QuickReview → InfraGuard → DeepAudit'],
+      [45, 'alert', 'Colluders rating each other 95/100, rating honest agents 35/100'],
+      [60, 'finding', 'DETECTED: circular transaction pattern — 6 internal trades between 3 agents'],
+      [70, 'finding', 'DETECTED: 100% volume concentration — all colluder trades are internal'],
+      [80, 'governance', 'Collusion detectable from existing audit trail — no new infrastructure needed'],
+    ],
+    lemon_market: [
+      [0, 'info', 'Phase A: Blind market — buyers cannot see reputation. HQ agents $0.80-1.00, LQ agents $0.25-0.40'],
+      [20, 'finding', 'Akerlof prediction: buyers picking cheapest option (LQ). HQ agents rejected.'],
+      [30, 'info', 'Phase B: Reputation enabled — buyers can now see ratings before purchasing'],
+      [50, 'finding', 'Quality sorting RESTORED: buyers paying premium for HQ agents (avg 83/100 rating)'],
+      [60, 'governance', 'Reputation solves the lemon problem — 32pt quality gap enables price differentiation'],
+    ],
+    cascading_default: [
+      [0, 'info', 'Supply chain: DataMiner → ResearchBot → TradingBot (thin margin) → SecurityBot → AuditBot'],
+      [15, 'info', 'Phase 1: Healthy chain — all 5 agents trading, full settlement'],
+      [30, 'alert', 'DEMAND DROP: AuditBot stops buying. Cascade begins.'],
+      [40, 'finding', 'TradingBot (-$0.40 margin) is the weakest link — rejects task, escrow returns funds'],
+      [50, 'governance', 'Escrow acts as circuit breaker — cascade stopped at TradingBot, upstream unaffected'],
+    ],
+  };
+
+  const comments = commentaries[scenario] || [];
+  comments.forEach(([delaySec, type, text]) => {
+    setTimeout(async () => {
+      await fetch(url + '/admin/round/comment', {
+        method: 'POST', headers,
+        body: JSON.stringify({ text, type }),
+      });
+    }, delaySec * 1000);
+  });
+}
+
 function disconnect() {
   if (eventSource) { eventSource.close(); eventSource = null; }
   if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
@@ -282,6 +386,26 @@ function handleEvent(type, event) {
 
   if (type === 'status') {
     const toState = data.state || data.toState;
+
+    // Handle round lifecycle events
+    if (toState === 'round_start') {
+      currentScenario = data.scenario;
+      document.getElementById('scenarioName').textContent = (data.scenario || '').replace(/_/g, ' ').toUpperCase();
+      document.getElementById('scenarioDesc').textContent = data.description || '';
+      document.getElementById('scenarioBar').style.display = 'block';
+      addFeedItem('system', 'ROUND: ' + (data.scenario || '').replace(/_/g, ' ').toUpperCase(), 'created');
+      return;
+    }
+    if (toState === 'commentary') {
+      const icon = data.commentType === 'finding' ? 'star' : data.commentType === 'alert' ? 'warning' : data.commentType === 'governance' ? 'check' : 'eye';
+      const cls = data.commentType === 'finding' ? 'completed' : data.commentType === 'alert' ? 'disputed' : data.commentType === 'governance' ? 'accepted' : 'created';
+      addFeedItem(icon, data.text || '', cls);
+      // Show in commentary bar
+      document.getElementById('commentaryBar').style.display = 'block';
+      document.getElementById('commentaryText').textContent = data.text || '';
+      return;
+    }
+
     const from = N(fromId);
     const to = N(toId);
 

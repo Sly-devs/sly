@@ -321,9 +321,17 @@ a2aPublicRouter.post('/:agentId', async (c) => {
       // Agent token auth — prefix lookup + hash verification
       const prefix = token.slice(0, 12);
       const { data: agentRow } = await (supabase.from('agents') as any)
-        .select('id, tenant_id, auth_token_hash')
+        .select('id, tenant_id, auth_token_hash, status')
         .eq('auth_token_prefix', prefix)
         .single();
+      // Block suspended/inactive agents before hash check
+      if (agentRow && agentRow.status !== 'active') {
+        return jsonRpc({
+          jsonrpc: '2.0',
+          error: { code: -32004, message: `Agent is ${agentRow.status}. Cannot create tasks.` },
+          id: null,
+        }, 403);
+      }
       if (agentRow && agentRow.auth_token_hash && verifyApiKey(token, agentRow.auth_token_hash)) {
         tenantId = agentRow.tenant_id;
         callerAgentId = agentRow.id;
@@ -331,7 +339,6 @@ a2aPublicRouter.post('/:agentId', async (c) => {
     }
 
     // A token was provided but failed verification → reject with 401.
-    // This is the "don't silently accept bad tokens" fix.
     if (!tenantId && !callerAgentId) {
       return jsonRpc({
         jsonrpc: '2.0',

@@ -108,6 +108,25 @@ app.use('*', requestId);
 // Timing tracking (must be early to track full request time)
 app.use('*', timingMiddleware);
 
+// CORS preflight for admin round viewer — must be BEFORE response wrapper
+app.use('/admin/round/*', async (c, next) => {
+  if (c.req.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': c.req.header('Origin') || '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Access-Control-Max-Age': '86400',
+      },
+    });
+  }
+  // For non-OPTIONS, add CORS header to actual response
+  c.header('Access-Control-Allow-Origin', c.req.header('Origin') || '*');
+  c.header('Access-Control-Allow-Credentials', 'true');
+  await next();
+});
+
 // Response wrapper (wraps all responses in structured format)
 app.use('*', responseWrapperMiddleware);
 
@@ -127,19 +146,6 @@ if (process.env.NODE_ENV !== 'production') {
 if (process.env.NODE_ENV !== 'production') {
   app.use('*', prettyJSON());
 }
-
-// CORS preflight for admin round viewer — raw Response to bypass all middleware
-app.on('OPTIONS', '/admin/round/*', (c) => {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': c.req.header('Origin') || '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Access-Control-Max-Age': '86400',
-    },
-  });
-});
 
 // CORS configuration
 app.use(

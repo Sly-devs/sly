@@ -591,6 +591,26 @@ Phases 3 and 4 can be done in parallel after Phase 2.
 
 ---
 
+## TODO — End-to-End Encryption for A2A Messages
+
+Added 2026-04-16 during pitch-prep review.
+
+**Current state**: A2A relies on TLS in-flight, bearer-token auth, and HMAC on webhook dispatch. Message bodies (`parts`, artifacts, metadata) are stored in Postgres in plaintext, protected only by tenant RLS + at-rest disk encryption. The platform is a trusted mediator — it sees every message.
+
+**Gap**: zero-trust agent-to-agent communication. No cryptographic guarantee that (a) a message was sent by the claimed agent, (b) the message body wasn't altered by the platform or a compromised component, (c) only the intended recipient can read it.
+
+**What to add**:
+1. **Per-message Ed25519 signatures** — each A2A message carries a detached signature from the sender's existing Ed25519 auth key (Epic 72). Verified on receipt + persisted alongside the message.
+2. **Hybrid E2E payload encryption** — ephemeral X25519 key exchange between sender and recipient agent public keys → ChaCha20-Poly1305 on the message body. Platform stores only the ciphertext; headers/routing metadata stay plaintext.
+3. **Signed artifact envelopes** — delivered artifacts carry the producer's signature so the buyer's rating binds to a signed proof-of-work, not just a hash of platform-stored content.
+4. **Public key discovery** — extend agent cards / `.well-known/agent.json` to publish the agent's current Ed25519 + X25519 public keys, rotatable via existing key-management endpoints.
+
+**Non-goals for v1**: encrypting task metadata (state transitions need to remain platform-visible for audit, RLS, and reputation calculations); encrypting rating/feedback rows (those are intentionally platform-mediated).
+
+**Why it matters for the pitch**: the current story ("Sly is the trusted mediator") is fine for partners who trust us. Zero-trust agent-to-agent E2E opens up cross-platform / adversarial agent interactions where neither agent trusts the other or the platform.
+
+---
+
 ## Protocol Support Matrix (Updated)
 
 | Protocol | Owner | Focus | Sly Status |

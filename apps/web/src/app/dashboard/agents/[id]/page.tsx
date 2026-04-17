@@ -31,9 +31,12 @@ import {
   Star,
   ThumbsUp,
   ThumbsDown,
+  ExternalLink,
 } from 'lucide-react';
 import { useQuery as useTanstackQuery } from '@tanstack/react-query';
 import type { Agent, Stream, AgentLimits } from '@sly/api-client';
+import { AgentAvatar } from '@/components/agents/agent-avatar';
+import { AvatarUpload } from '@/components/agents/avatar-upload';
 import {
   Badge,
   Table,
@@ -280,14 +283,7 @@ export default function AgentDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-8">
         <div className="flex items-center gap-4">
-          {(() => {
-            const { Icon, bgColor, textColor } = getAgentIcon(agent.name);
-            return (
-              <div className={`w-16 h-16 ${bgColor} rounded-2xl flex items-center justify-center`}>
-                <Icon className={`h-8 w-8 ${textColor}`} />
-              </div>
-            );
-          })()}
+          <AgentAvatar agent={agent as any} size="lg" />
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{agent.name}</h1>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
@@ -559,6 +555,424 @@ function AgentRatingBadge({ agentId }: { agentId: string }) {
   );
 }
 
+const TIER_COLORS: Record<string, string> = {
+  A: 'text-emerald-600 dark:text-emerald-400',
+  B: 'text-blue-600 dark:text-blue-400',
+  C: 'text-yellow-600 dark:text-yellow-400',
+  D: 'text-orange-600 dark:text-orange-400',
+  E: 'text-red-600 dark:text-red-400',
+  F: 'text-gray-500 dark:text-gray-500',
+};
+
+function ReputationCard({ agentId }: { agentId: string }) {
+  const { apiUrl } = useApiConfig();
+  const apiFetch = useApiFetch();
+
+  const { data: reputation, isLoading } = useTanstackQuery({
+    queryKey: ['agent-reputation', agentId],
+    queryFn: async () => {
+      const res = await apiFetch(`${apiUrl}/v1/reputation/${agentId}`);
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.data ?? json;
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+        <div className="animate-pulse space-y-3">
+          <div className="h-5 w-32 bg-gray-200 dark:bg-gray-800 rounded" />
+          <div className="h-12 w-24 bg-gray-200 dark:bg-gray-800 rounded" />
+          <div className="h-3 w-full bg-gray-200 dark:bg-gray-800 rounded-full" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!reputation) {
+    return (
+      <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+        <div className="flex items-center gap-3 mb-2">
+          <Shield className="h-5 w-5 text-gray-400" />
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Reputation</h3>
+        </div>
+        <p className="text-sm text-gray-400">No reputation data available yet.</p>
+      </div>
+    );
+  }
+
+  const score: number = reputation.score ?? reputation.trust_score ?? reputation.trustScore ?? 0;
+  const tier: string = reputation.tier ?? 'F';
+  const confidence: string = reputation.confidence ?? reputation.confidence_level ?? 'low';
+  const scorePct = Math.min((score / 1000) * 100, 100);
+  const dimensions: Array<{ name: string; score: number; weight: number; sources?: string[]; dataPoints?: number }> =
+    reputation.dimensions ?? [];
+
+  // Human-readable labels + descriptions for each dimension
+  const DIM_META: Record<string, { label: string; icon: string; desc: string }> = {
+    identity: {
+      label: 'Identity',
+      icon: '🛡️',
+      desc: 'On-chain NFT + KYA tier + account age + rating volume',
+    },
+    service_quality: {
+      label: 'Service Quality',
+      icon: '⭐',
+      desc: 'Buyer ratings, accept rate, completion history',
+    },
+    trade_volume: {
+      label: 'Trade Volume',
+      icon: '📈',
+      desc: 'Settled transaction history',
+    },
+    dispute_rate: {
+      label: 'Dispute Rate',
+      icon: '⚖️',
+      desc: 'Frequency of filed disputes',
+    },
+    age: {
+      label: 'Account Age',
+      icon: '📅',
+      desc: 'How long the agent has been active',
+    },
+  };
+
+  const SOURCE_LABELS: Record<string, string> = {
+    erc8004: 'ERC-8004 NFT',
+    a2a_feedback: 'A2A trade ratings',
+    ap2_mandates: 'AP2 payment mandates',
+    kya: 'KYA verification',
+    disputes: 'Dispute history',
+  };
+
+  const scoreColor =
+    score >= 800 ? 'text-emerald-600 dark:text-emerald-400' :
+    score >= 600 ? 'text-blue-600 dark:text-blue-400' :
+    score >= 400 ? 'text-yellow-600 dark:text-yellow-400' :
+    score >= 200 ? 'text-orange-600 dark:text-orange-400' :
+    'text-red-600 dark:text-red-400';
+
+  const barColor =
+    score >= 800 ? 'bg-emerald-500' :
+    score >= 600 ? 'bg-blue-500' :
+    score >= 400 ? 'bg-yellow-500' :
+    score >= 200 ? 'bg-orange-500' :
+    'bg-red-500';
+
+  return (
+    <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+      <div className="flex items-center gap-3 mb-4">
+        <Shield className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Reputation</h3>
+      </div>
+      <div className="flex items-end gap-4 mb-4">
+        <div className={`text-5xl font-bold tabular-nums ${scoreColor}`}>{score}</div>
+        <div className="mb-1">
+          <span className="text-sm text-gray-400">/ 1000</span>
+        </div>
+        <div className="ml-auto">
+          <span className={`text-3xl font-bold ${TIER_COLORS[tier] ?? TIER_COLORS['F']}`}>
+            {tier}
+          </span>
+          <span className="ml-1 text-xs text-gray-400 uppercase tracking-wide">tier</span>
+        </div>
+      </div>
+      <div className="h-2.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden mb-3">
+        <div
+          className={`h-full rounded-full transition-all ${barColor}`}
+          style={{ width: `${scorePct}%` }}
+        />
+      </div>
+      <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 mb-4">
+        <span className="flex items-center gap-3">
+          <span>Confidence: <span className="capitalize font-medium">{confidence}</span></span>
+          {typeof reputation.ratingCount === 'number' && reputation.ratingCount > 0 && (
+            <span>
+              <span className="font-medium">{reputation.ratingCount}</span>{' '}
+              rating{reputation.ratingCount === 1 ? '' : 's'}
+            </span>
+          )}
+        </span>
+        <span>0 — 1000</span>
+      </div>
+
+      {/* Dimension breakdown — shows why the score is what it is */}
+      {dimensions.length > 0 && (
+        <div className="pt-4 border-t border-gray-100 dark:border-gray-800">
+          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">
+            How it's calculated
+          </div>
+          <div className="space-y-3">
+            {dimensions.map((dim) => {
+              const meta = DIM_META[dim.name] ?? { label: dim.name, icon: '•', desc: '' };
+              const weightPct = Math.round(dim.weight * 100);
+              const contribution = Math.round(dim.score * dim.weight);
+              const dimPct = Math.min((dim.score / 1000) * 100, 100);
+              const dimColor =
+                dim.score >= 800 ? 'bg-emerald-500' :
+                dim.score >= 600 ? 'bg-blue-500' :
+                dim.score >= 400 ? 'bg-yellow-500' :
+                dim.score >= 200 ? 'bg-orange-500' : 'bg-red-500';
+              return (
+                <div key={dim.name} className="text-xs">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm">{meta.icon}</span>
+                      <span className="font-medium text-gray-900 dark:text-white">{meta.label}</span>
+                      <span className="text-gray-400">×</span>
+                      <span className="text-gray-500 dark:text-gray-400 font-medium">{weightPct}%</span>
+                    </div>
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="tabular-nums font-semibold text-gray-900 dark:text-white">{dim.score}</span>
+                      <span className="text-gray-400">→</span>
+                      <span className="tabular-nums font-semibold text-indigo-600 dark:text-indigo-400">+{contribution}</span>
+                    </div>
+                  </div>
+                  <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden mb-1">
+                    <div className={`h-full rounded-full ${dimColor}`} style={{ width: `${dimPct}%` }} />
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-gray-500 dark:text-gray-400">
+                    <span>{meta.desc}</span>
+                    {dim.sources && dim.sources.length > 0 && (
+                      <span className="text-gray-400">
+                        {dim.sources.map((s) => SOURCE_LABELS[s] ?? s).join(', ')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between text-xs">
+            <span className="text-gray-500 dark:text-gray-400">
+              Total: {dimensions.map((d, i) => (
+                <span key={d.name}>
+                  {i > 0 && ' + '}
+                  <span className="tabular-nums">{Math.round(d.score * d.weight)}</span>
+                </span>
+              ))}
+            </span>
+            <span className={`tabular-nums font-bold ${scoreColor}`}>= {score}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RatingHistoryCard({ agentId }: { agentId: string }) {
+  const { apiUrl } = useApiConfig();
+  const apiFetch = useApiFetch();
+
+  const { data: ratingsData, isLoading } = useTanstackQuery({
+    queryKey: ['agent-ratings-history', agentId],
+    queryFn: async () => {
+      const res = await apiFetch(`${apiUrl}/v1/agents/${agentId}/ratings?limit=50`);
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.data ?? json;
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+        <div className="animate-pulse space-y-3">
+          <div className="h-5 w-40 bg-gray-200 dark:bg-gray-800 rounded" />
+          {[...Array(3)].map((_, i) => (
+            <div key={i} className="h-10 bg-gray-200 dark:bg-gray-800 rounded" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const ratings: any[] = Array.isArray(ratingsData) ? ratingsData : (ratingsData?.ratings ?? ratingsData?.items ?? []);
+  const aggregate = ratingsData?.aggregate ?? ratingsData?.summary ?? null;
+
+  const totalRatings = aggregate?.total ?? ratings.length;
+  const avgScore = aggregate?.avg_score ?? aggregate?.avgScore ?? (
+    ratings.length > 0
+      ? Math.round(ratings.reduce((s: number, r: any) => s + (r.score ?? r.rating ?? 0), 0) / ratings.length)
+      : null
+  );
+  const acceptCount = ratings.filter((r: any) => (r.action ?? r.outcome) === 'accept').length;
+  const rawAcceptRate = (aggregate?.accept_rate ?? aggregate?.acceptRate);
+  // API returns acceptRate as a percentage (e.g. 68), not a decimal (0.68).
+  // If > 1, it's already a percentage. If <= 1, it's a decimal ratio.
+  const acceptRate = totalRatings > 0
+    ? (rawAcceptRate != null
+        ? (rawAcceptRate > 1 ? rawAcceptRate / 100 : rawAcceptRate)
+        : (acceptCount / totalRatings))
+    : null;
+
+  if (ratings.length === 0 && !aggregate) {
+    return (
+      <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+        <div className="flex items-center gap-3 mb-2">
+          <Star className="h-5 w-5 text-gray-400" />
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Rating History</h3>
+        </div>
+        <p className="text-sm text-gray-400">No ratings recorded yet.</p>
+      </div>
+    );
+  }
+
+  const satisfactionBadge: Record<string, string> = {
+    excellent: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
+    acceptable: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
+    partial: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+    unacceptable: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+      <div className="flex items-center gap-3 mb-4">
+        <Star className="h-5 w-5 text-amber-500" />
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Rating History</h3>
+      </div>
+
+      {/* Aggregate stats */}
+      <div className="grid grid-cols-3 gap-4 mb-5">
+        <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-3 text-center">
+          <div className="text-2xl font-bold text-gray-900 dark:text-white">{totalRatings}</div>
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Total Ratings</div>
+        </div>
+        <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-3 text-center">
+          <div className="text-2xl font-bold text-gray-900 dark:text-white">
+            {avgScore !== null ? avgScore : '—'}
+            {avgScore !== null && <span className="text-sm font-normal text-gray-400">/100</span>}
+          </div>
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Avg Score</div>
+        </div>
+        <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-3 text-center">
+          <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+            {acceptRate !== null ? `${(acceptRate * 100).toFixed(0)}%` : '—'}
+          </div>
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Accept Rate</div>
+        </div>
+      </div>
+
+      {/* Recent ratings table */}
+      {ratings.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 dark:border-gray-800">
+                <th className="text-left pb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Date</th>
+                <th className="text-left pb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Rated by</th>
+                <th className="text-left pb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Score</th>
+                <th className="text-left pb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Satisfaction</th>
+                <th className="text-left pb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Action</th>
+                <th className="text-left pb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Comment</th>
+                <th className="text-left pb-2 text-xs font-medium text-gray-500 dark:text-gray-400">On-chain</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {ratings.slice(0, 50).map((r: any, idx: number) => {
+                const dateStr = r.created_at ?? r.createdAt ?? r.rated_at ?? r.ratedAt ?? '';
+                const score = r.score ?? r.rating ?? null;
+                const satisfaction = r.satisfaction ?? r.satisfaction_level ?? '';
+                const action = r.action ?? r.outcome ?? '';
+                const comment = r.comment ?? r.feedback ?? '';
+                const rater = r.rater ?? null;
+                return (
+                  <tr key={r.id ?? idx} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+                    <td className="py-2 pr-4 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                      {dateStr ? format(new Date(dateStr), 'MMM d, yyyy') : '—'}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap">
+                      {rater ? (
+                        <a
+                          href={`/dashboard/agents/${rater.id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-indigo-600 dark:text-indigo-400 hover:underline"
+                          title={rater.id}
+                        >
+                          {rater.name}
+                        </a>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 font-medium text-gray-900 dark:text-white">
+                      {score !== null ? score : '—'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {satisfaction ? (
+                        <span className={`px-2 py-0.5 text-xs rounded-full capitalize ${satisfactionBadge[satisfaction] ?? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'}`}>
+                          {satisfaction}
+                        </span>
+                      ) : '—'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {action === 'accept' ? (
+                        <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                          <ThumbsUp className="h-3.5 w-3.5" /> Accept
+                        </span>
+                      ) : action === 'reject' ? (
+                        <span className="flex items-center gap-1 text-red-500 dark:text-red-400">
+                          <ThumbsDown className="h-3.5 w-3.5" /> Reject
+                        </span>
+                      ) : action ? (
+                        <span className="capitalize text-gray-500">{action}</span>
+                      ) : '—'}
+                    </td>
+                    <td className="py-2 pr-4 text-gray-500 dark:text-gray-400 max-w-[200px] truncate" title={comment}>
+                      {comment || '—'}
+                    </td>
+                    <td className="py-2 whitespace-nowrap">
+                      {r.attestation ? (
+                        <div className="flex items-center gap-2">
+                          {r.attestation.eascanUrl && (
+                            <a
+                              href={r.attestation.eascanUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+                              title={`EAS attestation ${r.attestation.uid}`}
+                            >
+                              <ExternalLink className="h-3 w-3" /> EAS
+                            </a>
+                          )}
+                          {r.attestation.txHash && (
+                            <a
+                              href={`https://sepolia.basescan.org/tx/${r.attestation.txHash}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400 hover:underline"
+                              title={`Tx ${r.attestation.txHash}`}
+                            >
+                              tx
+                            </a>
+                          )}
+                          {r.attestation.artifactHash && (
+                            <span
+                              className="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-500 font-mono"
+                              title={`Artifact SHA-256: ${r.attestation.artifactHash}`}
+                            >
+                              PoW {String(r.attestation.artifactHash).slice(0, 8)}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-gray-400 text-xs">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Overview Tab
 function OverviewTab({ agent, limits }: { agent: Agent; limits: AgentLimits | null }) {
   return (
@@ -566,6 +980,15 @@ function OverviewTab({ agent, limits }: { agent: Agent; limits: AgentLimits | nu
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
         <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Agent Details</h3>
+        <div className="mb-5 pb-5 border-b border-gray-100 dark:border-gray-800">
+          <dt className="text-gray-500 dark:text-gray-400 text-sm mb-3">Avatar</dt>
+          <AvatarUpload
+            agentId={agent.id}
+            agentName={agent.name}
+            currentUrl={(agent as any).avatarUrl ?? (agent as any).avatar_url ?? null}
+            size="lg"
+          />
+        </div>
         <dl className="space-y-4">
           <div className="flex justify-between">
             <dt className="text-gray-500 dark:text-gray-400">Agent ID</dt>

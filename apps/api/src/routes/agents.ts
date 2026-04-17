@@ -3073,6 +3073,77 @@ agents.patch('/:id/skills/:skillId', async (c) => {
 });
 
 /**
+ * GET /v1/agents/:id/ratings — Rating history for an agent.
+ * Returns all a2a_task_feedback entries where this agent was the provider,
+ * ordered by time. Used by the dashboard and the sim to show reputation trends.
+ */
+agents.get('/:id/ratings', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID');
+  const limit = Math.min(parseInt(c.req.query('limit') || '100', 10), 500);
+
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('a2a_task_feedback')
+    .select('id, task_id, score, satisfaction, action, comment, direction, revealed, created_at, skill_id, caller_agent_id, provider_agent_id')
+    .eq('provider_agent_id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) throw new ValidationError(`Failed to fetch ratings: ${error.message}`);
+
+  const rawRatings = (data || []) as any[];
+
+  // Resolve rater names in a single lookup
+  const raterIds = Array.from(new Set(rawRatings.map(r => r.caller_agent_id).filter(Boolean)));
+  const raterById: Record<string, { id: string; name: string }> = {};
+  if (raterIds.length > 0) {
+    const { data: raters } = await supabase
+      .from('agents')
+      .select('id, name')
+      .in('id', raterIds) as any;
+    for (const r of (raters as any[]) ?? []) raterById[r.id] = r;
+  }
+
+  // Fetch attestation metadata for each task in one call
+  const taskIds = Array.from(new Set(rawRatings.map(r => r.task_id).filter(Boolean)));
+  const attestationByTask: Record<string, any> = {};
+  if (taskIds.length > 0) {
+    const { data: tasks } = await supabase
+      .from('a2a_tasks')
+      .select('id, metadata')
+      .in('id', taskIds) as any;
+    for (const t of (tasks as any[]) ?? []) {
+      const att = (t.metadata as any)?.attestation;
+      if (att) attestationByTask[t.id] = att;
+    }
+  }
+
+  const ratings = rawRatings.map(r => ({
+    ...r,
+    rater: r.caller_agent_id ? (raterById[r.caller_agent_id] ?? { id: r.caller_agent_id, name: 'Unknown' }) : null,
+    attestation: r.task_id ? (attestationByTask[r.task_id] ?? null) : null,
+  }));
+  const scores = ratings.filter((r: any) => typeof r.score === 'number').map((r: any) => r.score);
+  const avgScore = scores.length > 0 ? Math.round(scores.reduce((a: number, b: number) => a + b, 0) / scores.length) : null;
+  const acceptCount = ratings.filter((r: any) => r.action === 'accept').length;
+  const rejectCount = ratings.filter((r: any) => r.action === 'reject').length;
+
+  return c.json({
+    data: ratings,
+    aggregate: {
+      total: ratings.length,
+      avgScore,
+      acceptCount,
+      rejectCount,
+      acceptRate: ratings.length > 0 ? Math.round((acceptCount / ratings.length) * 100) : null,
+    },
+  });
+});
+
+/**
  * DELETE /v1/agents/:id/skills/:skillId — Remove a skill
  */
 agents.delete('/:id/skills/:skillId', async (c) => {

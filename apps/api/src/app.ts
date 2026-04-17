@@ -91,6 +91,7 @@ import usageRouter from './routes/usage.js';
 import agentWalletsRouter from './routes/agent-wallets.js';
 import betaAdminRouter from './routes/beta-admin.js';
 import reputationRouter from './routes/reputation.js';
+import tierLimitsRouter from './routes/tier-limits.js';
 import mppRouter from './routes/mpp.js';
 import compositionRouter from './routes/composition.js';
 import mcpRouter from './routes/mcp.js';
@@ -390,6 +391,7 @@ v1.route('/portal-tokens', portalTokensRouter); // Portal token CRUD (Epic 65)
 v1.route('/usage', usageRouter); // Usage API (Epic 65)
 v1.route('/agents', agentWalletsRouter); // Agent wallet policy & exposure (Epic 18)
 v1.route('/reputation', reputationRouter); // Reputation bridge (Epic 63)
+v1.route('/tier-limits', tierLimitsRouter); // KYA + verification tier configuration
 v1.route('/mpp', mppRouter); // Machine Payments Protocol (Epic 71)
 v1.route('/composition', compositionRouter); // Multi-protocol composition (Epic 71)
 v1.route('/support', supportRouter); // Support tools for Intercom Fin

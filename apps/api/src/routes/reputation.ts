@@ -28,6 +28,7 @@ reputation.get('/:identifier', async (c) => {
     confidence: score.confidence,
     dimensions: score.dimensions,
     dataPoints: score.dataPoints,
+    ratingCount: score.ratingCount,
     lastRefreshed: score.lastRefreshed,
     stale: score.stale,
   });

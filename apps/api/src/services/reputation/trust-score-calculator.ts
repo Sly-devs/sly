@@ -91,6 +91,8 @@ export class TrustScoreCalculator {
     const availableSources = new Set(availableResults.map(r => r.source));
     const hasServiceQuality = availableSources.has('a2a_feedback');
     const totalDataPoints = results.reduce((sum, r) => sum + r.dataPoints, 0);
+    // ratingCount = peer ratings specifically, from the a2a_feedback source only
+    const ratingCount = results.find(r => r.source === 'a2a_feedback')?.dataPoints ?? 0;
 
     if (availableResults.length === 0) {
       const score: UnifiedTrustScore = {
@@ -99,6 +101,7 @@ export class TrustScoreCalculator {
         confidence: 'none',
         dimensions: [],
         dataPoints: 0,
+        ratingCount: 0,
         lastRefreshed: new Date().toISOString(),
         stale: false,
       };
@@ -157,6 +160,7 @@ export class TrustScoreCalculator {
       confidence,
       dimensions,
       dataPoints: totalDataPoints,
+      ratingCount,
       lastRefreshed: new Date().toISOString(),
       stale: false,
     };
@@ -253,12 +257,22 @@ export class TrustScoreCalculator {
 
       if (!data) return null;
 
+      // ratingCount isn't persisted in the cache table (yet); read from
+      // source_data.a2a_feedback if present, else fall back to 0. When the
+      // cache expires and triggers a full compute, the fresh value flows through.
+      const sourceData = (data.source_data ?? {}) as Record<string, any>;
+      const cachedRatingCount =
+        typeof sourceData?.a2a_feedback?.totalFeedback === 'number'
+          ? sourceData.a2a_feedback.totalFeedback
+          : 0;
+
       return {
         score: data.unified_score ?? 0,
         tier: data.unified_tier ?? 'F',
         confidence: data.confidence ?? 'none',
         dimensions: data.dimensions ?? [],
         dataPoints: data.data_points ?? 0,
+        ratingCount: cachedRatingCount,
         lastRefreshed: data.last_refreshed,
         stale: false,
       };

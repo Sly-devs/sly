@@ -16,6 +16,8 @@ export interface UnifiedTrustScore {
   confidence: 'high' | 'medium' | 'low' | 'none';
   dimensions: ReputationDimension[];
   dataPoints: number;
+  /** Count of peer-to-peer ratings specifically (a2a_task_feedback rows) — distinct from dataPoints, which sums across all sources. */
+  ratingCount: number;
   lastRefreshed: string;
   stale: boolean;
 }

@@ -10,6 +10,78 @@
 import { createPublicClient, http, type Abi } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import type { ReputationSource, ReputationSourceResult } from '../types.js';
+import { createClient } from '../../../db/client.js';
+
+/**
+ * Compute a variable identity score based on:
+ *   - Base: 400 for having an ERC-8004 NFT
+ *   - KYA bonus: 0-200 based on verified tier (T0=50, T1=100, T2=150, T3=200)
+ *   - Age bonus: 0-200 based on days since agent creation (linear, caps at 180 days)
+ *   - Activity bonus: 0-200 based on interaction count (log2 curve — early interactions matter more)
+ *
+ * Returns { score, breakdown } so callers can surface the "why" in the UI.
+ */
+async function computeIdentityScore(
+  identifier: string,
+): Promise<{ score: number; breakdown: Record<string, number> }> {
+  const base = 400; // has NFT
+
+  try {
+    const supabase = createClient();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier);
+    const lookup = isUuid
+      ? supabase.from('agents').select('id, kya_tier, kya_status, created_at').eq('id', identifier).maybeSingle()
+      : supabase.from('agents').select('id, kya_tier, kya_status, created_at').eq('wallet_address', identifier).maybeSingle();
+
+    const agentRes = await lookup;
+    const agent = agentRes.data as { id: string; kya_tier: number | null; kya_status: string | null; created_at: string | null } | null;
+
+    let ratingsCount = 0;
+    if (agent?.id) {
+      const { count } = await supabase
+        .from('a2a_task_feedback')
+        .select('*', { count: 'exact', head: true })
+        .or(`provider_agent_id.eq.${agent.id},caller_agent_id.eq.${agent.id}`);
+      ratingsCount = count ?? 0;
+    }
+
+    // KYA bonus — only if verified
+    let kyaBonus = 0;
+    if (agent?.kya_status === 'verified' && typeof agent?.kya_tier === 'number') {
+      kyaBonus = 50 + agent.kya_tier * 50; // T0=50, T1=100, T2=150, T3=200
+      kyaBonus = Math.min(200, kyaBonus);
+    }
+
+    // Age bonus — linear from 0 to 200 over 180 days
+    let ageBonus = 0;
+    if (agent?.created_at) {
+      const ageDays = (Date.now() - new Date(agent.created_at as string).getTime()) / (1000 * 60 * 60 * 24);
+      ageBonus = Math.round(Math.min(200, (ageDays / 180) * 200));
+    }
+
+    // Activity bonus — log2 curve rewards early interactions, plateaus at high volume
+    // 0 ratings → 0, 10 → ~87, 50 → ~141, 100 → ~166, 500 → ~225 (capped at 200)
+    const activityBonus = ratingsCount > 0
+      ? Math.min(200, Math.round(Math.log2(ratingsCount + 1) * 25))
+      : 0;
+
+    const score = Math.min(1000, base + kyaBonus + ageBonus + activityBonus);
+
+    return {
+      score,
+      breakdown: {
+        base,
+        kya: kyaBonus,
+        age: ageBonus,
+        activity: activityBonus,
+        ratingsCount,
+      },
+    };
+  } catch {
+    // Fallback to flat score if DB lookup fails
+    return { score: 700, breakdown: { base, kya: 0, age: 0, activity: 0, ratingsCount: 0 } };
+  }
+}
 
 // Testnet (Base Sepolia)
 const TESTNET_IDENTITY_REGISTRY = '0x13b52042ef3e0e84d7ad49fdc1b71848b187a89c';
@@ -133,7 +205,8 @@ export const erc8004Source: ReputationSource & {
         }
 
         const dataPoints = 1 + feedbackCount;
-        const identityScore = 700;
+        const identityResult = await computeIdentityScore(identifier);
+        const identityScore = identityResult.score;
 
         const normalizedRep = summaryDecimals > 0
           ? summaryValue / (10 ** summaryDecimals)
@@ -158,6 +231,7 @@ export const erc8004Source: ReputationSource & {
             summaryDecimals,
             network: isTestnet() ? 'base-sepolia' : 'base',
             resolvedFromDb: true,
+            identityBreakdown: identityResult.breakdown,
           },
           dataPoints,
           queriedAt: new Date().toISOString(),
@@ -241,9 +315,9 @@ export const erc8004Source: ReputationSource & {
 
       const dataPoints = 1 + feedbackCount; // 1 for identity, plus feedback
 
-      // Compute dimension scores
-      // Identity: registered on-chain = 700 base
-      const identityScore = 700;
+      // Identity: variable score (base + KYA + age + activity)
+      const identityResult = await computeIdentityScore(identifier);
+      const identityScore = identityResult.score;
 
       // Community signal: normalize summary value to 0-1000
       // summaryValue is a fixed-point number with summaryDecimals decimals
@@ -270,6 +344,7 @@ export const erc8004Source: ReputationSource & {
           summaryValue,
           summaryDecimals,
           network: isTestnet() ? 'base-sepolia' : 'base',
+          identityBreakdown: identityResult.breakdown,
         },
         dataPoints,
         queriedAt: new Date().toISOString(),

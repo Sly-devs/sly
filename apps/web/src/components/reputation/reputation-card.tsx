@@ -106,10 +106,16 @@ export function ReputationCard({ agentId }: { agentId: string }) {
         </span>
       </div>
 
-      <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
+      <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400 flex-wrap">
         <span>{CONFIDENCE_LABELS[data.confidence]}</span>
         <span>&middot;</span>
         <span>{data.dataPoints} data point{data.dataPoints !== 1 ? 's' : ''}</span>
+        {typeof (data as any).ratingCount === 'number' && (data as any).ratingCount > 0 && (
+          <>
+            <span>&middot;</span>
+            <span>{(data as any).ratingCount} rating{(data as any).ratingCount === 1 ? '' : 's'}</span>
+          </>
+        )}
         {data.stale && (
           <>
             <span>&middot;</span>

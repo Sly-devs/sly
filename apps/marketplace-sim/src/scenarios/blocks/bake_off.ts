@@ -153,6 +153,24 @@ export async function runBakeOff(
     clients[a.agentId] = createAgentClient(a, baseUrl, adminKey);
   }
 
+  // Live collusion flagging — re-run the detector after each new rating
+  // and emit a milestone the first time an agent trips the heuristics.
+  // Per-run state so repeat runs get fresh flags; the Set is scoped to
+  // this invocation of runBakeOff.
+  const flaggedThisRun = new Set<string>();
+  const maybeFlagCollusion = async (agentId: string, agentName: string) => {
+    if (flaggedThisRun.has(agentId)) return;
+    try {
+      const sig = await adminClient.checkCollusion(agentId);
+      if (!sig.flagged) return;
+      flaggedThisRun.add(agentId);
+      await adminClient.milestone(
+        `Rating ring detected on ${agentName} — ${sig.reason ?? 'closed rating graph'}`,
+        { agentId, agentName, icon: '\u{1F6A8}' },
+      );
+    } catch { /* best-effort — never block a cycle on this */ }
+  };
+
   // Agent state manager — tracks reputation, win rates, prices per agent
   const agentState = new AgentStateManager({
     slyClient: adminClient,
@@ -524,6 +542,18 @@ export async function runBakeOff(
     };
 
     await Promise.all(reviews.map(settleOne));
+
+    // ─── 4b. Live collusion check — re-run the detector for every
+    // provider that just got a rating. Fire-and-forget; won't block the
+    // next cycle. Flagged agents get a milestone event that paints a
+    // 🚨 badge on their graph node in the live viewer.
+    if (!dryRun) {
+      for (const review of reviews) {
+        if (review.taskId) {
+          void maybeFlagCollusion(review.seller.agentId, review.seller.name);
+        }
+      }
+    }
 
     // ─── 5. Record outcomes for all participants so AgentState can adapt
     for (const review of reviews) {

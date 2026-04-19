@@ -89,6 +89,22 @@ export async function runRingTrade(
     clients[a.agentId] = createAgentClient(a, baseUrl, adminKey);
   }
 
+  // Live collusion flagging — re-run the detector after each new rating and
+  // emit a milestone the first time an agent trips the heuristics.
+  const flaggedThisRun = new Set<string>();
+  const maybeFlagCollusion = async (agentId: string, agentName: string) => {
+    if (flaggedThisRun.has(agentId)) return;
+    try {
+      const sig = await adminClient.checkCollusion(agentId);
+      if (!sig.flagged) return;
+      flaggedThisRun.add(agentId);
+      await adminClient.milestone(
+        `Rating ring detected on ${agentName} — ${sig.reason ?? 'closed rating graph'}`,
+        { agentId, agentName, icon: '\u{1F6A8}' },
+      );
+    } catch { /* best-effort */ }
+  };
+
   const isDynamicPricing = config.pricingMode === 'dynamic';
   const agentState = new AgentStateManager({
     slyClient: adminClient,
@@ -253,6 +269,10 @@ export async function runRingTrade(
           direction: 'buyer_rates_provider',
         });
       } catch {}
+
+      // Live collusion check after the seller just got a new rating.
+      // Fire-and-forget — dedupe handled inside maybeFlagCollusion.
+      void maybeFlagCollusion(seller.agentId, seller.name);
 
       // Record outcome for AgentState
       agentState.recordOutcome(seller.agentId, 'default', true, inflatedScore);

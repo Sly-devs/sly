@@ -372,6 +372,31 @@ roundViewerRouter.post('/milestone', async (c) => {
 });
 
 /**
+ * POST /admin/round/check-collusion
+ * Run the collusion detector for a single agent and return its current
+ * ring signals. Used by the marketplace-sim to flag agents in real time
+ * during a scenario run — the sim calls this after each rating write
+ * and emits a milestone when a previously-unflagged agent gets flagged.
+ *
+ * Body: { agentId: string }
+ * Returns: { flagged, reason, uniqueRaters, topRaterShare, reciprocalRatio,
+ *            ringCoefficient, totalRatings, topRaters }
+ */
+roundViewerRouter.post('/check-collusion', async (c) => {
+  const body = await c.req.json();
+  const agentId: string | undefined = body?.agentId;
+  if (!agentId || !UUID_RE.test(agentId)) {
+    return c.json({ error: 'Missing or invalid agentId (must be UUID)' }, 400);
+  }
+  const { computeCollusionSignals } = await import(
+    '../services/reputation/collusion-detector.js'
+  );
+  const supabase = createClient();
+  const signals = await computeCollusionSignals(supabase, agentId);
+  return c.json({ data: signals });
+});
+
+/**
  * POST /admin/round/seed-agent
  * Create (or reuse) a marketplace-sim persona agent and return its plaintext
  * auth token. Only the admin key can call this — intended for the standalone

@@ -120,6 +120,22 @@ export async function runDoubleAuction(
     clients[a.agentId] = createAgentClient(a, baseUrl, adminKey);
   }
 
+  // Live collusion flagging — re-run the detector after each new rating
+  // and emit a milestone the first time an agent trips the heuristics.
+  const flaggedThisRun = new Set<string>();
+  const maybeFlagCollusion = async (agentId: string, agentName: string) => {
+    if (flaggedThisRun.has(agentId)) return;
+    try {
+      const sig = await adminClient.checkCollusion(agentId);
+      if (!sig.flagged) return;
+      flaggedThisRun.add(agentId);
+      await adminClient.milestone(
+        `Rating ring detected on ${agentName} — ${sig.reason ?? 'closed rating graph'}`,
+        { agentId, agentName, icon: '\u{1F6A8}' },
+      );
+    } catch { /* best-effort */ }
+  };
+
   const agentState = new AgentStateManager({
     slyClient: adminClient,
     dynamicPricing: isDynamicPricing,
@@ -564,6 +580,11 @@ export async function runDoubleAuction(
               `${buyer.name} → ${selected.seller.name}: score ${buyerDecision.score}${skillLabel} @ $${selected.askPrice.toFixed(2)} (net: $${(selected.askPrice - inferenceCost).toFixed(3)})${easLabel}`,
               'finding',
             );
+
+            // Live collusion check — both parties just got a rating.
+            // Fire-and-forget so we never delay the next cycle.
+            void maybeFlagCollusion(selected.seller.agentId, selected.seller.name);
+            void maybeFlagCollusion(buyer.agentId, buyer.name);
           } else {
             // Seller rates buyer: harsh/unfair rejection
             try {
@@ -583,6 +604,11 @@ export async function runDoubleAuction(
               `${buyer.name} rejected ${selected.seller.name}: score ${buyerDecision.score} — "${(buyerDecision.comment || '').slice(0, 60)}"`,
               'alert',
             );
+
+            // Both parties still got ratings (seller rated buyer harshly,
+            // buyer rated seller in the /respond call above). Re-check.
+            void maybeFlagCollusion(selected.seller.agentId, selected.seller.name);
+            void maybeFlagCollusion(buyer.agentId, buyer.name);
           }
         }
 

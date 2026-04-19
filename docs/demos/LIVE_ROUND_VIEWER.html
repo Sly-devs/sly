@@ -2089,14 +2089,27 @@ async function openAgentInspector(agentId) {
   const headers = { 'Authorization': 'Bearer ' + key };
 
   // Fetch full agent profile + skills via dedicated admin endpoint
+  // Fetch collusion signals in parallel — cheap two-query detector.
   let fullAgent = null;
   let agentSkills = [];
+  let collusion = null;
   try {
-    const res = await fetch(url + '/admin/round/agent/' + agentId, { headers });
-    if (res.ok) {
-      const d = await res.json();
+    const [profileRes, collusionRes] = await Promise.all([
+      fetch(url + '/admin/round/agent/' + agentId, { headers }),
+      fetch(url + '/admin/round/check-collusion', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId }),
+      }).catch(() => null),
+    ]);
+    if (profileRes && profileRes.ok) {
+      const d = await profileRes.json();
       fullAgent = d.data || null;
       agentSkills = fullAgent?.skills || [];
+    }
+    if (collusionRes && collusionRes.ok) {
+      const cd = await collusionRes.json();
+      collusion = cd.data || null;
     }
   } catch {}
 
@@ -2241,6 +2254,30 @@ async function openAgentInspector(agentId) {
     h += '<div style="margin-bottom:12px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Rating</div>';
     h += '<div style="height:8px;background:var(--surface);border-radius:4px;overflow:hidden"><div style="height:100%;width:' + avgRating + '%;background:' + rColor + ';border-radius:4px"></div></div>';
     h += '<div style="font-size:10px;color:' + rColor + ';margin-top:2px">' + avgRating + '/100 (' + rating.count + ' ratings)</div></div>';
+  }
+
+  // Collusion signals — render a red banner when flagged, neutral stats otherwise.
+  // Data comes from POST /admin/round/check-collusion fetched at the top of this function.
+  if (collusion && collusion.totalRatings > 0) {
+    const flagged = !!collusion.flagged;
+    const bannerBg = flagged ? 'rgba(239,68,68,0.12)' : 'var(--surface)';
+    const bannerBorder = flagged ? '#ef4444' : 'var(--border)';
+    const bannerColor = flagged ? '#ef4444' : 'var(--muted)';
+    h += '<div style="margin-bottom:12px;padding:8px 10px;background:' + bannerBg + ';border:1px solid ' + bannerBorder + ';border-radius:6px">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+    h += '<div style="font-size:10px;font-weight:700;color:' + bannerColor + ';text-transform:uppercase;letter-spacing:1px">';
+    h += flagged ? '\ud83d\udea8 Rating ring detected' : 'Rater diversity';
+    h += '</div>';
+    if (flagged) h += '<span style="font-size:9px;padding:2px 6px;border-radius:3px;background:rgba(239,68,68,0.2);color:#ef4444">capped at C</span>';
+    h += '</div>';
+    h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:10px">';
+    h += '<div><div style="color:var(--muted);font-size:9px">Uniq raters</div><div style="color:var(--text)">' + collusion.uniqueRaters + ' / ' + collusion.totalRatings + '</div></div>';
+    h += '<div><div style="color:var(--muted);font-size:9px">Top rater</div><div style="color:var(--text)">' + Math.round(collusion.topRaterShare * 100) + '%</div></div>';
+    h += '<div><div style="color:var(--muted);font-size:9px">Reciprocal</div><div style="color:var(--text)">' + Math.round(collusion.reciprocalRatio * 100) + '%</div></div>';
+    h += '<div title="Fraction of raters own raters inside this agent circle"><div style="color:var(--muted);font-size:9px">Ring coef</div><div style="color:var(--text)">' + Math.round((collusion.ringCoefficient || 0) * 100) + '%</div></div>';
+    h += '</div>';
+    if (flagged && collusion.reason) h += '<div style="margin-top:6px;font-size:10px;color:' + bannerColor + '">' + escapeHtml(collusion.reason) + '</div>';
+    h += '</div>';
   }
 
   // Rating Reviews

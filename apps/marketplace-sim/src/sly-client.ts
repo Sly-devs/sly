@@ -513,6 +513,31 @@ export class SlyClient {
     );
   }
 
+  /**
+   * Ask the platform for a fresh collusion-detector verdict on one agent.
+   * Used mid-scenario to flag rings as they form, without having to hit the
+   * full /v1/reputation endpoint (which also runs all other reputation
+   * sources and is noisier for this purpose).
+   */
+  async checkCollusion(agentId: string): Promise<{
+    flagged: boolean;
+    reason: string | null;
+    uniqueRaters: number;
+    topRaterShare: number;
+    reciprocalRatio: number;
+    ringCoefficient: number;
+    totalRatings: number;
+    topRaters: string[];
+  }> {
+    // this.request() auto-unwraps { success, data } → data, so we get the
+    // signals object directly.
+    return await this.request(
+      '/admin/round/check-collusion',
+      { method: 'POST', body: JSON.stringify({ agentId }) },
+      'admin',
+    );
+  }
+
   /** Update an agent's KYA tier (used by baseline mode to bypass restrictions). */
   async updateAgentTier(agentId: string, kyaTier: number): Promise<void> {
     try {

@@ -13,12 +13,16 @@ import {
   sanitizeSearchInput,
   getEnv,
 } from '../utils/helpers.js';
-import { ValidationError, NotFoundError } from '../middleware/error.js';
+import { ValidationError, NotFoundError, ForbiddenError } from '../middleware/error.js';
 import { ErrorCode } from '@sly/types';
 import { onboardEntity, type OnboardingInput } from '../services/entity-onboarding.js';
 import { triggerWorkflows } from '../services/workflow-trigger.js';
 import { trackOp } from '../services/ops/track-op.js';
 import { OpType } from '../services/ops/operation-types.js';
+import { verifyT1 } from '../services/kyc/t1-verification.js';
+import { initiatePersonaVerification, initiatePersonaKYB } from '../services/kyc/persona.js';
+import { createEDDReview } from '../services/kyc/enterprise-review.js';
+import { isSanctionedCountry } from '../services/kyc/screening.js';
 
 const accounts = new Hono();
 
@@ -972,6 +976,246 @@ accounts.post('/:id/verify', async (c) => {
 });
 
 // ============================================
+// POST /v1/accounts/:id/upgrade - Account tier upgrade (Story 73.5)
+// ============================================
+const upgradeAccountSchema = z.object({
+  target_tier: z.number().int().min(1).max(3),
+  verification_data: z.object({
+    // T1 fields
+    legal_name: z.string().optional(),
+    date_of_birth: z.string().optional(),
+    country: z.string().optional(),
+    company_name: z.string().optional(),
+    // T2+ handled by Persona/external flow
+  }).optional(),
+  verification_path: z.enum(['standard', 'partner_reliance', 'enterprise']).optional(),
+  compliance_contact: z.object({
+    name: z.string(),
+    email: z.string().email(),
+  }).optional(),
+  // T2: redirect URL for Persona verification flow
+  redirect_url: z.string().url().optional(),
+});
+
+accounts.post('/:id/upgrade', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  const supabase = createClient();
+
+  if (!isValidUUID(id)) throw new ValidationError('Invalid account ID format');
+
+  const body = upgradeAccountSchema.parse(await c.req.json());
+  const { target_tier, verification_data, verification_path, compliance_contact } = body;
+
+  const { data: existing, error: fetchError } = await supabase
+    .from('accounts')
+    .select('id, name, type, verification_tier, verification_status, tenant_id')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .single();
+
+  if (fetchError || !existing) throw new NotFoundError('Account', id);
+
+  const currentTier = existing.verification_tier || 0;
+  if (target_tier <= currentTier) {
+    throw new ValidationError(`Account is already at tier ${currentTier}. Cannot downgrade or stay at same tier.`);
+  }
+
+  // ============================================
+  // T1 validation: lightweight KYC (Story 73.8)
+  // ============================================
+  if (target_tier >= 1 && currentTier < 1) {
+    if (!verification_data?.legal_name) {
+      throw new ValidationError('Tier 1 upgrade requires legal_name in verification_data');
+    }
+    if (!verification_data?.country) {
+      throw new ValidationError('Tier 1 upgrade requires country in verification_data');
+    }
+    if (!verification_data?.date_of_birth) {
+      throw new ValidationError('Tier 1 upgrade requires date_of_birth in verification_data');
+    }
+
+    const t1Result = await verifyT1({
+      legal_name: verification_data.legal_name,
+      date_of_birth: verification_data.date_of_birth,
+      country: verification_data.country,
+      company_name: verification_data.company_name,
+    });
+
+    if (!t1Result.approved) {
+      throw new ValidationError(t1Result.reason || 'T1 verification failed');
+    }
+  }
+
+  // ============================================
+  // T2 validation: Persona verification (Stories 73.10/73.11)
+  // ============================================
+  if (target_tier >= 2 && currentTier < 2 && verification_path !== 'partner_reliance') {
+    // For T2, initiate a Persona verification flow and return the inquiry URL.
+    // The actual upgrade happens asynchronously via webhook when Persona completes.
+    const redirectUrl = body.redirect_url || `${process.env.DASHBOARD_URL || 'https://app.getsly.ai'}/verification/callback`;
+
+    let inquiry;
+    if (existing.type === 'business') {
+      inquiry = await initiatePersonaKYB(id, redirectUrl);
+    } else {
+      inquiry = await initiatePersonaVerification(id, redirectUrl);
+    }
+
+    // Store the inquiry ID in account metadata for webhook matching
+    const existingMeta = (existing as any).metadata || {};
+    await supabase
+      .from('accounts')
+      .update({
+        verification_status: 'pending',
+        metadata: {
+          ...existingMeta,
+          persona_inquiry_id: inquiry.inquiryId,
+          verification_initiated_at: new Date().toISOString(),
+          verification_initiated_by: ctx.actorId,
+        },
+      })
+      .eq('id', id)
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx));
+
+    await logAudit(supabase, {
+      tenantId: ctx.tenantId,
+      entityType: 'account',
+      entityId: id,
+      action: 'persona_verification_initiated',
+      actorType: ctx.actorType,
+      actorId: ctx.actorId,
+      actorName: ctx.actorName,
+      metadata: { target_tier, inquiryId: inquiry.inquiryId },
+    });
+
+    return c.json({
+      data: {
+        id: existing.id,
+        name: existing.name,
+        verificationStatus: 'pending',
+        message: 'Verification initiated. Complete the identity check at the provided URL.',
+        inquiryUrl: inquiry.inquiryUrl,
+        inquiryId: inquiry.inquiryId,
+      },
+    });
+  }
+
+  // ============================================
+  // T3 validation: Enterprise EDD (Story 73.14)
+  // ============================================
+  if (target_tier >= 3 && currentTier < 3) {
+    if (!compliance_contact) {
+      throw new ValidationError('Tier 3 upgrade requires a compliance_contact');
+    }
+
+    // Create an EDD review ticket — account stays at current tier until approved
+    const eddReview = await createEDDReview(supabase, id, ctx.tenantId);
+
+    // Store compliance contact
+    await supabase
+      .from('accounts')
+      .update({
+        verification_status: 'pending',
+        verification_path: verification_path || 'enterprise',
+        compliance_contact_name: compliance_contact.name,
+        compliance_contact_email: compliance_contact.email,
+      })
+      .eq('id', id)
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', getEnv(ctx));
+
+    await logAudit(supabase, {
+      tenantId: ctx.tenantId,
+      entityType: 'account',
+      entityId: id,
+      action: 'edd_review_created',
+      actorType: ctx.actorType,
+      actorId: ctx.actorId,
+      actorName: ctx.actorName,
+      metadata: { target_tier, reviewId: eddReview.id },
+    });
+
+    return c.json({
+      data: {
+        id: existing.id,
+        name: existing.name,
+        verificationStatus: 'pending',
+        message: 'Enhanced Due Diligence review initiated. A compliance team member will review your application.',
+        reviewId: eddReview.id,
+        checklist: eddReview.checklist,
+      },
+    });
+  }
+
+  // ============================================
+  // Direct upgrade (T1 only, or partner_reliance for T2)
+  // ============================================
+  const verificationType = existing.type === 'business' ? 'kyb' : 'kyc';
+
+  const updatePayload: Record<string, any> = {
+    verification_tier: target_tier,
+    verification_status: 'verified',
+    verification_type: verificationType,
+    metadata: {
+      ...((existing as any).metadata || {}),
+      verificationData: verification_data,
+      verifiedAt: new Date().toISOString(),
+      verifiedBy: ctx.actorId,
+    },
+  };
+
+  if (verification_path) updatePayload.verification_path = verification_path;
+  if (compliance_contact) {
+    updatePayload.compliance_contact_name = compliance_contact.name;
+    updatePayload.compliance_contact_email = compliance_contact.email;
+  }
+
+  const { data, error } = await supabase
+    .from('accounts')
+    .update(updatePayload)
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .select('*')
+    .single();
+
+  if (error) throw new Error(`Failed to upgrade account: ${error.message}`);
+
+  // DB trigger (account_verification_tier_recalc) now handles recalculating
+  // effective limits for all child agents automatically.
+
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'account',
+    entityId: id,
+    action: 'tier_upgraded',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+    changes: {
+      before: { verification_tier: currentTier, verification_status: existing.verification_status },
+      after: { verification_tier: target_tier, verification_status: 'verified' },
+    },
+  });
+
+  return c.json({
+    data: {
+      id: data.id,
+      name: data.name,
+      type: data.type,
+      verificationTier: data.verification_tier,
+      verificationStatus: data.verification_status,
+      verificationType: data.verification_type,
+      verificationPath: data.verification_path || 'standard',
+      message: `Account upgraded to tier ${target_tier}`,
+    },
+  });
+});
+
+// ============================================
 // POST /v1/accounts/:id/suspend - Suspend account and cascade to agents
 // ============================================
 accounts.post('/:id/suspend', async (c) => {
@@ -1199,6 +1443,136 @@ accounts.post('/onboard', async (c) => {
   const result = await onboardEntity(ctx.tenantId, input, supabase);
 
   return c.json(result, 201);
+});
+
+// ============================================
+// POST /v1/accounts/partner-import - Partner Reliance Path (Story 73.12)
+// ============================================
+const partnerImportSchema = z.object({
+  name: z.string().min(1).max(255),
+  email: z.string().email(),
+  country: z.string().length(2),
+  entity_type: z.enum(['person', 'business']),
+  partner_id: z.string().uuid(),
+  partner_agreement_date: z.string(), // ISO date string
+});
+
+accounts.post('/partner-import', async (c) => {
+  const ctx = c.get('ctx');
+  const supabase = createClient();
+
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    throw new ValidationError('Invalid JSON body');
+  }
+
+  const parsed = partnerImportSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ValidationError('Validation failed', parsed.error.flatten());
+  }
+
+  const { name, email, country, entity_type, partner_id, partner_agreement_date } = parsed.data;
+
+  // Validate country is not sanctioned
+  if (isSanctionedCountry(country)) {
+    throw new ValidationError('Service is not available in the specified country');
+  }
+
+  // Validate partner_id is a known partner (look up in tenants table)
+  const { data: partner, error: partnerError } = await supabase
+    .from('tenants')
+    .select('id, name')
+    .eq('id', partner_id)
+    .single();
+
+  if (partnerError || !partner) {
+    throw new ValidationError('Unknown partner_id. The partner must be a registered tenant.');
+  }
+
+  // Validate agreement date is a valid date
+  const agreementDate = new Date(partner_agreement_date);
+  if (isNaN(agreementDate.getTime())) {
+    throw new ValidationError('Invalid partner_agreement_date format. Use ISO 8601 date string.');
+  }
+
+  // Check for duplicate email within this tenant
+  const { data: existingAccount } = await supabase
+    .from('accounts')
+    .select('id')
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .eq('email', email)
+    .single();
+
+  if (existingAccount) {
+    throw new ValidationError('An account with this email already exists in this tenant');
+  }
+
+  // Create account at T2 with partner_reliance path
+  const verificationType = entity_type === 'business' ? 'kyb' : 'kyc';
+
+  const { data, error } = await supabase
+    .from('accounts')
+    .insert({
+      tenant_id: ctx.tenantId,
+      environment: getEnv(ctx),
+      type: entity_type,
+      name,
+      email,
+      verification_tier: 2,
+      verification_status: 'verified',
+      verification_type: verificationType,
+      verification_path: 'partner_reliance',
+      reliance_partner_id: partner_id,
+      reliance_agreement_date: agreementDate.toISOString(),
+      metadata: {
+        imported_via: 'partner_reliance',
+        partner_name: partner.name,
+        country,
+        imported_at: new Date().toISOString(),
+        imported_by: ctx.actorId,
+      },
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating partner-imported account:', error);
+    throw new Error('Failed to create account');
+  }
+
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'account',
+    entityId: data.id,
+    action: 'partner_imported',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+    metadata: {
+      partner_id,
+      partner_name: partner.name,
+      verification_path: 'partner_reliance',
+      country,
+    },
+  });
+
+  return c.json({
+    data: {
+      id: data.id,
+      name: data.name,
+      email: data.email,
+      type: data.type,
+      verificationTier: 2,
+      verificationStatus: 'verified',
+      verificationPath: 'partner_reliance',
+      reliancePartnerId: partner_id,
+      relianceAgreementDate: agreementDate.toISOString(),
+      message: 'Account imported via partner reliance at Tier 2',
+    },
+  }, 201);
 });
 
 export default accounts;

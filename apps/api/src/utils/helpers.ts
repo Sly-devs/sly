@@ -101,6 +101,25 @@ export function mapAgentFromDb(row: any): Agent {
       type: row.auth_type || 'api_key',
       clientId: row.auth_client_id || undefined,
     },
+    cai: row.skill_manifest || row.model_family || row.escalation_policy ? {
+      modelFamily: row.model_family || undefined,
+      modelVersion: row.model_version || undefined,
+      skillManifest: row.skill_manifest || undefined,
+      useCaseDescription: row.use_case_description || undefined,
+      escalationPolicy: row.escalation_policy || 'DECLINE',
+      operationalHistoryStart: row.operational_history_start || undefined,
+      policyViolationCount: row.policy_violation_count || 0,
+      behavioralConsistencyScore: row.behavioral_consistency_score != null
+        ? parseFloat(row.behavioral_consistency_score)
+        : undefined,
+      enterpriseOverride: row.kya_enterprise_override || false,
+      overrideAssessedAt: row.kya_override_assessed_at || undefined,
+      killSwitch: row.kill_switch_operator_id ? {
+        operatorId: row.kill_switch_operator_id,
+        operatorName: row.kill_switch_operator_name,
+        operatorEmail: row.kill_switch_operator_email,
+      } : undefined,
+    } : undefined,
     erc8004AgentId: row.erc8004_agent_id || undefined,
     walletAddress: row.circle_wallet_address || row.wallet_address || undefined,
     avatarUrl: row.avatar_url ?? null,

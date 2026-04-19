@@ -38,6 +38,14 @@ export type VerificationTier = 0 | 1 | 2 | 3;
 export type AgentStatus = 'active' | 'paused' | 'suspended';
 export type KYATier = 0 | 1 | 2 | 3;
 export type KYAStatus = 'unverified' | 'pending' | 'verified' | 'suspended';
+export type EscalationPolicy = 'DECLINE' | 'SUSPEND_AND_NOTIFY' | 'REQUEST_APPROVAL';
+
+export interface SkillManifest {
+  protocols: string[];
+  action_types: string[];
+  domain: string;
+  description: string;
+}
 export type AuthType = 'api_key' | 'oauth' | 'x402';
 
 export type TransferType =
@@ -84,6 +92,8 @@ export interface AccountBalance {
   currency: 'USDC';
 }
 
+export type VerificationPath = 'standard' | 'partner_reliance' | 'enterprise';
+
 export interface Account {
   id: string;
   tenantId: string;
@@ -95,6 +105,14 @@ export interface Account {
     tier: VerificationTier;
     status: VerificationStatus;
     type: 'kyc' | 'kyb';
+    path: VerificationPath;
+  };
+
+  compliance?: {
+    reliancePartnerId?: string;
+    relianceAgreementDate?: string;
+    contactName?: string;
+    contactEmail?: string;
   };
 
   balance: AccountBalance;
@@ -147,6 +165,24 @@ export interface Agent {
     effectiveLimits: Limits & { cappedByParent: boolean };
   };
 
+  cai?: {
+    modelFamily?: string;
+    modelVersion?: string;
+    skillManifest?: SkillManifest;
+    useCaseDescription?: string;
+    escalationPolicy: EscalationPolicy;
+    operationalHistoryStart?: string;
+    policyViolationCount: number;
+    behavioralConsistencyScore?: number;
+    enterpriseOverride: boolean;
+    overrideAssessedAt?: string;
+    killSwitch?: {
+      operatorId: string;
+      operatorName: string;
+      operatorEmail: string;
+    };
+  };
+
   permissions: AgentPermissions;
 
   streamStats: {
@@ -164,9 +200,32 @@ export interface Agent {
   erc8004AgentId?: string;
   walletAddress?: string;
 
+  // Epic 72: Key-pair auth + liveness
+  authKey?: AgentAuthKey;
+  liveness?: AgentLiveness;
+
   avatarUrl?: string | null;
+
   createdAt: string;
   updatedAt: string;
+}
+
+// ============================================
+// TRUST PROFILE (Epic 73 — Cross-Org Queryable)
+// ============================================
+
+export interface AgentTrustProfile {
+  agentId: string;
+  kyaTier: KYATier;
+  parentVerificationTier: VerificationTier;
+  parentEntityType: AccountType;
+  operationalDays: number;
+  policyViolationCount: number;
+  behavioralConsistencyScore: number | null;
+  skillManifest: SkillManifest | null;
+  modelFamily: string | null;
+  killSwitchEnabled: boolean;
+  lastVerifiedAt: string | null;
 }
 
 // ============================================
@@ -450,3 +509,48 @@ export interface UnifiedTrustScore {
   lastRefreshed: string;
   stale: boolean;
 }
+
+// ============================================
+// AGENT KEY-PAIR AUTH (Epic 72)
+// ============================================
+
+export interface AgentAuthKey {
+  keyId: string;
+  algorithm: 'ed25519';
+  publicKey: string;
+  status: 'active' | 'rotated' | 'revoked';
+  label?: string;
+  createdAt: string;
+  rotatedAt?: string;
+  revokedAt?: string;
+}
+
+export interface AgentChallenge {
+  challenge: string;
+  expiresIn: number;
+  algorithm: 'ed25519';
+}
+
+export interface AgentSessionToken {
+  sessionToken: string;
+  expiresIn: number;
+  agentId: string;
+}
+
+export interface AgentLiveness {
+  connected: boolean;
+  connectedAt?: string;
+  lastHeartbeatAt?: string;
+  disconnectedAt?: string;
+  connectionDuration?: number;
+}
+
+export type AgentConnectionEventType =
+  | 'task_assigned'
+  | 'transfer_completed'
+  | 'approval_requested'
+  | 'stream_alert'
+  | 'key_rotated'
+  | 'config_changed'
+  | 'heartbeat'
+  | 'reconnect_required';

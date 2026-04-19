@@ -22,11 +22,14 @@ import {
   hashApiKey,
   getKeyPrefix,
   generateAgentToken,
+  generateEd25519KeyPair,
+  generateAuthKeyId,
 } from '../utils/crypto.js';
 import { logAudit } from '../utils/helpers.js';
 import { checkRateLimit, logSecurityEvent } from '../utils/auth.js';
 import { isFeatureEnabled } from '../config/environment.js';
 import { getCircleServiceForTenant } from '../services/circle/index.js';
+import { screenSignup } from '../services/kyc/screening.js';
 
 function getClientInfo(c: any): { ip: string; userAgent: string } {
   const ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
@@ -82,6 +85,18 @@ router.post('/one-click', async (c) => {
     if (walletType === 'byow' && !byowAddress) {
       return c.json({ error: 'byowAddress is required when walletType is byow' }, 400);
     }
+
+    // Story 73.6/73.7: Pre-signup screening (disposable emails + sanctions)
+    if (email) {
+      const screening = await screenSignup(email, ip);
+      if (!screening.allowed) {
+        await logSecurityEvent('agent_onboard_screened', 'warning', {
+          ip, email, reason: screening.reason,
+        });
+        return c.json({ error: screening.reason }, 403);
+      }
+    }
+
     const supabase = createClient();
     const baseUrl = process.env.API_BASE_URL || 'https://api.getsly.ai';
 
@@ -183,15 +198,16 @@ router.post('/one-click', async (c) => {
       return c.json({ error: 'Failed to register agent' }, 500);
     }
 
-    // 2. Create account (verification_tier 1 so agents can transact immediately)
+    // 2. Create account at T0 Explore (Story 73.5: upgrade via /accounts/:id/upgrade)
+    // Agents can still transact at T0 because kya_tier_limits T0 has $20/tx limits.
     const { data: account, error: accountError } = await (supabase.from('accounts') as any)
       .insert({
         tenant_id: tenant.id,
         type: 'business',
         name,
         email: email || null,
-        verification_tier: 1,
-        verification_status: 'verified',
+        verification_tier: 0,
+        verification_status: 'unverified',
         agent_config: {
           purpose: description || null,
           model: model || null,
@@ -256,6 +272,26 @@ router.post('/one-click', async (c) => {
       await supabase.from('tenants').delete().eq('id', tenant.id);
       console.error('[agent-onboard] Failed to create agent:', agentError);
       return c.json({ error: 'Failed to register agent' }, 500);
+    }
+
+    // 3b. Epic 72: Auto-generate Ed25519 auth key pair
+    let authKeyResponse: { keyId: string; publicKey: string; privateKey: string; algorithm: string } | null = null;
+    try {
+      const { privateKey: authPriv, publicKey: authPub } = generateEd25519KeyPair();
+      const authKid = generateAuthKeyId(agent.id);
+      const pubHash = hashApiKey(authPub);
+      await (supabase.from('agent_auth_keys') as any).insert({
+        tenant_id: tenant.id,
+        agent_id: agent.id,
+        key_id: authKid,
+        algorithm: 'ed25519',
+        public_key: authPub,
+        public_key_hash: pubHash,
+        status: 'active',
+      });
+      authKeyResponse = { keyId: authKid, publicKey: authPub, privateKey: authPriv, algorithm: 'ed25519' };
+    } catch (e) {
+      console.error('[agent-onboard] Non-fatal: failed to generate Ed25519 key:', (e as Error).message);
     }
 
     // 4. Create wallet
@@ -586,6 +622,14 @@ router.post('/one-click', async (c) => {
         daily: kyaLimits.daily,
         monthly: kyaLimits.monthly,
       } : null,
+      authKey: authKeyResponse ? {
+        keyId: authKeyResponse.keyId,
+        publicKey: authKeyResponse.publicKey,
+        privateKey: authKeyResponse.privateKey,
+        algorithm: authKeyResponse.algorithm,
+        warning: 'SAVE THIS PRIVATE KEY NOW — it will never be shown again!',
+        usage: 'Use Ed25519 challenge-response auth for production. See POST /v1/agents/:id/challenge → POST /v1/agents/:id/authenticate',
+      } : null,
       endpoints: {
         api: `${baseUrl}/v1`,
         dashboard: `${process.env.DASHBOARD_URL || 'https://app.getsly.ai'}/dashboard`,
@@ -594,6 +638,9 @@ router.post('/one-click', async (c) => {
         platformCard: `${baseUrl}/.well-known/agent.json`,
         skills: `${baseUrl}/v1/skills.md`,
         openapi: `${baseUrl}/v1/openapi.json`,
+        challenge: `${baseUrl}/v1/agents/${agent.id}/challenge`,
+        authenticate: `${baseUrl}/v1/agents/${agent.id}/authenticate`,
+        connect: `${baseUrl}/v1/agents/${agent.id}/connect`,
       },
       dashboardAccess: email
         ? 'A dashboard invite has been sent to your email. Click the link to access your dashboard.'

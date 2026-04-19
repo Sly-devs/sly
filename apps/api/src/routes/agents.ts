@@ -23,6 +23,8 @@ import { trackOp } from '../services/ops/track-op.js';
 import { OpType } from '../services/ops/operation-types.js';
 import { checkAgentLimit } from '../services/tenant-limits.js';
 import { registerAgent } from '../services/erc8004/registry.js';
+import { checkT2Eligibility, processEnterpriseOverride } from '../services/kya/verification.js';
+import { recordObservation } from '../services/kya/observation.js';
 
 const agents = new Hono();
 
@@ -110,6 +112,7 @@ const createAgentSchema = z.object({
   permissions: permissionsSchema,
   wallet_id: z.string().uuid().optional(), // Existing wallet to assign
   auto_create_wallet: z.boolean().optional().default(true), // Story 51.6: Auto-create wallet if not specified
+  generate_keypair: z.boolean().optional().default(true), // Epic 72: Auto-generate Ed25519 auth key
   processing_mode: z.enum(['managed', 'webhook', 'manual']).optional(),
   processing_config: z.record(z.unknown()).optional(),
 });
@@ -148,6 +151,7 @@ agents.get('/', async (c) => {
   const type = query.type;
   const kyaTier = query.kyaTier;
   const parentAccountId = query.parentAccountId;
+  const connected = query.connected; // Epic 72: filter by SSE connection status
   
   // Build query with parent account join
   let dbQuery = supabase
@@ -179,7 +183,24 @@ agents.get('/', async (c) => {
   if (parentAccountId) {
     dbQuery = dbQuery.eq('parent_account_id', parentAccountId);
   }
-  
+
+  // Epic 72: If ?connected=true, filter to only agents with active SSE connections
+  let connectedAgentIds: Set<string> | null = null;
+  if (connected === 'true') {
+    const { data: activeConns } = await (supabase
+      .from('agent_connections') as any)
+      .select('agent_id')
+      .eq('tenant_id', ctx.tenantId)
+      .is('disconnected_at', null);
+    connectedAgentIds = new Set((activeConns || []).map((c: any) => c.agent_id));
+    if (connectedAgentIds.size > 0) {
+      dbQuery = dbQuery.in('id', [...connectedAgentIds]);
+    } else {
+      // No connected agents — return empty result
+      return c.json(paginationResponse([], 0, { page, limit }));
+    }
+  }
+
   const { data, count, error } = await dbQuery;
   
   if (error) {
@@ -204,6 +225,24 @@ agents.get('/', async (c) => {
     }
   }
 
+  // Epic 72: Batch-fetch liveness (active SSE connections)
+  const livenessMap = new Map<string, { connected: boolean; connectedAt?: string; lastHeartbeatAt?: string }>();
+  if (agentIds.length > 0) {
+    const { data: activeConns } = await (supabase
+      .from('agent_connections') as any)
+      .select('agent_id, connected_at, last_heartbeat_at')
+      .in('agent_id', agentIds)
+      .eq('tenant_id', ctx.tenantId)
+      .is('disconnected_at', null);
+    for (const conn of activeConns || []) {
+      livenessMap.set(conn.agent_id, {
+        connected: true,
+        connectedAt: conn.connected_at,
+        lastHeartbeatAt: conn.last_heartbeat_at,
+      });
+    }
+  }
+
   // Map to response format
   const agents = (data || []).map(row => {
     const agent = mapAgentFromDb(row);
@@ -218,6 +257,7 @@ agents.get('/', async (c) => {
     if (walletMap.has(row.id)) {
       agent.walletAddress = walletMap.get(row.id);
     }
+    agent.liveness = livenessMap.get(row.id) || { connected: false };
     return agent;
   });
 
@@ -538,6 +578,38 @@ agents.post('/', async (c) => {
     success: true,
   });
 
+  // Epic 72: Auto-generate Ed25519 auth key pair
+  let authKeyResponse: Record<string, unknown> | undefined;
+  if (parsed.data.generate_keypair !== false) {
+    try {
+      const { generateEd25519KeyPair, generateAuthKeyId, hashApiKey: hashKey } = await import('../utils/crypto.js');
+      const { privateKey, publicKey } = generateEd25519KeyPair();
+      const authKeyId = generateAuthKeyId(data.id);
+      const publicKeyHash = hashKey(publicKey);
+
+      await (supabase.from('agent_auth_keys') as any).insert({
+        tenant_id: ctx.tenantId,
+        agent_id: data.id,
+        key_id: authKeyId,
+        algorithm: 'ed25519',
+        public_key: publicKey,
+        public_key_hash: publicKeyHash,
+        status: 'active',
+      });
+
+      authKeyResponse = {
+        keyId: authKeyId,
+        publicKey,
+        privateKey,
+        algorithm: 'ed25519',
+        warning: 'SAVE THIS PRIVATE KEY NOW — it will never be shown again!',
+      };
+    } catch (e) {
+      // Non-fatal: log and continue — the agent is still usable via bearer token
+      console.error('Warning: Failed to auto-generate Ed25519 key pair:', (e as Error).message);
+    }
+  }
+
   // Include auth credentials in response (only on creation)
   // WARNING: This is the ONLY time the plaintext token is available!
   return c.json({
@@ -550,6 +622,7 @@ agents.post('/', async (c) => {
       prefix: authTokenPrefix,
       warning: '⚠️ SAVE THIS TOKEN NOW - it will never be shown again!',
     },
+    ...(authKeyResponse ? { authKey: authKeyResponse } : {}),
   }, 201);
 });
 
@@ -649,7 +722,27 @@ agents.get('/:id', async (c) => {
     hasSecret: !!data.endpoint_secret,
   };
 
-  return c.json({ data: { ...agent, skills: skills || [], a2aCardUrl, endpoint } });
+  // Epic 72: Fetch liveness (active SSE connection)
+  const { data: activeConn } = await (supabase
+    .from('agent_connections') as any)
+    .select('connected_at, last_heartbeat_at')
+    .eq('agent_id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .is('disconnected_at', null)
+    .order('connected_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const liveness = activeConn
+    ? {
+        connected: true,
+        connectedAt: activeConn.connected_at,
+        lastHeartbeatAt: activeConn.last_heartbeat_at,
+        connectionDuration: Math.floor((Date.now() - new Date(activeConn.connected_at).getTime()) / 1000),
+      }
+    : { connected: false };
+
+  return c.json({ data: { ...agent, skills: skills || [], a2aCardUrl, endpoint, liveness } });
 });
 
 // ============================================
@@ -1517,6 +1610,575 @@ agents.post('/:id/verify', async (c) => {
   }
   
   return c.json({ data: agent });
+});
+
+// ============================================
+// POST /v1/agents/:id/upgrade - KYA tier upgrade (Story 73.5)
+// ============================================
+const upgradeSchema = z.object({
+  target_tier: z.number().int().min(0).max(3),
+  // T1 (DSD) fields
+  skill_manifest: z.object({
+    protocols: z.array(z.string()),
+    action_types: z.array(z.string()),
+    domain: z.string(),
+    description: z.string(),
+  }).optional(),
+  spending_policy: z.object({
+    per_transaction: z.number().optional(),
+    daily: z.number().optional(),
+    monthly: z.number().optional(),
+    allowlisted_domains: z.array(z.string()).optional(),
+  }).optional(),
+  escalation_policy: z.enum(['DECLINE', 'SUSPEND_AND_NOTIFY', 'REQUEST_APPROVAL']).optional(),
+  use_case_description: z.string().optional(),
+  model_family: z.string().optional(),
+  model_version: z.string().optional(),
+  // T3 fields
+  kill_switch_operator: z.object({
+    name: z.string(),
+    email: z.string().email(),
+  }).optional(),
+});
+
+agents.post('/:id/upgrade', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  const supabase = createClient();
+
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID format');
+
+  const body = upgradeSchema.parse(await c.req.json());
+  const { target_tier } = body;
+
+  // Fetch existing agent
+  const { data: existing, error: fetchError } = await supabase
+    .from('agents')
+    .select('*, accounts!agents_parent_account_id_fkey (id, type, name, verification_tier)')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .single();
+
+  if (fetchError || !existing) throw new NotFoundError('Agent', id);
+
+  const currentTier = existing.kya_tier || 0;
+  if (target_tier <= currentTier) {
+    throw new ValidationError(`Agent is already at KYA tier ${currentTier}. Cannot downgrade or stay at same tier.`);
+  }
+
+  // Tier-specific validation
+  if (target_tier >= 1) {
+    if (!body.skill_manifest) {
+      throw new ValidationError('KYA T1+ requires a skill_manifest (Delegation Scope Document)');
+    }
+    if (!body.escalation_policy) {
+      throw new ValidationError('KYA T1+ requires an escalation_policy');
+    }
+  }
+
+  if (target_tier >= 2) {
+    // Story 73.17: Use verification service for T2 eligibility
+    const eligibility = await checkT2Eligibility(supabase, id);
+    if (!eligibility.eligible) {
+      throw new ValidationError(
+        `KYA T2 upgrade blocked: ${eligibility.blockers.join('; ')}`,
+      );
+    }
+  }
+
+  if (target_tier >= 3) {
+    if (!body.kill_switch_operator) {
+      throw new ValidationError('KYA T3 requires a designated kill-switch operator');
+    }
+  }
+
+  // Build update payload
+  const parentTier = existing.accounts?.verification_tier ?? 0;
+  const { limits: effectiveLimits, capped } = await computeEffectiveLimits(supabase, target_tier, parentTier);
+
+  const updatePayload: Record<string, any> = {
+    kya_tier: target_tier,
+    kya_status: 'verified',
+    kya_verified_at: new Date().toISOString(),
+    limit_per_transaction: effectiveLimits.per_transaction,
+    limit_daily: effectiveLimits.daily,
+    limit_monthly: effectiveLimits.monthly,
+    effective_limit_per_tx: effectiveLimits.per_transaction,
+    effective_limit_daily: effectiveLimits.daily,
+    effective_limit_monthly: effectiveLimits.monthly,
+    effective_limits_capped: capped,
+  };
+
+  // CAI fields
+  if (body.skill_manifest) updatePayload.skill_manifest = body.skill_manifest;
+  if (body.escalation_policy) updatePayload.escalation_policy = body.escalation_policy;
+  if (body.use_case_description) updatePayload.use_case_description = body.use_case_description;
+  if (body.model_family) updatePayload.model_family = body.model_family;
+  if (body.model_version) updatePayload.model_version = body.model_version;
+  if (body.kill_switch_operator) {
+    updatePayload.kill_switch_operator_name = body.kill_switch_operator.name;
+    updatePayload.kill_switch_operator_email = body.kill_switch_operator.email;
+    updatePayload.kill_switch_operator_id = ctx.userId || ctx.actorId;
+  }
+
+  const { data, error } = await supabase
+    .from('agents')
+    .update(updatePayload)
+    .eq('id', id)
+    .eq('environment', getEnv(ctx))
+    .select('*, accounts!agents_parent_account_id_fkey (id, type, name, verification_tier)')
+    .single();
+
+  if (error) throw new Error(`Failed to upgrade agent: ${error.message}`);
+
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'agent',
+    entityId: id,
+    action: 'kya_upgraded',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+    changes: {
+      before: { kya_tier: currentTier, kya_status: existing.kya_status },
+      after: { kya_tier: target_tier, kya_status: 'verified' },
+    },
+  });
+
+  const agent = mapAgentFromDb(data);
+  if (data.accounts) {
+    agent.parentAccount = {
+      id: data.accounts.id,
+      type: data.accounts.type,
+      name: data.accounts.name,
+      verificationTier: data.accounts.verification_tier,
+    };
+  }
+
+  return c.json({ data: agent });
+});
+
+// ============================================
+// GET /v1/agents/:id/kya-status - KYA tier status (Story 73.5)
+// ============================================
+agents.get('/:id/kya-status', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  const supabase = createClient();
+
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID format');
+
+  // Core fields always exist; CAI fields may not exist until migration 20260413_agent_cai_fields is applied
+  const { data: agent, error } = await supabase
+    .from('agents')
+    .select(`
+      id, name, kya_tier, kya_status, kya_verified_at,
+      limit_per_transaction, limit_daily, limit_monthly,
+      effective_limit_per_tx, effective_limit_daily, effective_limit_monthly,
+      effective_limits_capped, parent_account_id,
+      accounts!agents_parent_account_id_fkey (id, verification_tier, type)
+    `)
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .single();
+
+  if (error || !agent) throw new NotFoundError('Agent', id);
+
+  // Try to fetch CAI fields separately (graceful if columns don't exist yet)
+  let caiFields: any = {};
+  try {
+    const { data: cai } = await supabase
+      .from('agents')
+      .select('skill_manifest, use_case_description, escalation_policy, model_family, model_version, operational_history_start, policy_violation_count, behavioral_consistency_score, kya_enterprise_override, kya_override_assessed_at, kill_switch_operator_id, kill_switch_operator_name, kill_switch_operator_email')
+      .eq('id', id)
+      .single();
+    if (cai) caiFields = cai;
+  } catch { /* CAI columns not yet migrated */ }
+
+  const operationalDays = caiFields.operational_history_start
+    ? Math.floor((Date.now() - new Date(caiFields.operational_history_start).getTime()) / (86400 * 1000))
+    : 0;
+
+  const parentTier = agent.accounts?.verification_tier ?? 0;
+  const kyaTier = agent.kya_tier || 0;
+
+  // Determine upgrade eligibility
+  let upgradeEligible = false;
+  let nextTier: number | null = null;
+  let upgradeBlockers: string[] = [];
+
+  if (kyaTier < 3) {
+    nextTier = kyaTier + 1;
+    if (nextTier === 1) {
+      upgradeEligible = true; // T1 just needs DSD declaration
+    } else if (nextTier === 2) {
+      if (operationalDays < 30 && !caiFields.kya_enterprise_override) {
+        upgradeBlockers.push(`Need ${30 - operationalDays} more days of operational history`);
+      }
+      if ((caiFields.policy_violation_count || 0) > 0) {
+        upgradeBlockers.push(`${caiFields.policy_violation_count} policy violation(s) must be resolved`);
+      }
+      upgradeEligible = upgradeBlockers.length === 0;
+    } else if (nextTier === 3) {
+      upgradeEligible = false; // T3 requires manual review
+      upgradeBlockers.push('KYA T3 requires security review and kill-switch operator designation');
+    }
+  }
+
+  return c.json({
+    agentId: agent.id,
+    name: agent.name,
+    tier: kyaTier,
+    status: agent.kya_status,
+    verifiedAt: agent.kya_verified_at,
+    effectiveLimits: {
+      perTransaction: parseFloat(agent.effective_limit_per_tx) || 0,
+      daily: parseFloat(agent.effective_limit_daily) || 0,
+      monthly: parseFloat(agent.effective_limit_monthly) || 0,
+      cappedByParent: agent.effective_limits_capped || false,
+      parentTier,
+    },
+    cai: {
+      modelFamily: caiFields.model_family || null,
+      modelVersion: caiFields.model_version || null,
+      skillManifest: caiFields.skill_manifest || null,
+      useCaseDescription: caiFields.use_case_description || null,
+      escalationPolicy: caiFields.escalation_policy || 'DECLINE',
+      operationalDays,
+      policyViolationCount: caiFields.policy_violation_count || 0,
+      behavioralConsistencyScore: caiFields.behavioral_consistency_score != null
+        ? parseFloat(caiFields.behavioral_consistency_score)
+        : null,
+      enterpriseOverride: caiFields.kya_enterprise_override || false,
+      killSwitchEnabled: !!caiFields.kill_switch_operator_id,
+    },
+    upgrade: {
+      eligible: upgradeEligible,
+      nextTier,
+      blockers: upgradeBlockers,
+    },
+  });
+});
+
+// ============================================
+// GET /v1/agents/:id/trust-profile - Cross-org queryable (Story 73.5/73.18)
+// Publicly queryable — no auth required for cross-org use.
+// ============================================
+agents.get('/:id/trust-profile', async (c) => {
+  const id = c.req.param('id');
+  const supabase = createClient();
+
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID format');
+
+  // Core fields that always exist
+  const { data: agent, error } = await supabase
+    .from('agents')
+    .select(`
+      id, kya_tier, kya_status, kya_verified_at,
+      accounts!agents_parent_account_id_fkey (verification_tier, type)
+    `)
+    .eq('id', id)
+    .single();
+
+  if (error || !agent) throw new NotFoundError('Agent', id);
+
+  // CAI fields (graceful if columns don't exist yet)
+  let cai: any = {};
+  try {
+    const { data } = await supabase
+      .from('agents')
+      .select('skill_manifest, model_family, operational_history_start, policy_violation_count, behavioral_consistency_score, kill_switch_operator_id')
+      .eq('id', id)
+      .single();
+    if (data) cai = data;
+  } catch { /* CAI columns not yet migrated */ }
+
+  const kyaTier = agent.kya_tier || 0;
+  const operationalDays = cai.operational_history_start
+    ? Math.floor((Date.now() - new Date(cai.operational_history_start).getTime()) / (86400 * 1000))
+    : 0;
+
+  // T0/T1 agents get minimal profiles
+  const isMinimal = kyaTier < 2;
+
+  return c.json({
+    agentId: agent.id,
+    kyaTier,
+    parentVerificationTier: agent.accounts?.verification_tier ?? 0,
+    parentEntityType: agent.accounts?.type ?? 'person',
+    operationalDays,
+    policyViolationCount: isMinimal ? null : (cai.policy_violation_count || 0),
+    behavioralConsistencyScore: isMinimal ? null : (
+      cai.behavioral_consistency_score != null
+        ? parseFloat(cai.behavioral_consistency_score)
+        : null
+    ),
+    skillManifest: isMinimal ? null : (cai.skill_manifest || null),
+    modelFamily: isMinimal ? null : (cai.model_family || null),
+    killSwitchEnabled: !!cai.kill_switch_operator_id,
+    lastVerifiedAt: agent.kya_verified_at,
+  });
+});
+
+// ============================================
+// POST /v1/agents/:id/declare-dsd - DSD Declaration (Story 73.15)
+// ============================================
+const declareDsdSchema = z.object({
+  skill_manifest: z.object({
+    protocols: z.array(z.string()).min(1, 'At least one protocol required'),
+    action_types: z.array(z.string()).min(1, 'At least one action_type required'),
+    domain: z.string().min(1, 'Domain is required'),
+    description: z.string().min(1, 'Description is required'),
+  }),
+  spending_policy: z.object({
+    per_transaction: z.number().optional(),
+    daily: z.number().optional(),
+    monthly: z.number().optional(),
+    allowlisted_domains: z.array(z.string()).optional(),
+  }).optional(),
+  escalation_policy: z.enum(['DECLINE', 'SUSPEND_AND_NOTIFY', 'REQUEST_APPROVAL']),
+  use_case_description: z.string().min(1, 'Use case description is required'),
+  model_family: z.string().optional(),
+  model_version: z.string().optional(),
+});
+
+agents.post('/:id/declare-dsd', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  const supabase = createClient();
+
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID format');
+
+  const body = declareDsdSchema.parse(await c.req.json());
+
+  // Fetch existing agent
+  const { data: existing, error: fetchError } = await supabase
+    .from('agents')
+    .select('*, accounts!agents_parent_account_id_fkey (id, type, name, verification_tier)')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .single();
+
+  if (fetchError || !existing) throw new NotFoundError('Agent', id);
+
+  const currentTier = existing.kya_tier || 0;
+  const updatePayload: Record<string, any> = {
+    skill_manifest: body.skill_manifest,
+    escalation_policy: body.escalation_policy,
+    use_case_description: body.use_case_description,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (body.model_family) updatePayload.model_family = body.model_family;
+  if (body.model_version) updatePayload.model_version = body.model_version;
+
+  // Auto-upgrade T0 -> T1 if valid DSD is provided
+  if (currentTier === 0) {
+    const parentTier = existing.accounts?.verification_tier ?? null;
+    const { limits: effectiveLimits, capped } = await computeEffectiveLimits(supabase, 1, parentTier);
+
+    updatePayload.kya_tier = 1;
+    updatePayload.kya_status = 'verified';
+    updatePayload.kya_verified_at = new Date().toISOString();
+    updatePayload.limit_per_transaction = effectiveLimits.per_transaction;
+    updatePayload.limit_daily = effectiveLimits.daily;
+    updatePayload.limit_monthly = effectiveLimits.monthly;
+    updatePayload.effective_limit_per_tx = effectiveLimits.per_transaction;
+    updatePayload.effective_limit_daily = effectiveLimits.daily;
+    updatePayload.effective_limit_monthly = effectiveLimits.monthly;
+    updatePayload.effective_limits_capped = capped;
+  }
+
+  const { data, error } = await supabase
+    .from('agents')
+    .update(updatePayload)
+    .eq('id', id)
+    .eq('environment', getEnv(ctx))
+    .select('*, accounts!agents_parent_account_id_fkey (id, type, name, verification_tier)')
+    .single();
+
+  if (error) throw new Error(`Failed to declare DSD: ${error.message}`);
+
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'agent',
+    entityId: id,
+    action: currentTier === 0 ? 'dsd_declared_and_upgraded' : 'dsd_declared',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+    changes: {
+      before: { kya_tier: currentTier, skill_manifest: existing.skill_manifest },
+      after: { kya_tier: updatePayload.kya_tier || currentTier, skill_manifest: body.skill_manifest },
+    },
+  });
+
+  const agent = mapAgentFromDb(data);
+  if (data.accounts) {
+    agent.parentAccount = {
+      id: data.accounts.id,
+      type: data.accounts.type,
+      name: data.accounts.name,
+      verificationTier: data.accounts.verification_tier,
+    };
+  }
+
+  return c.json({ data: agent });
+});
+
+// ============================================
+// POST /v1/agents/:id/kill-switch - Activate kill switch (Story 73.19)
+// ============================================
+agents.post('/:id/kill-switch', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  const supabase = createClient();
+
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID format');
+
+  // Fetch the agent
+  const { data: agent, error: fetchError } = await supabase
+    .from('agents')
+    .select('id, name, status, kill_switch_operator_id, kill_switch_operator_name, tenant_id')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .single();
+
+  if (fetchError || !agent) throw new NotFoundError('Agent', id);
+
+  // Authorization: only the designated kill-switch operator or a tenant owner can activate
+  const isDesignatedOperator = agent.kill_switch_operator_id && agent.kill_switch_operator_id === ctx.userId;
+  const isTenantOwner = ctx.userRole === 'owner' || ctx.userRole === 'admin';
+
+  if (!isDesignatedOperator && !isTenantOwner) {
+    throw new ValidationError(
+      'Only the designated kill-switch operator or a tenant owner/admin can activate the kill switch',
+    );
+  }
+
+  // Suspend the agent
+  const { error: updateError } = await supabase
+    .from('agents')
+    .update({
+      status: 'suspended',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+    .eq('environment', getEnv(ctx));
+
+  if (updateError) throw new Error(`Failed to suspend agent: ${updateError.message}`);
+
+  // Cancel all pending transactions for this agent
+  const { data: cancelledTransfers, error: cancelError } = await supabase
+    .from('transfers')
+    .update({
+      status: 'cancelled',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('agent_id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('status', 'pending')
+    .select('id');
+
+  if (cancelError) {
+    console.error('Failed to cancel pending transfers during kill switch:', cancelError);
+  }
+
+  const pendingCancelled = cancelledTransfers?.length || 0;
+
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'agent',
+    entityId: id,
+    action: 'kill_switch_activated',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+    metadata: {
+      agentName: agent.name,
+      pendingTransfersCancelled: pendingCancelled,
+      activatedBy: ctx.actorName || ctx.actorId,
+    },
+  });
+
+  return c.json({
+    suspended: true,
+    pendingCancelled,
+  });
+});
+
+// ============================================
+// POST /v1/agents/:id/kill-switch/designate - Designate kill-switch operator (Story 73.19)
+// ============================================
+const designateKillSwitchSchema = z.object({
+  operator_name: z.string().min(1, 'Operator name is required'),
+  operator_email: z.string().email('Valid email is required'),
+});
+
+agents.post('/:id/kill-switch/designate', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  const supabase = createClient();
+
+  if (!isValidUUID(id)) throw new ValidationError('Invalid agent ID format');
+
+  const body = designateKillSwitchSchema.parse(await c.req.json());
+
+  // Verify agent belongs to tenant
+  const { data: agent, error: fetchError } = await supabase
+    .from('agents')
+    .select('id, name')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .single();
+
+  if (fetchError || !agent) throw new NotFoundError('Agent', id);
+
+  const { data, error } = await supabase
+    .from('agents')
+    .update({
+      kill_switch_operator_id: ctx.userId || ctx.actorId,
+      kill_switch_operator_name: body.operator_name,
+      kill_switch_operator_email: body.operator_email,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+    .eq('environment', getEnv(ctx))
+    .select('*, accounts!agents_parent_account_id_fkey (id, type, name, verification_tier)')
+    .single();
+
+  if (error) throw new Error(`Failed to designate kill-switch operator: ${error.message}`);
+
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'agent',
+    entityId: id,
+    action: 'kill_switch_operator_designated',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+    metadata: {
+      operatorName: body.operator_name,
+      operatorEmail: body.operator_email,
+    },
+  });
+
+  const result = mapAgentFromDb(data);
+  if (data.accounts) {
+    result.parentAccount = {
+      id: data.accounts.id,
+      type: data.accounts.type,
+      name: data.accounts.name,
+      verificationTier: data.accounts.verification_tier,
+    };
+  }
+
+  return c.json({ data: result });
 });
 
 // ============================================
@@ -2947,16 +3609,46 @@ agents.post('/:id/skills', async (c) => {
 
   const supabase = createClient();
 
-  // Verify agent belongs to tenant and get parent account
+  // Verify agent belongs to tenant and get parent account + KYA tier
   const { data: agent } = await supabase
     .from('agents')
-    .select('id, parent_account_id')
+    .select('id, parent_account_id, kya_tier, skill_manifest, accounts!agents_parent_account_id_fkey (id, verification_tier)')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
     .eq('environment', getEnv(ctx))
     .single();
 
   if (!agent) throw new NotFoundError('Agent');
+
+  // Story 73.15: Build a skill_manifest from the skill data for DSD purposes
+  // If the agent is T0 and this is the first skill with valid manifest data, auto-upgrade
+  const skillManifestFromBody = body.skill_manifest || body.metadata?.skill_manifest;
+  if (skillManifestFromBody && (agent.kya_tier || 0) === 0) {
+    const manifest = skillManifestFromBody;
+    // Validate it has the required DSD fields
+    if (manifest.protocols?.length > 0 && manifest.action_types?.length > 0 && manifest.domain && manifest.description) {
+      const parentTier = (agent as any).accounts?.verification_tier ?? null;
+      const { limits: effectiveLimits, capped } = await computeEffectiveLimits(supabase, 1, parentTier);
+
+      await supabase
+        .from('agents')
+        .update({
+          skill_manifest: manifest,
+          kya_tier: 1,
+          kya_status: 'verified',
+          kya_verified_at: new Date().toISOString(),
+          limit_per_transaction: effectiveLimits.per_transaction,
+          limit_daily: effectiveLimits.daily,
+          limit_monthly: effectiveLimits.monthly,
+          effective_limit_per_tx: effectiveLimits.per_transaction,
+          effective_limit_daily: effectiveLimits.daily,
+          effective_limit_monthly: effectiveLimits.monthly,
+          effective_limits_capped: capped,
+        })
+        .eq('id', id)
+        .eq('environment', getEnv(ctx));
+    }
+  }
 
   // Auto-create x402 endpoint for paid skills
   let x402EndpointId: string | null = null;

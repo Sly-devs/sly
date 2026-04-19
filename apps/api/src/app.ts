@@ -96,6 +96,7 @@ import mppRouter from './routes/mpp.js';
 import compositionRouter from './routes/composition.js';
 import mcpRouter from './routes/mcp.js';
 import supportRouter from './routes/support.js';
+import { agentConnectPublicRouter, agentConnectAuthRouter } from './routes/agent-connect.js';
 
 const app = new Hono();
 
@@ -116,7 +117,7 @@ app.use('/admin/round/*', async (c, next) => {
       status: 204,
       headers: {
         'Access-Control-Allow-Origin': c.req.header('Origin') || '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Authorization, Content-Type',
         'Access-Control-Max-Age': '86400',
       },
@@ -252,6 +253,11 @@ app.route('/v1/auth', authRouter);
 // Story 40.5: Circle Webhook Handler Implementation
 app.route('/webhooks/circle', circleWebhooksRouter);
 
+// Persona webhook receiver (public - verifies Persona signatures internally)
+// Stories 73.10/73.11: Persona KYC/KYB Verification
+import personaWebhooksRouter from './routes/persona-webhooks.js';
+app.route('/webhooks/persona', personaWebhooksRouter);
+
 // Stripe webhook receiver (public - verifies Stripe signatures internally)
 // Story 40.12: Stripe Test Mode Setup
 app.route('/webhooks/stripe', stripeWebhooksRouter);
@@ -287,6 +293,10 @@ app.route('/webhooks/ucp', ucpWebhooksRouter);
 // Agent card (public - ERC-8004 on-chain identity metadata)
 // Epic 63: On-chain agent registration — mounted outside /v1 to bypass auth
 app.route('/agents', agentCardRouter);
+
+// Agent challenge-response auth (public - rate-limited, no bearer auth)
+// Epic 72: Ed25519 challenge-response handshake
+app.route('/v1/agents', agentConnectPublicRouter);
 
 // Protocol Discovery API (public - for discovering available protocols)
 // Epic 49: Protocol Discovery & Management
@@ -395,6 +405,7 @@ v1.route('/tier-limits', tierLimitsRouter); // KYA + verification tier configura
 v1.route('/mpp', mppRouter); // Machine Payments Protocol (Epic 71)
 v1.route('/composition', compositionRouter); // Multi-protocol composition (Epic 71)
 v1.route('/support', supportRouter); // Support tools for Intercom Fin
+v1.route('/agents', agentConnectAuthRouter); // Agent key-pair auth + liveness (Epic 72)
 // NOTE: Removed catch-all payment-methods mount to prevent route conflicts
 // Payment methods are already accessible at /v1/payment-methods
 // Account-specific payment methods handled via accounts router

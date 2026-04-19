@@ -38,6 +38,7 @@ import { CardsClient } from './cards';
 import { A2AClient } from './protocols/a2a/client';
 import { AgentWalletsClient } from './protocols/agent-wallets/client';
 import { MPPClient } from './protocols/mpp/client';
+import { AgentsClient } from './agents/client';
 
 /**
  * Main Sly SDK class
@@ -120,6 +121,12 @@ export class Sly extends SlyClient {
    */
   public readonly mpp: MPPClient;
 
+  /**
+   * Agents client - KYA tier management
+   * Status checks, trust profiles, upgrades, DSD declarations, kill switch
+   */
+  public readonly agents: AgentsClient;
+
   constructor(config: SlyConfig) {
     // Validate API key
     if (!config.apiKey || config.apiKey.trim() === '') {
@@ -174,6 +181,9 @@ export class Sly extends SlyClient {
 
     // Initialize MPP client (Epic 71)
     this.mpp = new MPPClient(this);
+
+    // Initialize Agents client (Epic 73 — KYA tier management)
+    this.agents = new AgentsClient(this);
   }
 }
 

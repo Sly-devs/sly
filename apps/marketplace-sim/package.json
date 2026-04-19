@@ -1,0 +1,31 @@
+{
+  "name": "@sly/marketplace-sim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "External marketplace simulation + validation runner for the Sly platform. Exercises Sly entirely through public APIs, no backend shortcuts.",
+  "scripts": {
+    "sim": "tsx src/cli.ts",
+    "sim:server": "tsx src/server.ts",
+    "build": "tsup src/cli.ts --format esm --dts",
+    "typecheck": "tsc --noEmit",
+    "seed-personas": "tsx scripts/seed-personas.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@noble/ed25519": "^2.3.0",
+    "@noble/hashes": "^1.8.0",
+    "@supabase/supabase-js": "^2.47.10",
+    "@types/js-yaml": "^4.0.9",
+    "commander": "^12.1.0",
+    "dotenv": "^17.2.3",
+    "js-yaml": "^4.1.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.3.3"
+  }
+}

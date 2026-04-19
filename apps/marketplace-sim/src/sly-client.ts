@@ -48,6 +48,24 @@ export interface RespondParams {
   comment?: string;
 }
 
+/**
+ * Detects whether a thrown Sly API error came from an agent that's been
+ * suspended (kill switch activated). The Sly API signals this with:
+ *   HTTP 403 + JSON-RPC error code -32004 + message "Agent is suspended"
+ * (see apps/api/src/routes/a2a.ts:269)
+ *
+ * We match on the full error message produced by `request()`, which carries
+ * the HTTP status, the JSON-RPC code (if any), and the message text.
+ */
+export function isSuspensionError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (!msg) return false;
+  const is403 = /Sly API 403\b/.test(msg);
+  const isRpc32004 = /code=-32004\b/.test(msg);
+  const mentionsSuspended = /suspended/i.test(msg);
+  return (is403 && mentionsSuspended) || isRpc32004;
+}
+
 export class SlyClient {
   private baseUrl: string;
   private adminKey?: string;
@@ -196,9 +214,28 @@ export class SlyClient {
     }
 
     if (!res.ok) {
-      const detail = typeof body === 'object' && body !== null
-        ? ((body as { error?: string }).error ?? JSON.stringify(body))
-        : String(body);
+      // Extract a readable detail. Order of preference:
+      //   1. body.error if it's a string ({ error: 'foo' })
+      //   2. body.error.message if it's an object (JSON-RPC: { error: { code, message } })
+      //   3. full JSON of body
+      let detail: string;
+      if (typeof body === 'object' && body !== null) {
+        const b = body as { error?: unknown };
+        if (typeof b.error === 'string') {
+          detail = b.error;
+        } else if (typeof b.error === 'object' && b.error !== null && 'message' in b.error) {
+          const rpcErr = b.error as { code?: unknown; message?: unknown };
+          // Keep code + message so isSuspensionError can match on -32004.
+          detail = [rpcErr.code ? `code=${String(rpcErr.code)}` : null, rpcErr.message ? String(rpcErr.message) : null]
+            .filter(Boolean)
+            .join(' ');
+          if (!detail) detail = JSON.stringify(body);
+        } else {
+          detail = JSON.stringify(body);
+        }
+      } else {
+        detail = String(body);
+      }
       throw new Error(`Sly API ${res.status} ${path}: ${detail}`);
     }
 
@@ -574,6 +611,36 @@ export class SlyClient {
       );
     } catch {
       // Non-fatal — price update is best-effort
+    }
+  }
+
+  /**
+   * Fetch an agent's platform record (admin auth). Used for pre-flight status
+   * checks and post-error disambiguation (is this agent killed or just
+   * temporarily failing?).
+   */
+  async getAgent(agentId: string): Promise<{
+    id: string;
+    name: string;
+    status: 'active' | 'suspended' | 'frozen' | 'closed';
+    kya_tier?: number;
+  } | null> {
+    try {
+      const data: any = await this.request(
+        `/v1/agents/${encodeURIComponent(agentId)}`,
+        { method: 'GET' },
+        'admin',
+      );
+      const d = data?.data || data;
+      if (!d || !d.id) return null;
+      return {
+        id: d.id,
+        name: d.name ?? '',
+        status: d.status ?? 'active',
+        kya_tier: d.kya_tier,
+      };
+    } catch {
+      return null;
     }
   }
 

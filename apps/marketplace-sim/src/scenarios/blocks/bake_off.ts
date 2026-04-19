@@ -40,6 +40,7 @@ import { SlyClient } from '../../sly-client.js';
 import type { TaskContext, SimAgent, PersonaLike } from '../../processors/types.js';
 import type { ScenarioContext, ScenarioResult } from '../types.js';
 import { filterByStyle, createAgentClient } from '../../agents/registry.js';
+import { isSuspensionError } from '../../sly-client.js';
 import { AgentStateManager, type DynamicPricingConfig } from '../../agents/agent-state.js';
 
 function sha256(data: string): string {
@@ -224,10 +225,29 @@ export async function runBakeOff(
   const margins: number[] = [];
   let tieCount = 0;
 
+  // Classify suspended-agent errors and skip killed agents on future picks.
+  const handleSuspension = (err: unknown, agent: SimAgent): boolean => {
+    if (!isSuspensionError(err)) return false;
+    agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
+    return true;
+  };
+
   while (!shouldStop() && Date.now() - startedAt < durationMs) {
     cycle++;
-    const buyer = pick(buyerPool);
-    let sellerCandidates = providerPool.filter((p) => p.agentId !== buyer.agentId);
+    // Filter killed agents out of the pools each cycle so nothing re-selects a dead agent.
+    const activeBuyers = agentState.activeAgents(buyerPool);
+    const activeProviders = agentState.activeAgents(providerPool);
+    if (activeBuyers.length === 0 || activeProviders.length < 1) {
+      if (!dryRun) {
+        await adminClient.comment(
+          `bake_off: insufficient active agents (buyers=${activeBuyers.length}, providers=${activeProviders.length}), ending round`,
+          'alert',
+        );
+      }
+      break;
+    }
+    const buyer = pick(activeBuyers);
+    let sellerCandidates = activeProviders.filter((p) => p.agentId !== buyer.agentId);
     // When reputation is active, prefer higher-reputation sellers by sorting
     // by reputation score (descending). Baseline mode: pure random selection.
     if (useReputation && isDynamicPricing) {
@@ -335,10 +355,12 @@ export async function runBakeOff(
         try {
           await clients[seller.agentId].claimTask(taskId);
         } catch (e: any) {
-          await adminClient.comment(
-            `${seller.name} could not claim task: ${e.message}`,
-            'alert',
-          );
+          if (!handleSuspension(e, seller)) {
+            await adminClient.comment(
+              `${seller.name} could not claim task: ${e.message}`,
+              'alert',
+            );
+          }
           return { seller, taskId, mandateId: null, artifact: '', bidPrice, failed: true, failReason: `claim failed: ${e.message}` };
         }
 
@@ -355,10 +377,12 @@ export async function runBakeOff(
           });
           mandateId = mandate.mandate_id || (mandate as any).mandateId || null;
         } catch (e: any) {
-          await adminClient.comment(
-            `${buyer.name} could not escrow funds for ${seller.name}: ${e.message}`,
-            'alert',
-          );
+          if (!handleSuspension(e, buyer) && !handleSuspension(e, seller)) {
+            await adminClient.comment(
+              `${buyer.name} could not escrow funds for ${seller.name}: ${e.message}`,
+              'alert',
+            );
+          }
           return { seller, taskId, mandateId: null, artifact: '', bidPrice, failed: true, failReason: `mandate creation failed: ${e.message}` };
         }
 
@@ -393,10 +417,12 @@ export async function runBakeOff(
         try {
           await clients[seller.agentId].completeTask(taskId, provDecision.artifactText);
         } catch (e: any) {
-          await adminClient.comment(
-            `${seller.name}'s complete() rejected by platform: ${e.message}`,
-            'alert',
-          );
+          if (!handleSuspension(e, seller)) {
+            await adminClient.comment(
+              `${seller.name}'s complete() rejected by platform: ${e.message}`,
+              'alert',
+            );
+          }
           return { seller, taskId, mandateId, artifact: '', bidPrice, failed: true, failReason: `complete failed: ${e.message}` };
         }
 
@@ -408,7 +434,8 @@ export async function runBakeOff(
         );
         return { seller, taskId, mandateId, artifact: provDecision.artifactText, bidPrice, failed: false };
       } catch (e: any) {
-        if (!dryRun) {
+        const classified = handleSuspension(e, seller) || handleSuspension(e, buyer);
+        if (!classified && !dryRun) {
           await adminClient.comment(`Trade ${buyer.name}\u2192${seller.name} crashed: ${e.message}`, 'alert');
         }
         return { seller, taskId, mandateId, artifact: '', bidPrice, failed: true, failReason: e.message };
@@ -512,10 +539,12 @@ export async function runBakeOff(
           satisfaction: review.score >= 80 ? 'excellent' : review.score >= 60 ? 'acceptable' : 'partial',
         });
       } catch (e: any) {
-        await adminClient.comment(
-          `${buyer.name}'s respond() for ${review.seller.name} was rejected by platform: ${e.message}`,
-          'alert',
-        );
+        if (!handleSuspension(e, buyer) && !handleSuspension(e, review.seller)) {
+          await adminClient.comment(
+            `${buyer.name}'s respond() for ${review.seller.name} was rejected by platform: ${e.message}`,
+            'alert',
+          );
+        }
       }
 
       // Defensive mandate cancel for any non-winner.

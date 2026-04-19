@@ -681,6 +681,25 @@ async function connect() {
           renderGraph();
         }
       } catch {}
+
+      // Refresh agent status (separate lightweight call so kills from the
+      // dashboard, another tab, or an API caller surface in the list-card
+      // dot within one poll cycle).
+      try {
+        const ar = await fetch(url + '/admin/round/agents', { headers });
+        const aj = await ar.json();
+        const fresh = (aj?.data?.data || aj?.data || []);
+        let changed = false;
+        for (const f of fresh) {
+          if (!f || !f.id) continue;
+          const existing = state.agents.find(a => a.id === f.id);
+          if (existing && f.status && existing.status !== f.status) {
+            existing.status = f.status;
+            changed = true;
+          }
+        }
+        if (changed) renderAgents();
+      } catch {}
     }, 3000);
 
   } catch (err) {
@@ -2352,17 +2371,25 @@ async function openAgentInspector(agentId) {
 }
 
 async function killSwitchAgent(agentId) {
-  if (!confirm('Suspend agent ' + (agentNames[agentId] || agentId.slice(0, 8)) + '? This will block all transactions immediately.')) return;
+  const displayName = agentNames[agentId] || agentId.slice(0, 8);
+  if (!confirm('Suspend agent ' + displayName + '? This will cancel all pending transactions immediately.')) return;
   const url = document.getElementById('apiUrl').value.trim();
   const key = document.getElementById('apiKey').value.trim();
   try {
-    const r = await fetch(url + '/v1/agents/' + encodeURIComponent(agentId), {
-      method: 'PATCH',
+    const r = await fetch(url + '/v1/agents/' + encodeURIComponent(agentId) + '/kill-switch', {
+      method: 'POST',
       headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'suspended' }),
     });
     if (r.ok) {
-      addFeedItem('warning', 'KILL SWITCH: ' + (agentNames[agentId] || agentId.slice(0, 8)) + ' suspended', 'rejected');
+      const j = await r.json().catch(() => ({}));
+      const cancelled = typeof j.pendingCancelled === 'number' ? j.pendingCancelled : 0;
+      const suffix = cancelled > 0 ? ' (' + cancelled + ' pending cancelled)' : '';
+      addFeedItem('warning', 'KILL SWITCH: ' + displayName + ' suspended' + suffix, 'rejected');
+      // Optimistically flip local status so the list-card dot goes yellow now,
+      // without waiting for the next /admin/round/agents poll.
+      const ag = state.agents.find(a => a.id === agentId);
+      if (ag) ag.status = 'suspended';
+      renderAgents();
       openAgentInspector(agentId); // Refresh the panel
     } else {
       const j = await r.json().catch(() => ({}));

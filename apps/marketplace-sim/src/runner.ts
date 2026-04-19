@@ -212,6 +212,33 @@ export async function startRun(opts: RunOptions): Promise<RunHandle> {
     console.log(`[runner] BASELINE mode — no reputation, no dynamic pricing, uniform model`);
   }
 
+  // Pre-flight: drop any agent whose platform status isn't 'active' (e.g. a
+  // previous run left one killed via the kill switch). Cheap admin calls,
+  // parallel. Keeps the scenario block from wasting tick 0 on dead agents.
+  const preflight = await Promise.all(
+    agents.map(async (a) => {
+      const rec = await sly.getAgent(a.agentId);
+      return { agent: a, status: rec?.status ?? 'active' };
+    }),
+  );
+  const deadAtStart = preflight.filter((p) => p.status !== 'active');
+  if (deadAtStart.length > 0) {
+    for (const d of deadAtStart) {
+      console.log(`[runner] pre-flight: ${d.agent.name} is ${d.status}, excluding from run`);
+      sly
+        .milestone(`Pre-flight: ${d.agent.name} is ${d.status}, excluded from run`, {
+          agentId: d.agent.agentId,
+          agentName: d.agent.name,
+          icon: '\u26a0',
+        })
+        .catch(() => {});
+    }
+    agents = agents.filter((a) => !deadAtStart.some((d) => d.agent.agentId === a.agentId));
+    if (agents.length === 0) {
+      throw new Error('Pre-flight left zero active agents — cannot run the scenario.');
+    }
+  }
+
   const done = scenario.run({
     sly,
     narrator,

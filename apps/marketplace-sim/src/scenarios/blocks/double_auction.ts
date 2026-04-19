@@ -30,7 +30,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { SlyClient } from '../../sly-client.js';
+import { SlyClient, isSuspensionError } from '../../sly-client.js';
 import type { TaskContext, SimAgent, PersonaLike } from '../../processors/types.js';
 import type { ScenarioContext, ScenarioResult } from '../types.js';
 import { filterByStyle, createAgentClient } from '../../agents/registry.js';
@@ -213,10 +213,13 @@ export async function runDoubleAuction(
 
   while (!shouldStop() && Date.now() - startedAt < durationMs) {
     cycle++;
-    const activePool = pool.filter((a) => !exited.has(a.agentId));
+    // Filter both agents that exited (negative P&L) and agents killed by the kill switch.
+    const activePool = pool.filter((a) => !exited.has(a.agentId) && !agentState.isKilled(a.agentId));
     if (activePool.length < buyersPerCycle + 2) {
       if (!dryRun) {
-        await adminClient.comment(`Market collapsed — only ${activePool.length} active agents remain`, 'alert');
+        const killed = agentState.killedCount();
+        const killedNote = killed > 0 ? ` (${killed} suspended)` : '';
+        await adminClient.comment(`Market collapsed — only ${activePool.length} active agents remain${killedNote}`, 'alert');
       }
       break;
     }
@@ -248,12 +251,19 @@ export async function runDoubleAuction(
     }
     const availableSkillsList = [...allPoolSkills];
 
+    // Classify suspended-agent errors so the cycle stops picking killed agents.
+    const handleSuspension = (err: unknown, agent: SimAgent): boolean => {
+      if (!isSuspensionError(err)) return false;
+      agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
+      return true;
+    };
+
     // ─── 2. Each buyer forms intent and posts a task ───
     for (const buyer of buyers) {
       // LLM-driven intent: buyer decides what they need based on their persona
       let brief: string;
       let requestedSkill: string | null;
-      let intentData: import('./types.js').BuyerIntent | null = null;
+      let intentData: import('../../processors/types.js').BuyerIntent | null = null;
       let acceptanceCriteria: string[] = [];
 
       if (processor.processAsBuyerIntent && availableSkillsList.length > 0 && !dryRun) {
@@ -462,7 +472,7 @@ export async function runDoubleAuction(
         });
         taskId = created.id;
 
-        try { await clients[selected.seller.agentId].claimTask(taskId); } catch {}
+        try { await clients[selected.seller.agentId].claimTask(taskId); } catch (e) { handleSuspension(e, selected.seller); }
 
         // Create escrow (mandate) for this one trade
         try {
@@ -507,7 +517,7 @@ export async function runDoubleAuction(
           }
           await adminClient.comment(`${selected.seller.name} failed to deliver for ${buyer.name}`, 'alert');
         } else {
-          try { await clients[selected.seller.agentId].completeTask(taskId, provDecision.artifactText); } catch {}
+          try { await clients[selected.seller.agentId].completeTask(taskId, provDecision.artifactText); } catch (e) { handleSuspension(e, selected.seller); }
 
           // ─── 6. Buyer reviews the delivered work ───
           const buyerPersona: PersonaLike = useReputation
@@ -638,6 +648,10 @@ export async function runDoubleAuction(
           agentState.addAdaptationNote(c.seller.agentId, `Not selected for ${requestedSkill || 'task'}: ${reason}`);
         }
       } catch (e: any) {
+        // If the crash was a suspended-agent error, mark the seller (most
+        // likely target) as killed so we stop selecting them.
+        if (selected?.seller) handleSuspension(e, selected.seller);
+        else handleSuspension(e, buyer);
         if (mandateId) {
           try { await clients[buyer.agentId].cancelMandate(mandateId, { metadataMerge: { outcome: 'crash' } }); } catch {}
         }

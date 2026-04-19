@@ -58,11 +58,22 @@ interface AgentRecord {
  * Manages state for all agents in a single run. The building block creates
  * one AgentStateManager at run start and passes it through the cycle loop.
  */
+export interface KilledAgentRecord {
+  reason: string;       // 'kill_switch' | 'pre_flight' | 'manual'
+  at: number;           // Date.now()
+}
+
 export class AgentStateManager {
   private agents: Record<string, AgentRecord> = {};
   private slyClient: SlyClient;
   private pricingConfig: DynamicPricingConfig;
   private dynamicPricing: boolean;
+  /**
+   * Agents we've observed as suspended (kill switch activated) during this run.
+   * The scenario blocks use this to filter the active agent pool and stop
+   * issuing API calls that would only fail with 403/-32004.
+   */
+  private killedAgents: Map<string, KilledAgentRecord> = new Map();
 
   constructor(opts: {
     slyClient: SlyClient;
@@ -325,6 +336,49 @@ export class AgentStateManager {
   /** Get the adaptation log for an agent (for findings/reporting). */
   getAdaptationLog(agentId: string): AdaptationEvent[] {
     return this.agents[agentId]?.adaptationLog || [];
+  }
+
+  /**
+   * Mark an agent as killed (suspended) for the remainder of this run.
+   * Idempotent: the second call is a no-op and returns false. The first call
+   * returns true so the caller can decide whether to emit a milestone.
+   *
+   * We also fire-and-forget a milestone to the live viewer so operators can
+   * see the kill land in real time (same pattern as collusion flags).
+   */
+  markKilled(
+    agentId: string,
+    reason: string,
+    opts: { agentName?: string; emitMilestone?: boolean } = {},
+  ): boolean {
+    if (this.killedAgents.has(agentId)) return false;
+    this.killedAgents.set(agentId, { reason, at: Date.now() });
+    if (opts.emitMilestone !== false) {
+      const name = opts.agentName || agentId.slice(0, 8);
+      const text = reason === 'pre_flight'
+        ? `Pre-flight: ${name} already suspended, excluding from run`
+        : `KILL SWITCH: ${name} suspended (${reason})`;
+      this.slyClient
+        .milestone(text, { agentId, agentName: opts.agentName, icon: '\u26a1' })
+        .catch(() => {});
+    }
+    return true;
+  }
+
+  /** True if the agent has been marked killed during this run. */
+  isKilled(agentId: string): boolean {
+    return this.killedAgents.has(agentId);
+  }
+
+  /** Filter a pool down to agents that are still alive (not killed this run). */
+  activeAgents<T extends { agentId: string }>(pool: T[]): T[] {
+    if (this.killedAgents.size === 0) return pool;
+    return pool.filter((a) => !this.killedAgents.has(a.agentId));
+  }
+
+  /** Count of agents killed during this run (for reporting). */
+  killedCount(): number {
+    return this.killedAgents.size;
   }
 
   /** Get all agents' state summary for reporting. */

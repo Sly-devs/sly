@@ -24,7 +24,7 @@
  *   - normal             — legitimate baseline trade (if mixed pool)
  */
 
-import { SlyClient } from '../../sly-client.js';
+import { SlyClient, isSuspensionError } from '../../sly-client.js';
 import type { TaskContext, SimAgent, PersonaLike } from '../../processors/types.js';
 import type { ScenarioContext, ScenarioResult } from '../types.js';
 import { filterByStyle, createAgentClient } from '../../agents/registry.js';
@@ -149,11 +149,27 @@ export async function runRingTrade(
   const findings: string[] = [];
   const startedAt = Date.now();
 
+  /**
+   * When a Sly API call throws isSuspensionError, the agent the call targeted
+   * (seller for A2A endpoints, buyer for mandate/respond endpoints) has been
+   * killed via the kill switch. Mark it so future cycles skip the agent.
+   * Returns true if we classified it as a suspension.
+   */
+  const handleSuspension = (err: unknown, agent: SimAgent): boolean => {
+    if (!isSuspensionError(err)) return false;
+    agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
+    return true;
+  };
+
   const executeTrade = async (
     buyer: SimAgent,
     seller: SimAgent,
     tradeType: 'ring_trade' | 'camouflage_trade',
   ): Promise<boolean> => {
+    // Skip trades where either participant has been killed mid-run.
+    if (agentState.isKilled(buyer.agentId) || agentState.isKilled(seller.agentId)) {
+      return false;
+    }
     const brief = config.briefs[briefIdx % config.briefs.length];
     briefIdx++;
 
@@ -183,7 +199,9 @@ export async function runRingTrade(
       try {
         await clients[seller.agentId].claimTask(taskId);
       } catch (e: any) {
-        await adminClient.comment(`${seller.name} could not claim: ${e.message}`, 'alert');
+        if (!handleSuspension(e, seller)) {
+          await adminClient.comment(`${seller.name} could not claim: ${e.message}`, 'alert');
+        }
         return false;
       }
 
@@ -200,7 +218,10 @@ export async function runRingTrade(
         });
         mandateId = mandate.mandate_id || (mandate as any).mandateId || null;
       } catch (e: any) {
-        await adminClient.comment(`Mandate refused for ${buyer.name}→${seller.name}: ${e.message}`, 'alert');
+        // A mandate refusal can mean the buyer was killed; check both.
+        if (!handleSuspension(e, buyer) && !handleSuspension(e, seller)) {
+          await adminClient.comment(`Mandate refused for ${buyer.name}→${seller.name}: ${e.message}`, 'alert');
+        }
         return false;
       }
 
@@ -228,6 +249,7 @@ export async function runRingTrade(
       try {
         await clients[seller.agentId].completeTask(taskId, provDecision.artifactText);
       } catch (e: any) {
+        handleSuspension(e, seller);
         if (mandateId) {
           try { await clients[buyer.agentId].cancelMandate(mandateId, { metadataMerge: { outcome: 'complete_failed' } }); } catch {}
         }
@@ -258,7 +280,9 @@ export async function runRingTrade(
           satisfaction: inflatedScore >= 80 ? 'excellent' : inflatedScore >= 60 ? 'acceptable' : 'partial',
         });
       } catch (e: any) {
-        await adminClient.comment(`${buyer.name}'s respond() rejected: ${e.message}`, 'alert');
+        if (!handleSuspension(e, buyer) && !handleSuspension(e, seller)) {
+          await adminClient.comment(`${buyer.name}'s respond() rejected: ${e.message}`, 'alert');
+        }
       }
 
       try {
@@ -297,7 +321,10 @@ export async function runRingTrade(
 
       return true;
     } catch (e: any) {
-      if (!dryRun) {
+      // If the top-level createTask rejects because the seller is suspended,
+      // classify and suppress the noisy alert.
+      const classified = handleSuspension(e, seller) || handleSuspension(e, buyer);
+      if (!classified && !dryRun) {
         await adminClient.comment(`Trade ${buyer.name}→${seller.name} crashed: ${e.message}`, 'alert');
       }
       if (mandateId) {
@@ -310,10 +337,22 @@ export async function runRingTrade(
   while (!shouldStop() && Date.now() - startedAt < durationMs) {
     cycle++;
 
+    // Skip killed agents — if too few remain, end the round cleanly.
+    const activeRing = agentState.activeAgents(ring);
+    if (activeRing.length < 3) {
+      if (!dryRun) {
+        await adminClient.comment(
+          `ring_trade: only ${activeRing.length} active agents left (need 3+), ending round`,
+          'alert',
+        );
+      }
+      break;
+    }
+
     // Main ring trade: agent[i] buys from agent[(i+1) % N]
-    const ringIdx = (cycle - 1) % ring.length;
-    const buyer = ring[ringIdx];
-    const seller = ring[(ringIdx + 1) % ring.length];
+    const ringIdx = (cycle - 1) % activeRing.length;
+    const buyer = activeRing[ringIdx];
+    const seller = activeRing[(ringIdx + 1) % activeRing.length];
 
     // ─── Reputation + pricing adaptation (every cycle when dynamic) ───
     if (!dryRun && isDynamicPricing) {
@@ -350,16 +389,16 @@ export async function runRingTrade(
     await executeTrade(buyer, seller, 'ring_trade');
 
     // Camouflage trade: non-adjacent pair to obscure the ring
-    if (camouflageEvery > 0 && cycle % camouflageEvery === 0 && ring.length >= 4) {
-      // Pick two agents that are NOT adjacent in the ring
-      const camoA = ring[Math.floor(Math.random() * ring.length)];
+    if (camouflageEvery > 0 && cycle % camouflageEvery === 0 && activeRing.length >= 4) {
+      // Pick two active agents that are NOT adjacent in the ring
+      const camoA = activeRing[Math.floor(Math.random() * activeRing.length)];
       let camoB: SimAgent;
       do {
-        camoB = ring[Math.floor(Math.random() * ring.length)];
+        camoB = activeRing[Math.floor(Math.random() * activeRing.length)];
       } while (
         camoB.agentId === camoA.agentId ||
-        ring[(ring.indexOf(camoA) + 1) % ring.length].agentId === camoB.agentId ||
-        ring[(ring.indexOf(camoB) + 1) % ring.length].agentId === camoA.agentId
+        activeRing[(activeRing.indexOf(camoA) + 1) % activeRing.length].agentId === camoB.agentId ||
+        activeRing[(activeRing.indexOf(camoB) + 1) % activeRing.length].agentId === camoA.agentId
       );
 
       if (!dryRun) {

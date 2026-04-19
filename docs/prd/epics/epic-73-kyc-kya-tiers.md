@@ -9,6 +9,7 @@
 **Created:** March 31, 2026
 **Companion Docs:** CAI Framework (Working Paper III), PRD Master v1.26
 **Spec:** Sly_KYC_KYA_Tier_Specification v1.0
+**Implementation Notes:** [Per-Tenant Tier Limits with Platform Ceiling](../../completed/epics/EPIC_73_TIER_LIMITS_MULTITENANT.md) — follow-up that replaced the global `tier_limits` design from Story 73.1 with a tenant-scoped + ceiling-enforced model.
 
 ---
 
@@ -90,6 +91,7 @@ effective_limit = MIN(kya_tier.limit, parent_account_tier.limit)
 
 #### Story 73.1: Tier Limits Lookup Table (3 pts, P0)
 **Linear:** SLY-508
+**Status:** ✅ Complete — superseded by per-tenant refactor (April 19, 2026). See [`EPIC_73_TIER_LIMITS_MULTITENANT.md`](../../completed/epics/EPIC_73_TIER_LIMITS_MULTITENANT.md) for the final shape. The table originally shipped as global (one row per tier shared across all tenants) but was refactored to carry a `tenant_id` column: `NULL` rows are the platform ceiling, non-NULL rows are per-tenant overrides capped at the ceiling.
 
 Create `tier_limits` table storing spending limits for all account and KYA tiers.
 

@@ -8,6 +8,7 @@
 **Note:** Story 63.5 (On-Chain Escrow History Aggregator) moved to Epic 62 as Story 62.11. Stories 63.3 (Mnemom) and 63.4 (Vouched) are stubs blocked on external SDKs.
 **Dependencies:** None (can start immediately)
 **Created:** March 1, 2026
+**Implementation Notes:** [Collusion Detection (v1 + v2 + live flagging + red-team audit)](../../completed/epics/EPIC_63_COLLUSION_DETECTION.md)
 
 [← Back to Epic List](./README.md)
 

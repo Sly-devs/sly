@@ -113,7 +113,7 @@ Every story must meet these criteria before completion:
 - [Epic 18: Agent Wallets & Contract Policies](./epic-18-agent-wallets-contract-policies.md) 🤖 - Contract policy engine, per-counterparty exposure, negotiation guardrails (expanded from 23→35 pts)
 - [Epic 29: Workflow Engine](./epic-29-workflow-engine.md) ⚙️ - Expanded with contract governance conditions + escrow/reputation actions (42→52 pts)
 - [Epic 62: Escrow Orchestration](./epic-62-escrow-orchestration.md) 🔐 - Wrap AgentEscrowProtocol with governance, kill switch, settlement to Pix/SPEI
-- [Epic 63: External Reputation Bridge](./epic-63-external-reputation-bridge.md) 🛡️ - Unified trust score from ERC-8004, Mnemom, Vouched/MCP-I, escrow history
+- [Epic 63: External Reputation Bridge](./epic-63-external-reputation-bridge.md) 🛡️ - Unified trust score from ERC-8004, Mnemom, Vouched/MCP-I, escrow history. [Collusion detection shipped](../../completed/epics/EPIC_63_COLLUSION_DETECTION.md) on the internal a2a-feedback source (v1 + v2 ring coefficient + live flagging + red-team audit).
 - [Epic 64: OpenClaw Governance Skill](./epic-64-openclaw-governance-skill.md) 🧩 - Python skill for ClawHub routing contracting through Sly governance
 
 ### High-Frequency Payments

@@ -245,6 +245,9 @@ roundViewerRouter.get('/merchants', async (c) => {
       currency: a.currency,
       description: a.metadata?.description,
       pos_provider: a.metadata?.pos_provider,
+      // Star rating (0–5) — read by merchant_comparison to drive persona-based
+      // selection. Falls through from metadata.rating set by seed-sim-commerce.
+      rating: typeof a.metadata?.rating === 'number' ? a.metadata.rating : undefined,
       product_count: products.length,
       catalog: { products },
     };

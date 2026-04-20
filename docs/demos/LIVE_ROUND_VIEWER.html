@@ -1843,6 +1843,13 @@ function handleEvent(type, event) {
               };
               agentNames[mid] = c.toName || mid;
             }
+            // Draw a thin "considered but lost" edge from the buyer to each
+            // loser so all competing merchants appear on the graph, not just
+            // the winner. The winner already has its purple purchase edge
+            // from the earlier addEdge(...'purchase') call.
+            if (data.agentId && mid !== data.toId) {
+              addEdge(data.agentId, mid, 'considered');
+            }
           }
           if (data.toId && state.merchantComparisons[data.toId]) {
             state.merchantComparisons[data.toId].won += 1;
@@ -3093,11 +3100,17 @@ function drawGraph() {
     var color = link.color || '#6366f1';
     var isCanceled = link.pairState === 'canceled' || link.pairState === 'cancelled';
     var isFailed = link.pairState === 'failed';
+    var isConsidered = link.isConsidered;
 
     // Cancelled bids: thin dashed grey line, very low opacity
     // Failed tasks: thick dashed red line, full opacity — visually distinct
+    // Considered (merchant comparison lost): thin dotted, low opacity
     ctx.beginPath();
-    if (isCanceled) {
+    if (isConsidered) {
+      ctx.setLineDash([2, 4]);
+      ctx.globalAlpha = 0.35;
+      thickness = 1;
+    } else if (isCanceled) {
       ctx.setLineDash([3, 5]);
       ctx.globalAlpha = 0.45;
       thickness = 1.5;
@@ -3516,10 +3529,13 @@ function renderGraph() {
   Object.keys(pairKeys).forEach(function (key) {
     var p = pairKeys[key];
     if (!agentIds.has(p.from) || !agentIds.has(p.to)) return;
-    // Purchase edges (agent → merchant) get a distinct purple color matching
-    // the merchant nodes, so buy flows pop visually from the A2A task network.
-    var isPurchase = p.state === 'purchase' || String(p.to).startsWith('merch:');
-    var edgeColor = isPurchase ? '#a855f7' : (edgeStateColorMap[p.state] || edgeStateColorMap.working);
+    // Three edge styles for merchant comparisons:
+    //   - purchase (state='purchase' or target is a merchant node): purple solid
+    //   - considered (state='considered'): thin muted dashed — "shown but lost"
+    //   - default: indigo A2A edge color
+    var isConsidered = p.state === 'considered';
+    var isPurchase = !isConsidered && (p.state === 'purchase' || String(p.to).startsWith('merch:'));
+    var edgeColor = isConsidered ? '#6b7280' : (isPurchase ? '#a855f7' : (edgeStateColorMap[p.state] || edgeStateColorMap.working));
     var labelParts = [];
     if (p.count > 1) labelParts.push(p.count + '\u00d7');
     if (p.completed > 0 && p.totalScore > 0) labelParts.push(Math.round(p.totalScore / p.completed) + '/100');
@@ -3531,6 +3547,7 @@ function renderGraph() {
       label: labelParts.join(' ') || '',
       pairState: p.state,
       isPurchase: isPurchase,
+      isConsidered: isConsidered,
     });
   });
   d3Links = updatedLinks;

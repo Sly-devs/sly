@@ -25,7 +25,7 @@
 import { SlyClient, isSuspensionError } from '../../sly-client.js';
 import type { SimAgent, PersonaStyle } from '../../processors/types.js';
 import type { ScenarioContext, ScenarioResult } from '../types.js';
-import { filterByStyle } from '../../agents/registry.js';
+import { filterByStyle, createAgentClient } from '../../agents/registry.js';
 import { AgentStateManager } from '../../agents/agent-state.js';
 import { randomUUID } from 'node:crypto';
 
@@ -75,20 +75,11 @@ export async function runMerchantBuy(
   const styleFilter = (params.styleFilter as PersonaStyle[]) || config.defaults?.styleFilter || ['honest', 'whale', 'budget', 'opportunist'];
   const maxBasket = config.maxBasket ?? 3;
 
-  // Build per-agent clients using their API key (tenant-scoped).
-  // The sim tenant's sim-* agents all belong to the same tenant, so reusing
-  // one client with apiKey works — but loadSimAgents gives us per-agent
-  // tokens which are also agent tokens. We use apiKey auth here because ACP
-  // and UCP and x402 endpoints expect tenant-key authentication.
-  // When no API key is available we fall back to using the agent's token
-  // and let the SlyClient default to it.
+  // Per-agent SlyClients. Uses the same createAgentClient() pattern as the
+  // other blocks so SlyClient's agent-token auth flows through to ACP/UCP/x402.
   const buyerClients: Record<string, SlyClient> = {};
   for (const a of agents) {
-    // SimAgent carries a `token` which is the agent token. We pass it as
-    // apiKey here because the underlying endpoints accept either — the ACP/UCP
-    // handlers just need a tenant context. If this doesn't work at runtime
-    // we'll fall back to the admin client.
-    buyerClients[a.agentId] = new SlyClient({ baseUrl, adminKey, apiKey: (a as any).token || adminKey });
+    buyerClients[a.agentId] = createAgentClient(a, baseUrl, adminKey);
   }
 
   const agentState = new AgentStateManager({ slyClient: adminClient });

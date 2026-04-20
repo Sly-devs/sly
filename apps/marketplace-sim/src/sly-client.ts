@@ -696,7 +696,7 @@ export class SlyClient {
     return await this.request(
       '/v1/acp/checkouts',
       { method: 'POST', body: JSON.stringify(params) },
-      'apiKey',
+      'agent',
     );
   }
 
@@ -708,7 +708,7 @@ export class SlyClient {
     return await this.request(
       `/v1/acp/checkouts/${encodeURIComponent(checkoutId)}/complete`,
       { method: 'POST', body: JSON.stringify(params) },
-      'apiKey',
+      'agent',
     );
   }
 
@@ -725,7 +725,7 @@ export class SlyClient {
     return await this.request(
       '/v1/ucp/checkouts',
       { method: 'POST', body: JSON.stringify(params) },
-      'apiKey',
+      'agent',
     );
   }
 
@@ -737,7 +737,7 @@ export class SlyClient {
     await this.request(
       `/v1/ucp/checkouts/${encodeURIComponent(checkoutId)}/instruments`,
       { method: 'POST', body: JSON.stringify(params) },
-      'apiKey',
+      'agent',
     );
   }
 
@@ -746,7 +746,7 @@ export class SlyClient {
     return await this.request(
       `/v1/ucp/checkouts/${encodeURIComponent(checkoutId)}/complete`,
       { method: 'POST', body: JSON.stringify({}) },
-      'apiKey',
+      'agent',
     );
   }
 
@@ -784,7 +784,7 @@ export class SlyClient {
   /** Fetch a quote for an x402 endpoint (current price). */
   async quoteX402(endpointId: string): Promise<{ amount: number; currency: string } | null> {
     try {
-      const r: any = await this.request(`/v1/x402/quote/${encodeURIComponent(endpointId)}`, { method: 'GET' }, 'apiKey');
+      const r: any = await this.request(`/v1/x402/quote/${encodeURIComponent(endpointId)}`, { method: 'GET' }, 'agent');
       return { amount: Number(r?.amount ?? r?.price ?? 0), currency: r?.currency ?? 'USDC' };
     } catch {
       return null;
@@ -810,7 +810,7 @@ export class SlyClient {
     return await this.request(
       '/v1/x402/pay',
       { method: 'POST', body: JSON.stringify(body) },
-      'apiKey',
+      'agent',
     );
   }
 

@@ -201,24 +201,48 @@ export async function runResaleChain(
       // ─── 2. Reseller opens A2A offer to the end-buyer ────────────────
       const resalePrice = Math.round(merchantCost * markup * 100) / 100;
       const pitch = `Resale offer: "${item.name}" (sourced from ${merchant.name}). Price $${resalePrice.toFixed(2)} (merchant cost $${merchantCost.toFixed(2)}, markup ×${markup.toFixed(2)}). Fulfillment on acceptance.`;
-      const created = await clients[reseller.agentId].createTask({
-        agentId: buyer.agentId,
-        message: {
-          role: 'user',
-          parts: [{ type: 'text', text: pitch }],
-          metadata: {
-            simRound: scenarioId,
-            cycle,
-            resale: true,
-            merchantId: merchant.merchant_id || merchant.id,
-            merchantCost,
-            resalePrice,
-            item: item.name,
-            externallyManaged: true,
+      let taskId: string;
+      try {
+        const created = await clients[reseller.agentId].createTask({
+          agentId: buyer.agentId,
+          message: {
+            role: 'user',
+            parts: [{ type: 'text', text: pitch }],
+            metadata: {
+              simRound: scenarioId,
+              cycle,
+              resale: true,
+              merchantId: merchant.merchant_id || merchant.id,
+              merchantCost,
+              resalePrice,
+              item: item.name,
+              externallyManaged: true,
+            },
           },
+        });
+        taskId = created.id;
+      } catch (e: any) {
+        if (!(handleSuspension(e, reseller) || handleSuspension(e, buyer))) {
+          await adminClient.comment(
+            `resale_chain: createTask failed ${reseller.name}→${buyer.name}: ${e.message}`,
+            'alert',
+          );
+        }
+        continue;
+      }
+
+      // Per-step observability: offer visible as an agent→agent edge.
+      await adminClient.milestone(
+        `\u{1F4E8} ${reseller.name} offered "${item.name}" to ${buyer.name} at $${resalePrice.toFixed(2)}`,
+        {
+          agentId: reseller.agentId,
+          agentName: reseller.name,
+          icon: '\u{1F4E8}',
+          toId: buyer.agentId,
+          toName: buyer.name,
+          toKind: 'agent',
         },
-      });
-      const taskId = created.id;
+      );
 
       // ─── 3. Buyer creates AP2 mandate for the marked-up price ────────
       let mandateId: string | null = null;
@@ -233,17 +257,59 @@ export async function runResaleChain(
           a2aSessionId: taskId,
           metadata: { simRound: scenarioId, cycle, resale: true, source: 'marketplace_sim' },
         });
-        mandateId = (mandate as any).mandate_id || (mandate as any).mandateId || null;
-      } catch (e) {
-        handleSuspension(e, buyer) || handleSuspension(e, reseller);
+        // Robust id extraction — the server-typed response is
+        // { mandate_id, id, status }, but be defensive against wrapper shapes.
+        mandateId = (mandate as any).mandate_id
+          || (mandate as any).mandateId
+          || (mandate as any).id
+          || (mandate as any).data?.mandate_id
+          || (mandate as any).data?.id
+          || null;
+        if (!mandateId) {
+          await adminClient.comment(
+            `resale_chain: createMandate returned 2xx but no mandate id for ${buyer.name}→${reseller.name}`,
+            'alert',
+          );
+        } else {
+          await adminClient.comment(
+            `\u{1F4B3} ${buyer.name} escrowed $${resalePrice.toFixed(2)} for ${reseller.name}'s resale (mandate ${mandateId.slice(0, 8)})`,
+            'finding',
+          );
+        }
+      } catch (e: any) {
+        if (!(handleSuspension(e, buyer) || handleSuspension(e, reseller))) {
+          await adminClient.comment(
+            `resale_chain: createMandate failed ${buyer.name}→${reseller.name} ($${resalePrice.toFixed(2)}): ${e.message}`,
+            'alert',
+          );
+        }
         continue;
       }
+
+      // Helper so the always-cancel path doesn't throw if the mandate is
+      // already terminal (settled/cancelled elsewhere).
+      const safeCancelMandate = async (outcome: string) => {
+        if (!mandateId) return;
+        try {
+          await clients[buyer.agentId].cancelMandate(mandateId, { metadataMerge: { outcome } });
+        } catch { /* mandate may already be resolved — fine */ }
+      };
 
       // ─── 4. Reseller claims the task and completes with fulfillment ──
       try {
         await clients[reseller.agentId].claimTask(taskId);
-      } catch (e) {
-        handleSuspension(e, reseller);
+        await adminClient.comment(
+          `\u{1F6E0} ${reseller.name} claimed resale task ${taskId.slice(0, 8)}`,
+          'finding',
+        );
+      } catch (e: any) {
+        if (!handleSuspension(e, reseller)) {
+          await adminClient.comment(
+            `resale_chain: claimTask failed ${reseller.name}→${buyer.name}: ${e.message}`,
+            'alert',
+          );
+        }
+        await safeCancelMandate('claim_failed');
         continue;
       }
       try {
@@ -251,13 +317,23 @@ export async function runResaleChain(
           taskId,
           `Delivered "${item.name}" from ${merchant.name}. Your cost: $${resalePrice.toFixed(2)}. My margin: $${(resalePrice - merchantCost).toFixed(2)}.`,
         );
-      } catch (e) {
-        handleSuspension(e, reseller);
-        if (mandateId) { try { await clients[buyer.agentId].cancelMandate(mandateId, { metadataMerge: { outcome: 'reseller_failed' } }); } catch {} }
+        await adminClient.comment(
+          `\u2705 ${reseller.name} delivered "${item.name}" — awaiting ${buyer.name} acceptance`,
+          'finding',
+        );
+      } catch (e: any) {
+        if (!handleSuspension(e, reseller)) {
+          await adminClient.comment(
+            `resale_chain: completeTask failed ${reseller.name}→${buyer.name}: ${e.message}`,
+            'alert',
+          );
+        }
+        await safeCancelMandate('complete_failed');
         continue;
       }
 
       // ─── 5. Buyer accepts + rates ────────────────────────────────────
+      let buyerResponded = false;
       try {
         await clients[buyer.agentId].respond({
           taskId,
@@ -266,8 +342,33 @@ export async function runResaleChain(
           comment: `Good resale fulfillment — item matches description`,
           satisfaction: 'excellent',
         });
-      } catch (e) {
-        handleSuspension(e, buyer) || handleSuspension(e, reseller);
+        buyerResponded = true;
+      } catch (e: any) {
+        if (!(handleSuspension(e, buyer) || handleSuspension(e, reseller))) {
+          await adminClient.comment(
+            `resale_chain: respond failed ${buyer.name}→${reseller.name}: ${e.message}`,
+            'alert',
+          );
+        }
+        await safeCancelMandate('buyer_respond_failed');
+      }
+
+      // Post-respond sanity check — the server's /respond handler with
+      // action:'accept' should have transitioned the mandate to 'completed'
+      // via resolveSettlementMandate. If it didn't, the ap2↔a2a linkage
+      // regressed; surface it as an alert rather than letting the mandate
+      // quietly sit in escrow.
+      if (buyerResponded && mandateId) {
+        try {
+          const m = await clients[buyer.agentId].getMandate(mandateId);
+          const status = (m as any)?.status ?? (m as any)?.data?.status;
+          if (status && status !== 'completed') {
+            await adminClient.comment(
+              `resale_chain: mandate ${mandateId.slice(0, 8)} still '${status}' after buyer accepted — ap2↔a2a linkage regression?`,
+              'alert',
+            );
+          }
+        } catch { /* non-fatal sanity check */ }
       }
 
       completedTrades++;

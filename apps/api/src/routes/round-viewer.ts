@@ -1008,9 +1008,9 @@ roundViewerRouter.get('/report', async (c) => {
 
   const tasks = tasksRes.data || [];
   const mandates = mandatesRes.data || [];
-  const acpCheckouts = (acpRes.data || []) as Array<{ status: string; total_amount: number; created_at: string }>;
-  const ucpSessions = (ucpRes.data || []) as Array<{ status: string; totals: any; created_at: string }>;
-  const transfers = (transfersRes.data || []) as Array<{ status: string; amount: number; protocol_metadata: any }>;
+  const acpCheckouts = (acpRes.data || []) as Array<{ status: string; total_amount: number; created_at: string; agent_id?: string | null }>;
+  const ucpSessions = (ucpRes.data || []) as Array<{ status: string; totals: any; created_at: string; agent_id?: string | null }>;
+  const transfers = (transfersRes.data || []) as Array<{ status: string; amount: number; protocol_metadata: any; from_account_id?: string | null }>;
 
   // ─── Merchant commerce aggregation (ACP / UCP / x402) ────────────────
   // Scenarios like merchant_shopping_acp, hotel_booking_ucp, compute_x402,
@@ -1065,8 +1065,13 @@ roundViewerRouter.get('/report', async (c) => {
 
   const completedMandates = mandates.filter(m => m.status === 'completed');
   const activeMandates = mandates.filter(m => m.status === 'active');
-  const totalVolume = completedMandates.reduce((s, m) => s + Number(m.authorized_amount || 0), 0);
+  // Mandate-only volume — used by the settlement assessment line since that
+  // message specifically talks about settleable mandates.
+  const mandateVolume = completedMandates.reduce((s, m) => s + Number(m.authorized_amount || 0), 0);
   const escrowedVolume = activeMandates.reduce((s, m) => s + Number(m.authorized_amount || 0), 0);
+  // Grand total includes merchant (ACP/UCP/x402) activity so merchant-only
+  // rounds don't show $0. The per-rail breakdown still lives on the summary.
+  const totalVolume = mandateVolume + merchantVolume;
 
   // ─── Outcome-aware analysis ────────────────────────────────────────────
   // Some mandates are cancelled by intent (e.g. losers in a competitive
@@ -1130,16 +1135,20 @@ roundViewerRouter.get('/report', async (c) => {
     ? Math.round((rogueBuckets.rogueRejected / containmentTotal) * 100)
     : null;
   // Effective denominator: tasks the buyer actually intended to settle.
-  // (Bake-off losers were meant to lose.)
-  const effectiveTotal = Math.max(0, total - intentionalNonCompletions);
+  // (Bake-off losers were meant to lose.) Merchant purchases always count —
+  // there's no "intentional loser" concept for merchant checkouts.
+  const effectiveTotal = Math.max(0, total - intentionalNonCompletions) + merchantPurchaseCount;
   const effectiveCompletionRate = effectiveTotal > 0
-    ? Math.round((completed / effectiveTotal) * 100)
+    ? Math.round(((completed + merchantPurchaseCount) / effectiveTotal) * 100)
     : 0;
   // Failures that are NOT outbid losers — these are real failures worth flagging.
   const realFailed = Math.max(0, failed - intentionalNonCompletions);
   // Legacy "raw" completion rate kept for backwards compatibility with the
   // viewer's metric bar; assessment uses effectiveCompletionRate.
-  const completionRate = total > 0 ? Math.round(completed / total * 100) : 0;
+  const combinedTotal = total + merchantPurchaseCount;
+  const completionRate = combinedTotal > 0
+    ? Math.round(((completed + merchantPurchaseCount) / combinedTotal) * 100)
+    : 0;
 
   // Federation analysis: mandates where settlement routed to an external A2A address
   const federationMandates = completedMandates.filter((m: any) => m.metadata?.source === 'a2a_federation');
@@ -1211,6 +1220,46 @@ roundViewerRouter.get('/report', async (c) => {
           agentStats[id].failed++;
         }
       }
+    }
+  }
+
+  // Fold merchant buyers into agentStats so merchant-only scenarios count
+  // agents in `uniqueAgents` and surface them in the top lists. Treat every
+  // merchant purchase as a "sent + completed" from the buyer's perspective.
+  const merchantBuyerIds = new Set<string>();
+  for (const c of acpCompleted) { if (c.agent_id) merchantBuyerIds.add(c.agent_id); }
+  for (const s of ucpCompleted) { if (s.agent_id) merchantBuyerIds.add(s.agent_id); }
+  for (const t of x402Transfers) {
+    const aid = t.protocol_metadata?.agent_id;
+    if (aid) merchantBuyerIds.add(aid);
+  }
+  if (merchantBuyerIds.size > 0) {
+    // Resolve names for any buyers not already in agentNames.
+    const missing = Array.from(merchantBuyerIds).filter((id) => !agentNames[id]);
+    if (missing.length > 0) {
+      const { data: moreAgents } = await supabase.from('agents').select('id, name').in('id', missing);
+      for (const a of ((moreAgents || []) as any[])) agentNames[a.id] = a.name;
+    }
+    for (const c of acpCompleted) {
+      const id = c.agent_id;
+      if (!id) continue;
+      if (!agentStats[id]) agentStats[id] = { name: agentNames[id] || id.slice(0, 8), sent: 0, received: 0, completed: 0, outbid: 0, rejected: 0, failed: 0 };
+      agentStats[id].sent++;
+      agentStats[id].completed++;
+    }
+    for (const s of ucpCompleted) {
+      const id = s.agent_id;
+      if (!id) continue;
+      if (!agentStats[id]) agentStats[id] = { name: agentNames[id] || id.slice(0, 8), sent: 0, received: 0, completed: 0, outbid: 0, rejected: 0, failed: 0 };
+      agentStats[id].sent++;
+      agentStats[id].completed++;
+    }
+    for (const t of x402Transfers) {
+      const id = t.protocol_metadata?.agent_id;
+      if (!id) continue;
+      if (!agentStats[id]) agentStats[id] = { name: agentNames[id] || id.slice(0, 8), sent: 0, received: 0, completed: 0, outbid: 0, rejected: 0, failed: 0 };
+      agentStats[id].sent++;
+      agentStats[id].completed++;
     }
   }
 
@@ -1366,7 +1415,7 @@ roundViewerRouter.get('/report', async (c) => {
     assessment.push({
       category: 'Settlement',
       status: 'pass',
-      finding: `${completedMandates.length}/${settleableMandates} settleable mandates settled${outbidNote}, $${totalVolume.toFixed(2)} volume${fedNote}`,
+      finding: `${completedMandates.length}/${settleableMandates} settleable mandates settled${outbidNote}, $${mandateVolume.toFixed(2)} volume${fedNote}`,
     });
     // Also call out merchant commerce when both rails saw activity (mixed
     // scenarios like concierge or resale_chain).
@@ -1458,10 +1507,15 @@ roundViewerRouter.get('/report', async (c) => {
       windowMinutes: minutes,
       generatedAt: new Date().toISOString(),
       summary: {
-        totalTasks: total,
-        completed,
+        // `totalTasks` and `completed` fold in merchant purchases so merchant-
+        // only scenarios don't emit zeros. The per-rail breakdown stays below.
+        totalTasks: total + merchantPurchaseCount,
+        completed: completed + merchantPurchaseCount,
         failed,
         completionRate,
+        // A2A-only task totals for consumers that need to differentiate.
+        a2aTotalTasks: total,
+        a2aCompleted: completed,
         // Outcome-aware metrics — separates intentional bake-off losses from real failures
         outbidCount,
         rejectedCount,
@@ -1470,6 +1524,7 @@ roundViewerRouter.get('/report', async (c) => {
         totalMandates: mandates.length,
         completedMandates: completedMandates.length,
         totalVolume: Number(totalVolume.toFixed(2)),
+        mandateVolume: Number(mandateVolume.toFixed(2)),
         escrowedVolume: Number(escrowedVolume.toFixed(2)),
         uniqueAgents: Object.keys(agentStats).length,
         externalPayouts: Number(federationVolume.toFixed(2)),

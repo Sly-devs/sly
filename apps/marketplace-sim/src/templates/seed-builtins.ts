@@ -1337,6 +1337,38 @@ merchant's receipt as proof-of-fulfillment. Shows agents running micro-supply-ch
 (to merchants) and sellers (to peers) in the same cycle.
 `;
 
+const MERCHANT_COMPARISON = `---
+id: merchant_comparison_acp
+name: Merchant Comparison (agents shop competing SKUs)
+buildingBlock: merchant_comparison
+requires: [honest]
+pool: { honest: 3, whale: 1, mm: 2, budget: 2 }
+params:
+  - { key: cycleSleepMs, type: int, label: Sleep between cycles (ms), default: 2500, min: 500, max: 8000, step: 100 }
+analyzerHints: |
+  Agents see the SAME SKU offered by multiple merchants (Atlas / Budget Beans / Midtown roasters) at different
+  prices and ratings. Persona-driven selection:
+    - whale, quality-reviewer → highest rating
+    - mm → lowest price
+    - honest, default → weighted 60% price, 40% rating
+  Each cycle's milestone carries a \`considered\` array of all competing merchants so the viewer can render
+  per-merchant win rate in the inspector. EXPECTED: asymmetric market share reflecting persona mix.
+blockConfig:
+  minCompetitors: 2
+  defaults:
+    cycleSleepMs: 2500
+    buyerStyles: [honest, whale, mm]
+---
+
+# Merchant Comparison
+
+Introduces competing merchants offering identical SKUs. Demonstrates how persona-driven selection (price vs
+rating vs balanced) produces divergent market share even when all merchants satisfy the buyer's need.
+
+Prerequisite: \`pnpm --filter @sly/api tsx scripts/seed-sim-commerce.ts\` must have run so the three roasters
+exist in the sim tenant with overlapping sku fields.
+`;
+
 export const BUILT_INS: BuiltInTemplate[] = [
   {
     template_id: 'competitive_review_real',
@@ -1499,6 +1531,12 @@ export const BUILT_INS: BuiltInTemplate[] = [
     name: 'Resale Arbitrage (ACP → A2A peer)',
     building_block: 'resale_chain',
     markdown: RESALE_CHAIN,
+  },
+  {
+    template_id: 'merchant_comparison_acp',
+    name: 'Merchant Comparison (agents shop competing SKUs)',
+    building_block: 'merchant_comparison',
+    markdown: MERCHANT_COMPARISON,
   },
 ];
 

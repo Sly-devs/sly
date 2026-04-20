@@ -521,6 +521,7 @@ roundViewerRouter.post('/milestone', async (c) => {
     toKind: body.toKind,
     amount: typeof body.amount === 'number' ? body.amount : undefined,
     currency: body.currency,
+    considered: Array.isArray(body.considered) ? body.considered : undefined,
   };
   // Persist to the ring buffer so post-run report fetches catch it.
   bufferNarration({

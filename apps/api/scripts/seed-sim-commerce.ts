@@ -33,7 +33,18 @@ interface MerchantSpec {
   description: string;
   currency: string;
   pos_provider: string;
-  catalog: Array<{ id: string; name: string; category: string; unit_price_cents: number; currency: string; description?: string }>;
+  /** 1.0–5.0. Used by merchant_comparison scenarios to drive persona-based selection. */
+  rating?: number;
+  catalog: Array<{
+    id: string;
+    name: string;
+    category: string;
+    unit_price_cents: number;
+    currency: string;
+    description?: string;
+    /** Cross-merchant SKU: products sharing a sku compete. Optional on non-competing items. */
+    sku?: string;
+  }>;
 }
 
 // 4 UCP/ACP merchants with real-shaped catalogs.
@@ -102,6 +113,57 @@ const MERCHANTS: MerchantSpec[] = [
       { id: 'tix_museum', name: 'Biomuseo Ticket', category: 'ticket', unit_price_cents: 1800, currency: 'USDC' },
     ],
   },
+  // ─── Competing roasters — same SKUs at different prices + ratings ───
+  // These drive the merchant_comparison scenario. Each product shares an `sku`
+  // across merchants so the scenario block can group competing listings.
+  {
+    merchant_id: 'sim_roaster_a',
+    name: 'Atlas Coffee Roasters',
+    type: 'retail',
+    country: 'PA',
+    city: 'Boquete',
+    description: 'Premium-tier roaster, highest rated, prices to match.',
+    currency: 'USDC',
+    pos_provider: 'sly-demo',
+    rating: 4.9,
+    catalog: [
+      { id: 'atlas_single_250', sku: 'sku_single_origin_250g', name: 'Single Origin 250g', category: 'coffee', unit_price_cents: 2800, currency: 'USDC', description: 'Premium bourbon, hand-sorted' },
+      { id: 'atlas_blend_500', sku: 'sku_signature_blend_500g', name: 'Signature Blend 500g', category: 'coffee', unit_price_cents: 4200, currency: 'USDC' },
+      { id: 'atlas_decaf_250', sku: 'sku_decaf_250g', name: 'Decaf 250g', category: 'coffee', unit_price_cents: 2600, currency: 'USDC' },
+    ],
+  },
+  {
+    merchant_id: 'sim_roaster_b',
+    name: 'Budget Beans Co.',
+    type: 'retail',
+    country: 'PA',
+    city: 'Panama City',
+    description: 'Cheapest in market, mid-grade beans.',
+    currency: 'USDC',
+    pos_provider: 'sly-demo',
+    rating: 3.8,
+    catalog: [
+      { id: 'bb_single_250', sku: 'sku_single_origin_250g', name: 'Single Origin 250g', category: 'coffee', unit_price_cents: 1900, currency: 'USDC', description: 'Standard grade' },
+      { id: 'bb_blend_500', sku: 'sku_signature_blend_500g', name: 'Signature Blend 500g', category: 'coffee', unit_price_cents: 2900, currency: 'USDC' },
+      { id: 'bb_decaf_250', sku: 'sku_decaf_250g', name: 'Decaf 250g', category: 'coffee', unit_price_cents: 1700, currency: 'USDC' },
+    ],
+  },
+  {
+    merchant_id: 'sim_roaster_c',
+    name: 'Midtown Roastery',
+    type: 'retail',
+    country: 'PA',
+    city: 'Panama City',
+    description: 'Middle-of-market, balanced price-to-quality.',
+    currency: 'USDC',
+    pos_provider: 'sly-demo',
+    rating: 4.4,
+    catalog: [
+      { id: 'mt_single_250', sku: 'sku_single_origin_250g', name: 'Single Origin 250g', category: 'coffee', unit_price_cents: 2300, currency: 'USDC' },
+      { id: 'mt_blend_500', sku: 'sku_signature_blend_500g', name: 'Signature Blend 500g', category: 'coffee', unit_price_cents: 3500, currency: 'USDC' },
+      { id: 'mt_decaf_250', sku: 'sku_decaf_250g', name: 'Decaf 250g', category: 'coffee', unit_price_cents: 2100, currency: 'USDC' },
+    ],
+  },
 ];
 
 // Merchant-owned x402 endpoints (compute / content / data APIs).
@@ -154,6 +216,7 @@ async function seedMerchants() {
       country: m.country,
       city: m.city,
       description: m.description,
+      rating: m.rating,
       catalog: m.catalog,
     };
 

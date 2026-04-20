@@ -494,6 +494,11 @@ const state = {
   // Per-merchant sales totals so the merchant inspector can show volume +
   // average sale. { [merchId]: { volume: number, count: number } }
   merchantSales: {},
+  // Per-merchant competitive-comparison stats. For each merchant comparison
+  // milestone the viewer increments `appeared` for every merchant in the
+  // `considered` list and `won` for the winner (toId). Enables market-share
+  // calculation in the inspector. { [merchId]: { appeared: n, won: n } }
+  merchantComparisons: {},
   // Pinned key findings — milestones from server (tier upgrades, freezes, cascades)
   milestones: [],
 };
@@ -1054,7 +1059,7 @@ async function executeScenario(scenario) {
 
   // Reset state for new scenario
   state.metrics = { tasks: 0, completed: 0, failed: 0, volume: 0, onchain: 0, disputes: 0, escrowed: 0, rejected: 0, mandates: 0 };
-  state.purchaseVolume = 0; state.purchaseCount = 0; state.merchantSales = {};
+  state.purchaseVolume = 0; state.purchaseCount = 0; state.merchantSales = {}; state.merchantComparisons = {};
   state.tasks = []; state.edges = []; state.ratings = {}; state.pairStats = {};
   state.reviews = []; // Individual review entries: { agentId, reviewerId, score, comment, action, time }
   state.milestones = [];
@@ -1687,7 +1692,7 @@ function resetRound() {
   state.externalAgents = {};
   state.milestones = [];
   state.metrics = { tasks: 0, completed: 0, failed: 0, volume: 0, onchain: 0, disputes: 0, escrowed: 0, rejected: 0, mandates: 0 };
-  state.purchaseVolume = 0; state.purchaseCount = 0; state.merchantSales = {};
+  state.purchaseVolume = 0; state.purchaseCount = 0; state.merchantSales = {}; state.merchantComparisons = {};
   currentScenario = null;
   resetCutoff = new Date().toISOString();
 
@@ -1816,6 +1821,33 @@ function handleEvent(type, event) {
             state.merchantSales[data.toId].count += 1;
           }
           updateMetrics();
+        }
+        // Competitive-comparison rollup. Every merchant considered this
+        // cycle gets `appeared++`; the winner (data.toId) gets `won++`.
+        if (data.toKind === 'merchant' && Array.isArray(data.considered)) {
+          state.merchantComparisons = state.merchantComparisons || {};
+          for (const c of data.considered) {
+            const mid = c && c.toId;
+            if (!mid) continue;
+            if (!state.merchantComparisons[mid]) state.merchantComparisons[mid] = { appeared: 0, won: 0 };
+            state.merchantComparisons[mid].appeared += 1;
+            // Make sure losing merchants still have a sidebar entry — the
+            // purchase milestone only adds the winner to state.merchants, so
+            // without this losers would be invisible until they sold later.
+            if (!state.merchants[mid]) {
+              state.merchants[mid] = {
+                id: mid,
+                name: c.toName || mid,
+                protocol: 'acp',
+                synthetic: true,
+              };
+              agentNames[mid] = c.toName || mid;
+            }
+          }
+          if (data.toId && state.merchantComparisons[data.toId]) {
+            state.merchantComparisons[data.toId].won += 1;
+          }
+          renderAgents();
         }
       }
       return;
@@ -2652,6 +2684,43 @@ function openMerchantInspector(merchantId) {
       h += '</div>';
     }
     h += '</div>';
+
+    // Competitive market share — only shown if this merchant appeared in any
+    // merchant_comparison cycles. Shows win rate + competitors that beat us.
+    const cmp = state.merchantComparisons && state.merchantComparisons[merchantId];
+    if (cmp && cmp.appeared > 0) {
+      const winRate = Math.round((cmp.won / cmp.appeared) * 100);
+      const winRateColor = winRate >= 50 ? '#22c55e' : winRate >= 25 ? '#eab308' : '#ef4444';
+      h += '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Competitive Market Share</div>';
+      h += '<div style="background:var(--surface);padding:10px 12px;border-radius:6px;border:1px solid var(--border);margin-bottom:12px">';
+      h += '<div style="display:flex;gap:18px;align-items:baseline">';
+      h += '  <div><div style="font-size:22px;font-weight:700;color:' + winRateColor + '">' + winRate + '%</div><div style="font-size:10px;color:var(--muted)">win rate</div></div>';
+      h += '  <div><div style="font-size:16px;font-weight:600;color:var(--text)">' + cmp.won + ' / ' + cmp.appeared + '</div><div style="font-size:10px;color:var(--muted)">won / considered</div></div>';
+      h += '</div>';
+      // Who beat this merchant — identify competitors in the same SKU pool.
+      const competitors = [];
+      for (const [id, stats] of Object.entries(state.merchantComparisons || {})) {
+        if (id === merchantId) continue;
+        const name = (state.merchants[id] && state.merchants[id].name) || agentNames[id] || id.slice(0, 8);
+        const s = stats;
+        competitors.push({ id, name, appeared: s.appeared, won: s.won });
+      }
+      if (competitors.length > 0) {
+        competitors.sort((a, b) => b.won - a.won);
+        h += '<div style="margin-top:8px;font-size:10px;color:var(--muted)">Other merchants in comparisons:</div>';
+        h += '<div style="margin-top:3px">';
+        for (const c of competitors.slice(0, 6)) {
+          const r = c.appeared ? Math.round((c.won / c.appeared) * 100) : 0;
+          h += '<div style="display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0">';
+          h += '<span style="flex:1;color:var(--text)">' + escapeHtml(c.name) + '</span>';
+          h += '<span style="color:var(--muted);font-family:monospace">' + c.won + '/' + c.appeared + '</span>';
+          h += '<span style="color:' + (r >= 50 ? '#22c55e' : r >= 25 ? '#eab308' : '#ef4444') + ';font-weight:600;min-width:32px;text-align:right">' + r + '%</span>';
+          h += '</div>';
+        }
+        h += '</div>';
+      }
+      h += '</div>';
+    }
 
     // Catalog (ACP/UCP) — list products
     if (catalog.length > 0) {

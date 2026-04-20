@@ -568,6 +568,12 @@ export class SlyClient {
       /** Settlement amount in `currency`, e.g. 0.50 USDC. Viewer sums these into live volume. */
       amount?: number;
       currency?: string;
+      /**
+       * For merchant_comparison: every merchant considered for this purchase,
+       * including the winner. Viewer increments per-merchant "appeared in
+       * comparisons" + "won comparisons" to compute market share.
+       */
+      considered?: Array<{ toId: string; toName: string; price?: number; rating?: number }>;
     } = {},
   ): Promise<void> {
     await this.request(

@@ -614,6 +614,178 @@ export class SlyClient {
     }
   }
 
+  // ─── Merchants & Commerce (ACP / UCP / x402) ───────────────────────────
+
+  /** List UCP-discoverable merchants (POS merchants with `metadata.pos_provider`). */
+  async listMerchants(
+    filters: { type?: string; country?: string; search?: string; limit?: number } = {},
+  ): Promise<Array<{
+    id: string;
+    name: string;
+    merchant_id?: string;
+    type?: string;
+    country?: string;
+    city?: string;
+    currency?: string;
+    description?: string;
+    pos_provider?: string;
+    catalog?: { total_products: number; categories: string[]; products: any[] };
+  }>> {
+    const q = new URLSearchParams();
+    if (filters.type) q.set('type', filters.type);
+    if (filters.country) q.set('country', filters.country);
+    if (filters.search) q.set('search', filters.search);
+    q.set('limit', String(filters.limit ?? 50));
+    const path = `/v1/ucp/merchants?${q.toString()}`;
+    try {
+      const res: any = await this.request(path, { method: 'GET' }, 'admin');
+      return Array.isArray(res) ? res : (res?.merchants ?? res?.data ?? []);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Get a single merchant with full catalog. */
+  async getMerchant(merchantId: string): Promise<any | null> {
+    try {
+      return await this.request(`/v1/ucp/merchants/${encodeURIComponent(merchantId)}`, { method: 'GET' }, 'admin');
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Create an ACP checkout session (fixed-catalog POS purchase).
+   * The agent's API key is the auth scope — checkouts are tenant-scoped.
+   */
+  async createAcpCheckout(params: {
+    checkout_id: string;
+    agent_id: string;
+    agent_name?: string;
+    merchant_id: string;
+    merchant_name?: string;
+    account_id: string;
+    items: Array<{ item_id?: string; name: string; quantity: number; unit_price: number; total_price: number; currency?: string }>;
+    tax_amount?: number;
+    shipping_amount?: number;
+    discount_amount?: number;
+    currency?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ id: string; status: string }> {
+    return await this.request(
+      '/v1/acp/checkouts',
+      { method: 'POST', body: JSON.stringify(params) },
+      'apiKey',
+    );
+  }
+
+  /** Complete an ACP checkout (settles payment). */
+  async completeAcpCheckout(
+    checkoutId: string,
+    params: { shared_payment_token: string; payment_method?: string; idempotency_key?: string },
+  ): Promise<{ id: string; status: string; order_id?: string }> {
+    return await this.request(
+      `/v1/acp/checkouts/${encodeURIComponent(checkoutId)}/complete`,
+      { method: 'POST', body: JSON.stringify(params) },
+      'apiKey',
+    );
+  }
+
+  /** Create a UCP checkout (full commerce lifecycle: create → instrument → complete). */
+  async createUcpCheckout(params: {
+    currency: string;
+    line_items?: Array<{ name: string; quantity: number; unit_price: number; [k: string]: unknown }>;
+    buyer?: Record<string, unknown>;
+    shipping_address?: Record<string, unknown>;
+    checkout_type?: 'physical' | 'digital' | 'service';
+    agent_id?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ id: string; status: string }> {
+    return await this.request(
+      '/v1/ucp/checkouts',
+      { method: 'POST', body: JSON.stringify(params) },
+      'apiKey',
+    );
+  }
+
+  /** Attach a payment instrument to a UCP checkout. */
+  async addUcpInstrument(
+    checkoutId: string,
+    params: { id: string; handler: string; type: string; last4?: string; brand?: string; metadata?: Record<string, unknown> },
+  ): Promise<void> {
+    await this.request(
+      `/v1/ucp/checkouts/${encodeURIComponent(checkoutId)}/instruments`,
+      { method: 'POST', body: JSON.stringify(params) },
+      'apiKey',
+    );
+  }
+
+  /** Complete a UCP checkout. */
+  async completeUcpCheckout(checkoutId: string): Promise<{ id: string; status: string; order_id?: string }> {
+    return await this.request(
+      `/v1/ucp/checkouts/${encodeURIComponent(checkoutId)}/complete`,
+      { method: 'POST', body: JSON.stringify({}) },
+      'apiKey',
+    );
+  }
+
+  /** List x402 priced endpoints (compute/content/API catalog). */
+  async listX402Endpoints(
+    filters: { status?: string; accountId?: string; limit?: number } = {},
+  ): Promise<Array<{
+    id: string;
+    name?: string;
+    path?: string;
+    method?: string;
+    price?: number;
+    currency?: string;
+    account_id?: string;
+  }>> {
+    const q = new URLSearchParams();
+    if (filters.status) q.set('status', filters.status);
+    if (filters.accountId) q.set('account_id', filters.accountId);
+    q.set('limit', String(filters.limit ?? 50));
+    try {
+      const res: any = await this.request(`/v1/x402/endpoints?${q.toString()}`, { method: 'GET' }, 'admin');
+      return Array.isArray(res) ? res : (res?.endpoints ?? res?.data ?? []);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Fetch a quote for an x402 endpoint (current price). */
+  async quoteX402(endpointId: string): Promise<{ amount: number; currency: string } | null> {
+    try {
+      const r: any = await this.request(`/v1/x402/quote/${encodeURIComponent(endpointId)}`, { method: 'GET' }, 'apiKey');
+      return { amount: Number(r?.amount ?? r?.price ?? 0), currency: r?.currency ?? 'USDC' };
+    } catch {
+      return null;
+    }
+  }
+
+  /** One-shot x402 payment — buyer pays for one request against a known endpoint. */
+  async payX402(params: {
+    endpointId: string;
+    requestId: string;
+    amount: number;
+    currency: 'USDC' | 'EURC';
+    walletId: string;
+    method: string;
+    path: string;
+    timestamp?: number;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ success: boolean; transferId?: string }> {
+    const body = {
+      ...params,
+      timestamp: params.timestamp ?? Math.floor(Date.now() / 1000),
+    };
+    return await this.request(
+      '/v1/x402/pay',
+      { method: 'POST', body: JSON.stringify(body) },
+      'apiKey',
+    );
+  }
+
   /**
    * Fetch an agent's platform record (admin auth). Used for pre-flight status
    * checks and post-error disambiguation (is this agent killed or just

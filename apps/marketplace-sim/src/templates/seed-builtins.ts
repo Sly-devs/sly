@@ -1196,6 +1196,88 @@ This is not a controlled experiment — it's a realistic market. Run it twice: o
 - **Buyer satisfaction**: are strict buyers (whale, conservative) finding quality sellers?
 `;
 
+const MERCHANT_SHOPPING_ACP = `---
+id: merchant_shopping_acp
+name: Merchant Shopping (ACP — POS catalog)
+buildingBlock: merchant_buy
+requires: [honest]
+pool: { honest: 3, whale: 1 }
+params:
+  - { key: cycleSleepMs, type: int, label: Sleep between cycles (ms), default: 2000, min: 500, max: 5000, step: 100 }
+analyzerHints: |
+  Agents buy products from UCP-listed POS merchants (hotels, retail, restaurants) via ACP checkouts. This is
+  agent-to-merchant commerce, not agent-to-agent, so there is no peer rating or collusion surface. EXPECTED:
+  each cycle creates an acp_checkouts row. Flag only: zero checkouts (merchants missing — run
+  scripts/seed-sim-commerce.ts), mandate refusals, or suspended agents still buying.
+blockConfig:
+  protocol: acp
+  maxBasket: 3
+  defaults:
+    cycleSleepMs: 2000
+    styleFilter: [honest, whale, budget, opportunist]
+---
+
+# Merchant Shopping (ACP)
+
+Agents browse UCP-discoverable merchants, pick a basket of 1–3 products from the catalog, and settle via ACP's
+simplified POS checkout flow. Showcases how Sly-managed agents can buy physical goods / services without the
+merchant needing an agent-aware stack.
+`;
+
+const HOTEL_BOOKING_UCP = `---
+id: hotel_booking_ucp
+name: Travel Booking (UCP — full commerce lifecycle)
+buildingBlock: merchant_buy
+requires: [honest]
+pool: { honest: 2, whale: 1 }
+params:
+  - { key: cycleSleepMs, type: int, label: Sleep between cycles (ms), default: 2500, min: 500, max: 5000, step: 100 }
+analyzerHints: |
+  Agents book hotel nights / flights via UCP checkouts (create → attach-instrument → complete). EXPECTED: each
+  cycle produces a ucp_checkouts row progressing through the lifecycle states. Flag only: stuck checkouts
+  (created but never completed), instrument attach failures, or zero activity.
+blockConfig:
+  protocol: ucp
+  merchantTypeFilter: hotel
+  maxBasket: 1
+  defaults:
+    cycleSleepMs: 2500
+    styleFilter: [honest, whale]
+---
+
+# Travel Booking (UCP)
+
+Showcases UCP's full commerce lifecycle for agent-driven travel: create the checkout, attach a Sly USDC
+instrument, complete. Useful for demonstrating hotels and airlines that need the shipping/billing surface ACP
+doesn't model.
+`;
+
+const COMPUTE_X402 = `---
+id: compute_x402
+name: Compute & Content Purchase (x402 — pay-per-request APIs)
+buildingBlock: merchant_buy
+requires: [honest]
+pool: { honest: 3 }
+params:
+  - { key: cycleSleepMs, type: int, label: Sleep between cycles (ms), default: 1500, min: 200, max: 5000, step: 100 }
+analyzerHints: |
+  Agents pay-per-request against merchant-owned x402 endpoints (search, summarize, translation, article
+  paywalls, image render, speech transcribe). EXPECTED: each cycle triggers a POST /v1/x402/pay which creates a
+  transfers row. Flag only: zero paid endpoints (run scripts/seed-sim-commerce.ts), wallet exhaustion,
+  suspended agents.
+blockConfig:
+  protocol: x402
+  defaults:
+    cycleSleepMs: 1500
+    styleFilter: [honest, whale, researcher, opportunist]
+---
+
+# Compute & Content Purchase (x402)
+
+Agents discover priced x402 endpoints in the marketplace, pick one, and pay for a single request via the
+one-shot /v1/x402/pay flow. Shows agents consuming metered API services without a full HTTP 402 dance.
+`;
+
 export const BUILT_INS: BuiltInTemplate[] = [
   {
     template_id: 'competitive_review_real',
@@ -1328,6 +1410,24 @@ export const BUILT_INS: BuiltInTemplate[] = [
     name: 'Full Dynamic Marketplace (REAL — double auction)',
     building_block: 'double_auction',
     markdown: FULL_MARKETPLACE_REAL,
+  },
+  {
+    template_id: 'merchant_shopping_acp',
+    name: 'Merchant Shopping (ACP — POS catalog)',
+    building_block: 'merchant_buy',
+    markdown: MERCHANT_SHOPPING_ACP,
+  },
+  {
+    template_id: 'hotel_booking_ucp',
+    name: 'Travel Booking (UCP — full commerce lifecycle)',
+    building_block: 'merchant_buy',
+    markdown: HOTEL_BOOKING_UCP,
+  },
+  {
+    template_id: 'compute_x402',
+    name: 'Compute & Content Purchase (x402 — pay-per-request APIs)',
+    building_block: 'merchant_buy',
+    markdown: COMPUTE_X402,
   },
 ];
 

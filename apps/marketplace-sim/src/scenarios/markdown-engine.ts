@@ -28,6 +28,7 @@ import yaml from 'js-yaml';
 import type { ScenarioDefinition, ScenarioContext, ScenarioResult, ParamSpec, PoolConfig } from './types.js';
 import type { PersonaStyle } from '../processors/types.js';
 import { runBakeOff, type BakeOffConfig } from './blocks/bake_off.js';
+import { runMerchantBuy, type MerchantBuyConfig } from './blocks/merchant_buy.js';
 import { runOneToOne, type OneToOneConfig } from './blocks/one_to_one.js';
 import { runRingTrade, type RingTradeConfig } from './blocks/ring_trade.js';
 import { runMultiHop, type MultiHopConfig } from './blocks/multi_hop.js';
@@ -35,7 +36,7 @@ import { runDoubleAuction, type DoubleAuctionConfig } from './blocks/double_auct
 import type { TemplateRow } from '../templates/store.js';
 
 /** Building blocks the engine knows how to dispatch. */
-export const KNOWN_BLOCKS = ['bake_off', 'one_to_one', 'ring_trade', 'multi_hop', 'double_auction'] as const;
+export const KNOWN_BLOCKS = ['bake_off', 'one_to_one', 'ring_trade', 'multi_hop', 'double_auction', 'merchant_buy'] as const;
 export type KnownBlock = typeof KNOWN_BLOCKS[number];
 
 export function isKnownBlock(s: string | null | undefined): s is KnownBlock {
@@ -134,6 +135,11 @@ export function buildScenarioFromTemplate(template: TemplateRow): ScenarioDefini
           scenarioId: template.template_id,
           config: blockConfig as unknown as DoubleAuctionConfig,
         });
+      case 'merchant_buy':
+        return runMerchantBuy(ctx, {
+          scenarioId: template.template_id,
+          config: blockConfig as unknown as MerchantBuyConfig,
+        });
       default:
         throw new Error(
           `Template "${template.template_id}" uses unknown buildingBlock "${buildingBlock}". Available: ${KNOWN_BLOCKS.join(', ')}`,
@@ -216,6 +222,13 @@ export async function dryRunTemplate(template: TemplateRow, ctx: ScenarioContext
       await runDoubleAuction(ctx, {
         scenarioId: template.template_id,
         config: blockConfig as unknown as DoubleAuctionConfig,
+        dryRun: true,
+      });
+      return;
+    case 'merchant_buy':
+      await runMerchantBuy(ctx, {
+        scenarioId: template.template_id,
+        config: blockConfig as unknown as MerchantBuyConfig,
         dryRun: true,
       });
       return;

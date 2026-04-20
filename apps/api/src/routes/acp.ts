@@ -136,9 +136,23 @@ app.post('/checkouts', async (c) => {
     const subtotal = validated.items.reduce((sum, item) => sum + item.total_price, 0);
     const total_amount = subtotal + validated.tax_amount + validated.shipping_amount - validated.discount_amount;
 
+    // Resolve the merchant's account UUID so analytics queries don't have to
+    // JSONB-probe metadata. TEXT merchant_id stays for backward-compat; the
+    // new UUID column is best-effort — checkouts created for a merchant_id
+    // that doesn't match any seeded account just leave it NULL.
+    let merchant_account_id: string | null = null;
+    {
+      const { data: merchantAccount } = await (supabase as any)
+        .from('accounts')
+        .select('id')
+        .eq('tenant_id', ctx.tenantId)
+        .eq('metadata->>invu_merchant_id', validated.merchant_id)
+        .maybeSingle();
+      if (merchantAccount?.id) merchant_account_id = merchantAccount.id;
+    }
+
     // Create checkout
-    const { data: checkout, error: checkoutError } = await supabase
-      .from('acp_checkouts')
+    const { data: checkout, error: checkoutError } = await (supabase.from('acp_checkouts') as any)
       .insert({
         tenant_id: ctx.tenantId,
         environment: getEnv(ctx),
@@ -150,6 +164,7 @@ app.post('/checkouts', async (c) => {
         customer_email: validated.customer_email,
         account_id: validated.account_id,
         merchant_id: validated.merchant_id,
+        merchant_account_id,
         merchant_name: validated.merchant_name,
         merchant_url: validated.merchant_url,
         subtotal,
@@ -771,6 +786,56 @@ app.post('/checkouts/:id/complete', async (c) => {
       }
     }
 
+    // ───── Resolve the merchant's receiving account + wallet ────────────
+    // Before: the settlement transfer used `to_account_id: checkout.account_id`
+    // (the BUYER's account) — a self-to-self self-transfer that never credited
+    // the merchant. Now we resolve the merchant account from the TEXT
+    // checkout.merchant_id via metadata.invu_merchant_id, auto-create a USDC
+    // wallet if it doesn't exist yet, and route both the wallet-credit and
+    // the transfer row to the merchant. Idempotent across retries.
+    let merchantAccountId: string | null = null;
+    let merchantWalletId: string | null = null;
+    try {
+      const { data: merchantAccount } = await (supabase as any)
+        .from('accounts')
+        .select('id, subtype')
+        .eq('tenant_id', ctx.tenantId)
+        .eq('metadata->>invu_merchant_id', checkout.merchant_id)
+        .maybeSingle();
+      if (merchantAccount?.id) {
+        merchantAccountId = merchantAccount.id;
+        const { data: wallet } = await (supabase as any)
+          .from('wallets')
+          .select('id')
+          .eq('owner_account_id', merchantAccountId)
+          .eq('currency', checkout.currency || 'USDC')
+          .eq('status', 'active')
+          .limit(1)
+          .maybeSingle();
+        if (wallet?.id) {
+          merchantWalletId = wallet.id;
+        } else {
+          // No wallet yet — provision one so settlement can land.
+          const { data: created } = await (supabase as any)
+            .from('wallets')
+            .insert({
+              tenant_id: ctx.tenantId,
+              owner_account_id: merchantAccountId,
+              wallet_type: 'internal',
+              balance: 0,
+              currency: checkout.currency || 'USDC',
+              status: 'active',
+              environment: getEnv(ctx),
+            })
+            .select('id')
+            .single();
+          if (created?.id) merchantWalletId = created.id;
+        }
+      }
+    } catch (resolveErr: any) {
+      console.warn(`[ACP] Could not resolve merchant account for "${checkout.merchant_id}":`, resolveErr.message);
+    }
+
     // Try wallet payment first (agent has funded USDC wallet)
     let stripePaymentIntent = null;
     let paymentStatus = 'completed';
@@ -799,14 +864,17 @@ app.post('/checkouts/:id/complete', async (c) => {
           try {
             const { authorizeWalletTransfer } = await import('../services/wallet-settlement.js');
 
-            // Create transfer record first
+            // Create transfer record first. `to_account_id` goes to the
+            // merchant (resolved above); falls back to the buyer's account
+            // only if merchant resolution failed (keeps backward-compat
+            // behavior for checkouts with unknown merchant ids).
             const { data: walletTransfer } = await supabase
               .from('transfers')
               .insert({
                 tenant_id: ctx.tenantId,
                 environment: getEnv(ctx),
                 from_account_id: agentWallet.owner_account_id,
-                to_account_id: checkout.account_id,
+                to_account_id: merchantAccountId || checkout.account_id,
                 amount: checkoutAmount,
                 currency: checkout.currency,
                 type: 'acp',
@@ -814,20 +882,38 @@ app.post('/checkouts/:id/complete', async (c) => {
                 description: `ACP checkout: ${checkout.merchant_name || checkout.merchant_id}`,
                 initiated_by_type: ctx.actorType,
                 initiated_by_id: ctx.actorId || ctx.userId || 'unknown',
-                protocol_metadata: { protocol: 'acp', checkout_id: checkout.checkout_id, agent_wallet: true },
+                protocol_metadata: {
+                  protocol: 'acp',
+                  checkout_id: checkout.checkout_id,
+                  merchant_id: checkout.merchant_id,
+                  merchant_account_id: merchantAccountId,
+                  agent_wallet: true,
+                },
               })
               .select('id')
               .single();
 
             if (walletTransfer) {
+              // Fetch the merchant's wallet row in the shape
+              // authorizeWalletTransfer wants. If we couldn't resolve one,
+              // passing null keeps the old "debit-only" behavior.
+              let destinationWallet: any = null;
+              if (merchantWalletId) {
+                const { data: destRow } = await (supabase as any)
+                  .from('wallets')
+                  .select('id, balance, wallet_type, wallet_address, provider_wallet_id, owner_account_id')
+                  .eq('id', merchantWalletId)
+                  .maybeSingle();
+                destinationWallet = destRow || null;
+              }
               const result = await authorizeWalletTransfer({
                 supabase,
                 tenantId: ctx.tenantId,
                 sourceWallet: agentWallet,
-                destinationWallet: null,
+                destinationWallet,
                 amount: checkoutAmount,
                 transferId: walletTransfer.id,
-                protocolMetadata: { protocol: 'acp', checkout_id: checkout.checkout_id },
+                protocolMetadata: { protocol: 'acp', checkout_id: checkout.checkout_id, merchant_account_id: merchantAccountId },
               });
 
               if (result.success) {
@@ -941,14 +1027,16 @@ app.post('/checkouts/:id/complete', async (c) => {
       console.log('[ACP] Stripe not configured - simulating payment success');
     }
 
-    // Create transfer record
+    // Create transfer record. `to_account_id` now routes to the merchant's
+    // account (resolved above) — falls back to buyer's account only if
+    // resolution failed, preserving legacy behavior on unknown merchants.
     const { data: transfer, error: transferError } = await supabase
       .from('transfers')
       .insert({
         tenant_id: ctx.tenantId,
         environment: getEnv(ctx),
         from_account_id: checkout.account_id,
-        to_account_id: checkout.account_id, // TODO: Determine recipient from merchant
+        to_account_id: merchantAccountId || checkout.account_id,
         amount: checkout.total_amount,
         currency: checkout.currency,
         type: 'acp',
@@ -959,6 +1047,7 @@ app.post('/checkouts/:id/complete', async (c) => {
           protocol: 'acp',
           checkout_id: checkout.checkout_id,
           merchant_id: checkout.merchant_id,
+          merchant_account_id: merchantAccountId,
           merchant_name: checkout.merchant_name,
           agent_id: checkout.agent_id,
           customer_id: checkout.customer_id,

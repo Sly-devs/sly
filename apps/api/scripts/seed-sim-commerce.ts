@@ -225,6 +225,7 @@ async function seedMerchants() {
         id: accountId,
         tenant_id: TENANT_ID,
         type: 'business',
+        subtype: 'merchant',
         name: m.name,
         currency: m.currency,
         metadata,
@@ -234,9 +235,32 @@ async function seedMerchants() {
     );
     if (error) {
       console.error(`  ✗ ${m.name}: ${error.message}`);
-    } else {
-      console.log(`  ✓ ${m.name} (${m.type}, ${m.catalog.length} products)`);
+      continue;
     }
+
+    // Ensure the merchant has an active USDC wallet so ACP/UCP settlement
+    // has a destination. x402 merchants have always had wallets (receipt-
+    // side requires it); ACP/UCP were previously wallet-less, so settlement
+    // couldn't credit them.
+    const { data: existingWallet } = await sb
+      .from('wallets')
+      .select('id')
+      .eq('owner_account_id', accountId)
+      .eq('currency', 'USDC')
+      .eq('status', 'active')
+      .maybeSingle();
+    if (!existingWallet) {
+      await sb.from('wallets').insert({
+        tenant_id: TENANT_ID,
+        owner_account_id: accountId,
+        wallet_type: 'internal',
+        balance: 0,
+        currency: 'USDC',
+        status: 'active',
+      });
+    }
+
+    console.log(`  ✓ ${m.name} (${m.type}, ${m.catalog.length} products${existingWallet ? '' : ', wallet provisioned'})`);
   }
 }
 
@@ -254,6 +278,7 @@ async function seedX402Endpoints() {
         id: accountId,
         tenant_id: TENANT_ID,
         type: 'business',
+        subtype: 'merchant',
         name: `x402 merchant: ${name}`,
         currency: 'USDC',
         metadata: { pos_provider: 'sly-demo-x402', x402_merchant_id: name },

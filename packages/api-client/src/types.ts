@@ -824,6 +824,10 @@ export interface WalletDepositInput {
 
 export interface WalletWithdrawInput {
   amount: number;
+  /** Receiving account UUID — required by the API. */
+  destinationAccountId: string;
+  /** Optional memo / reference string stored on the transfer row. */
+  reference?: string;
 }
 
 export interface X402Quote {

@@ -25,6 +25,7 @@ import {
   TrendingUp,
   Zap,
   Star,
+  Banknote,
 } from 'lucide-react';
 import type { Account, Agent, Stream, LedgerEntry, Transfer, Wallet as WalletData } from '@sly/api-client';
 import { useLocale } from '@/lib/locale';
@@ -33,7 +34,7 @@ import { formatCurrency } from '@sly/ui';
 import { ScreeningTab } from '@/components/dashboard/account-360/screening-tab';
 import { toast } from 'sonner';
 
-type TabType = 'overview' | 'transactions' | 'streams' | 'agents' | 'wallets' | 'screening' | 'commerce' | 'catalog' | 'endpoints' | 'ratings';
+type TabType = 'overview' | 'transactions' | 'streams' | 'agents' | 'wallets' | 'screening' | 'commerce' | 'catalog' | 'endpoints' | 'ratings' | 'payouts';
 
 export default function AccountDetailPage() {
   const params = useParams();
@@ -232,6 +233,7 @@ export default function AccountDetailPage() {
       { id: 'catalog' as TabType, label: 'Catalog', icon: Package, count: catalogCount },
       ...(endpointsCount > 0 ? [{ id: 'endpoints' as TabType, label: 'Endpoints', icon: Zap, count: endpointsCount }] : []),
       { id: 'ratings' as TabType, label: 'Ratings', icon: Star, count: ratingsCount },
+      { id: 'payouts' as TabType, label: 'Payouts', icon: Banknote },
     ] : []),
     { id: 'streams' as TabType, label: 'Streams', icon: Activity, count: streams.length },
     { id: 'agents' as TabType, label: 'Agents', icon: Bot, count: agentsCount },
@@ -465,6 +467,9 @@ export default function AccountDetailPage() {
       )}
       {activeTab === 'ratings' && isMerchant && (
         <RatingsTab ratings={merchantRatings} />
+      )}
+      {activeTab === 'payouts' && isMerchant && (
+        <PayoutsTab accountId={accountId} />
       )}
     </div>
   );
@@ -868,6 +873,182 @@ function RatingsTab({ ratings }: { ratings: any }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function PayoutsTab({ accountId }: { accountId: string }) {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  const [withdrawing, setWithdrawing] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Merchant's wallets
+  const { data: walletsResp } = useQuery({
+    queryKey: ['account', accountId, 'payouts-wallets'],
+    queryFn: () => api!.wallets.list({ owner_account_id: accountId, limit: 20 } as any),
+    enabled: !!api,
+  });
+  const wallets = (walletsResp as any)?.data?.data || (walletsResp as any)?.data || [];
+
+  // Recent transfers targeting this merchant's account (includes withdrawals out).
+  const { data: transfersResp } = useQuery({
+    queryKey: ['account', accountId, 'payouts-transfers'],
+    queryFn: () => api!.accounts.getTransfers(accountId, { limit: 30 }),
+    enabled: !!api,
+  });
+  const transfers = ((transfersResp as any)?.data?.data || (transfersResp as any)?.data || []) as any[];
+  // Withdrawals = transfers FROM the merchant's account (outbound).
+  const withdrawals = transfers.filter((t: any) => t.fromAccountId === accountId || t.from_account_id === accountId);
+
+  async function submitWithdraw(form: { amount: string; destinationAccountId: string; reference: string }) {
+    setSaving(true);
+    setError(null);
+    try {
+      const amount = parseFloat(form.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        setError('Amount must be a positive number');
+        setSaving(false);
+        return;
+      }
+      if (!form.destinationAccountId.trim()) {
+        setError('Destination account ID is required');
+        setSaving(false);
+        return;
+      }
+      await api!.wallets.withdraw(withdrawing.id, {
+        amount,
+        destinationAccountId: form.destinationAccountId.trim(),
+        reference: form.reference.trim() || 'Merchant payout',
+      });
+      await queryClient.invalidateQueries({ queryKey: ['account', accountId, 'payouts-wallets'] });
+      await queryClient.invalidateQueries({ queryKey: ['account', accountId, 'payouts-transfers'] });
+      await queryClient.invalidateQueries({ queryKey: ['account', accountId, 'merchant-stats'] });
+      setWithdrawing(null);
+    } catch (e: any) {
+      setError(e?.message || 'Withdrawal failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="space-y-6">
+        <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Merchant Wallets</h3>
+          {wallets.length === 0 ? (
+            <div className="text-gray-500">No wallets provisioned for this merchant.</div>
+          ) : (
+            <div className="space-y-3">
+              {wallets.map((w: any) => (
+                <div key={w.id} className="flex items-center justify-between py-3 border-b border-gray-100 dark:border-gray-900 last:border-0">
+                  <div>
+                    <div className="font-medium text-gray-900 dark:text-white">{w.walletType || w.wallet_type || 'Wallet'} · {w.currency}</div>
+                    <div className="text-xs font-mono text-gray-400">{w.id.slice(0, 8)}…</div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xl font-bold text-purple-600 dark:text-purple-400">
+                      ${Number(w.balance ?? 0).toFixed(2)}
+                    </span>
+                    <button
+                      onClick={() => { setWithdrawing(w); setError(null); }}
+                      disabled={Number(w.balance ?? 0) <= 0}
+                      className="px-3 py-1.5 text-sm font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Withdraw
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Recent Withdrawals ({withdrawals.length})</h3>
+          {withdrawals.length === 0 ? (
+            <div className="text-gray-500 text-sm">No withdrawals yet.</div>
+          ) : (
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {withdrawals.slice(0, 15).map((t: any) => (
+                <div key={t.id} className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-900 last:border-0 text-sm">
+                  <span className="flex items-center gap-2">
+                    <Banknote className="h-4 w-4 text-emerald-500" />
+                    <span className="text-gray-900 dark:text-white">{t.description || 'Withdrawal'}</span>
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <span className="font-medium">${Number(t.amount || 0).toFixed(2)} {t.currency || 'USDC'}</span>
+                    <span className="text-xs text-gray-400">{new Date(t.createdAt || t.created_at).toLocaleDateString()}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {withdrawing && (
+        <WithdrawModal
+          wallet={withdrawing}
+          onSubmit={submitWithdraw}
+          onClose={() => { setWithdrawing(null); setError(null); }}
+          saving={saving}
+          error={error}
+        />
+      )}
+    </>
+  );
+}
+
+function WithdrawModal({
+  wallet,
+  onSubmit,
+  onClose,
+  saving,
+  error,
+}: {
+  wallet: any;
+  onSubmit: (form: { amount: string; destinationAccountId: string; reference: string }) => void;
+  onClose: () => void;
+  saving: boolean;
+  error: string | null;
+}) {
+  const [amount, setAmount] = useState('');
+  const [destinationAccountId, setDestinationAccountId] = useState('');
+  const [reference, setReference] = useState('');
+  const balance = Number(wallet.balance ?? 0);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white dark:bg-gray-950 rounded-2xl shadow-xl max-w-md w-full p-6">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">Withdraw from Wallet</h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4 font-mono">
+          {wallet.id.slice(0, 8)}… · Balance ${balance.toFixed(2)} {wallet.currency}
+        </p>
+        <div className="space-y-3">
+          <Field label={`Amount (${wallet.currency}) *`}>
+            <input type="number" min="0" step="0.01" max={balance} className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          </Field>
+          <Field label="Destination Account ID *">
+            <input placeholder="account-uuid" className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white font-mono text-sm" value={destinationAccountId} onChange={(e) => setDestinationAccountId(e.target.value)} />
+          </Field>
+          <Field label="Reference">
+            <input placeholder="Monthly payout" className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white" value={reference} onChange={(e) => setReference(e.target.value)} />
+          </Field>
+          {error && <p className="text-sm text-red-600">{error}</p>}
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onClose} disabled={saving} className="px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50">Cancel</button>
+          <button
+            onClick={() => onSubmit({ amount, destinationAccountId, reference })}
+            disabled={saving || !amount || !destinationAccountId}
+            className="px-4 py-2 text-sm font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {saving ? 'Processing…' : 'Withdraw'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

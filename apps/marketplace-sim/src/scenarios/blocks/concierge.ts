@@ -15,7 +15,7 @@
  * Kill-switch aware: skipped if either buyer or concierge gets killed mid-run.
  */
 
-import { SlyClient, isSuspensionError } from '../../sly-client.js';
+import { SlyClient, isSuspensionError, isStaleAgentTokenError } from '../../sly-client.js';
 import type { SimAgent, PersonaStyle } from '../../processors/types.js';
 import type { ScenarioContext, ScenarioResult } from '../types.js';
 import { filterByStyle, createAgentClient } from '../../agents/registry.js';
@@ -128,9 +128,15 @@ export async function runConcierge(
   }
 
   const handleSuspension = (err: unknown, agent: SimAgent): boolean => {
-    if (!isSuspensionError(err)) return false;
-    agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
-    return true;
+    if (isSuspensionError(err)) {
+      agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
+      return true;
+    }
+    if (isStaleAgentTokenError(err)) {
+      agentState.markKilled(agent.agentId, 'stale_token', { agentName: agent.name });
+      return true;
+    }
+    return false;
   };
 
   let cycle = 0;
@@ -299,6 +305,8 @@ export async function runConcierge(
           agentId: concierge.agentId,
           agentName: concierge.name,
           icon: '\u{1F9F3}',
+          amount: merchantCost + fee,
+          currency: 'USDC',
           ...(merchantTarget
             ? { toId: merchantTarget.id, toName: merchantTarget.name, toKind: 'merchant' as const }
             : {}),

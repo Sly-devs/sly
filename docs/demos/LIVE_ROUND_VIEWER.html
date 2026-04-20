@@ -475,6 +475,11 @@ const state = {
   // protocol: 'acp' | 'ucp' | 'x402'. Populated one-shot on connect from
   // GET /v1/ucp/merchants + GET /v1/x402/endpoints.
   merchants: {},
+  // Running sum of purchase amounts from SSE milestones (x402 / ACP / UCP).
+  // updateMetrics() adds this on top of mandate-settled volume.
+  purchaseVolume: 0,
+  // Running count of purchases (for the "Tasks" metric).
+  purchaseCount: 0,
   // Pinned key findings — milestones from server (tier upgrades, freezes, cascades)
   milestones: [],
 };
@@ -1035,6 +1040,7 @@ async function executeScenario(scenario) {
 
   // Reset state for new scenario
   state.metrics = { tasks: 0, completed: 0, failed: 0, volume: 0, onchain: 0, disputes: 0, escrowed: 0, rejected: 0, mandates: 0 };
+  state.purchaseVolume = 0; state.purchaseCount = 0;
   state.tasks = []; state.edges = []; state.ratings = {}; state.pairStats = {};
   state.reviews = []; // Individual review entries: { agentId, reviewerId, score, comment, action, time }
   state.milestones = [];
@@ -1667,6 +1673,7 @@ function resetRound() {
   state.externalAgents = {};
   state.milestones = [];
   state.metrics = { tasks: 0, completed: 0, failed: 0, volume: 0, onchain: 0, disputes: 0, escrowed: 0, rejected: 0, mandates: 0 };
+  state.purchaseVolume = 0; state.purchaseCount = 0;
   currentScenario = null;
   resetCutoff = new Date().toISOString();
 
@@ -1780,6 +1787,14 @@ function handleEvent(type, event) {
           agentNames[merchId] = data.toName || merchId;
           addEdge(data.agentId, merchId, 'purchase');
           renderAgents();
+        }
+        // Purchase-volume aggregation — x402 / ACP / UCP don't create AP2
+        // mandates, so updateMetrics()'s mandate-based volume sum would show
+        // 0 without this. Each milestone carries a numeric amount.
+        if (typeof data.amount === 'number' && data.amount > 0) {
+          state.purchaseVolume = (state.purchaseVolume || 0) + data.amount;
+          state.purchaseCount = (state.purchaseCount || 0) + 1;
+          updateMetrics();
         }
       }
       return;
@@ -1995,11 +2010,16 @@ function updateMetrics() {
   const tasks = state.tasks;
   const mandates = state.mandates;
   const transfers = state.transfers;
-  state.metrics.tasks = tasks.length;
-  state.metrics.completed = tasks.filter(t => t.state === 'completed').length;
+  // Tasks / Completed roll up A2A tasks and merchant purchases into one
+  // activity counter so merchant-only scenarios don't look empty.
+  state.metrics.tasks = tasks.length + (state.purchaseCount || 0);
+  state.metrics.completed = tasks.filter(t => t.state === 'completed').length + (state.purchaseCount || 0);
   state.metrics.failed = tasks.filter(t => t.state === 'failed').length;
   state.metrics.mandates = mandates.length;
-  state.metrics.volume = mandates.filter(m => m.status === 'completed').reduce((s, m) => s + Number(m.authorized_amount || 0), 0);
+  // Mandate-settled volume (A2A) plus purchase volume (merchants — SSE milestones
+  // carry amount since mandates aren't created for x402 / ACP / UCP flows).
+  const mandateVolume = mandates.filter(m => m.status === 'completed').reduce((s, m) => s + Number(m.authorized_amount || 0), 0);
+  state.metrics.volume = mandateVolume + (state.purchaseVolume || 0);
   // Don't overwrite disputes from SSE events — active mandates are escrow, not disputes
   state.metrics.escrowed = mandates.filter(m => m.status === 'active').reduce((s, m) => s + Number(m.authorized_amount || 0), 0);
   state.metrics.activeEscrow = mandates.filter(m => m.status === 'active').length;

@@ -30,7 +30,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { SlyClient, isSuspensionError } from '../../sly-client.js';
+import { SlyClient, isSuspensionError, isStaleAgentTokenError } from '../../sly-client.js';
 import type { TaskContext, SimAgent, PersonaLike } from '../../processors/types.js';
 import type { ScenarioContext, ScenarioResult } from '../types.js';
 import { filterByStyle, createAgentClient } from '../../agents/registry.js';
@@ -253,9 +253,15 @@ export async function runDoubleAuction(
 
     // Classify suspended-agent errors so the cycle stops picking killed agents.
     const handleSuspension = (err: unknown, agent: SimAgent): boolean => {
-      if (!isSuspensionError(err)) return false;
-      agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
-      return true;
+      if (isSuspensionError(err)) {
+        agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
+        return true;
+      }
+      if (isStaleAgentTokenError(err)) {
+        agentState.markKilled(agent.agentId, 'stale_token', { agentName: agent.name });
+        return true;
+      }
+      return false;
     };
 
     // ─── 2. Each buyer forms intent and posts a task ───

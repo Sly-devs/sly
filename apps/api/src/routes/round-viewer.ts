@@ -420,6 +420,9 @@ roundViewerRouter.get('/comments', async (c) => {
  *   toId?: string,
  *   toName?: string,
  *   toKind?: 'merchant' | 'agent',
+ *   // Settlement amount for purchase milestones. Viewer sums into live volume.
+ *   amount?: number,
+ *   currency?: string,
  * }
  */
 roundViewerRouter.post('/milestone', async (c) => {
@@ -433,6 +436,8 @@ roundViewerRouter.post('/milestone', async (c) => {
     toId: body.toId,
     toName: body.toName,
     toKind: body.toKind,
+    amount: typeof body.amount === 'number' ? body.amount : undefined,
+    currency: body.currency,
   };
   // Persist to the ring buffer so post-run report fetches catch it.
   bufferNarration({

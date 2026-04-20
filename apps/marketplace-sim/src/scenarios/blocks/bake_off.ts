@@ -40,7 +40,7 @@ import { SlyClient } from '../../sly-client.js';
 import type { TaskContext, SimAgent, PersonaLike } from '../../processors/types.js';
 import type { ScenarioContext, ScenarioResult } from '../types.js';
 import { filterByStyle, createAgentClient } from '../../agents/registry.js';
-import { isSuspensionError } from '../../sly-client.js';
+import { isSuspensionError, isStaleAgentTokenError } from '../../sly-client.js';
 import { AgentStateManager, type DynamicPricingConfig } from '../../agents/agent-state.js';
 
 function sha256(data: string): string {
@@ -227,9 +227,15 @@ export async function runBakeOff(
 
   // Classify suspended-agent errors and skip killed agents on future picks.
   const handleSuspension = (err: unknown, agent: SimAgent): boolean => {
-    if (!isSuspensionError(err)) return false;
-    agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
-    return true;
+    if (isSuspensionError(err)) {
+      agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
+      return true;
+    }
+    if (isStaleAgentTokenError(err)) {
+      agentState.markKilled(agent.agentId, 'stale_token', { agentName: agent.name });
+      return true;
+    }
+    return false;
   };
 
   while (!shouldStop() && Date.now() - startedAt < durationMs) {

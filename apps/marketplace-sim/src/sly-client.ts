@@ -66,6 +66,19 @@ export function isSuspensionError(err: unknown): boolean {
   return (is403 && mentionsSuspended) || isRpc32004;
 }
 
+/**
+ * 401 "Invalid agent token" signals a stale token in tokens.json (e.g., the
+ * seed-agent endpoint rotated it out-of-band). The agent can't take any
+ * action until the sim is re-seeded, so blocks treat this the same as a
+ * suspension — skip the agent for the rest of the run instead of emitting
+ * a noisy alert every cycle.
+ */
+export function isStaleAgentTokenError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (!msg) return false;
+  return /Sly API 401\b/.test(msg) && /(invalid agent token|invalid authorization|missing or invalid auth)/i.test(msg);
+}
+
 export class SlyClient {
   private baseUrl: string;
   private adminKey?: string;
@@ -552,6 +565,9 @@ export class SlyClient {
       toId?: string;
       toName?: string;
       toKind?: 'merchant' | 'agent';
+      /** Settlement amount in `currency`, e.g. 0.50 USDC. Viewer sums these into live volume. */
+      amount?: number;
+      currency?: string;
     } = {},
   ): Promise<void> {
     await this.request(

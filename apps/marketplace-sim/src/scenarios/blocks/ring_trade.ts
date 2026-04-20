@@ -24,7 +24,7 @@
  *   - normal             — legitimate baseline trade (if mixed pool)
  */
 
-import { SlyClient, isSuspensionError } from '../../sly-client.js';
+import { SlyClient, isSuspensionError, isStaleAgentTokenError } from '../../sly-client.js';
 import type { TaskContext, SimAgent, PersonaLike } from '../../processors/types.js';
 import type { ScenarioContext, ScenarioResult } from '../types.js';
 import { filterByStyle, createAgentClient } from '../../agents/registry.js';
@@ -156,9 +156,15 @@ export async function runRingTrade(
    * Returns true if we classified it as a suspension.
    */
   const handleSuspension = (err: unknown, agent: SimAgent): boolean => {
-    if (!isSuspensionError(err)) return false;
-    agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
-    return true;
+    if (isSuspensionError(err)) {
+      agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
+      return true;
+    }
+    if (isStaleAgentTokenError(err)) {
+      agentState.markKilled(agent.agentId, 'stale_token', { agentName: agent.name });
+      return true;
+    }
+    return false;
   };
 
   const executeTrade = async (

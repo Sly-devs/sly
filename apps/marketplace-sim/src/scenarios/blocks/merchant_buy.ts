@@ -22,7 +22,7 @@
  *   }
  */
 
-import { SlyClient, isSuspensionError } from '../../sly-client.js';
+import { SlyClient, isSuspensionError, isStaleAgentTokenError } from '../../sly-client.js';
 import type { SimAgent, PersonaStyle } from '../../processors/types.js';
 import type { ScenarioContext, ScenarioResult } from '../types.js';
 import { filterByStyle, createAgentClient } from '../../agents/registry.js';
@@ -134,9 +134,15 @@ export async function runMerchantBuy(
   }
 
   const handleSuspension = (err: unknown, agent: SimAgent): boolean => {
-    if (!isSuspensionError(err)) return false;
-    agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
-    return true;
+    if (isSuspensionError(err)) {
+      agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
+      return true;
+    }
+    if (isStaleAgentTokenError(err)) {
+      agentState.markKilled(agent.agentId, 'stale_token', { agentName: agent.name });
+      return true;
+    }
+    return false;
   };
 
   let cycle = 0;
@@ -218,6 +224,8 @@ export async function runMerchantBuy(
             toId: 'merch:' + merchId,
             toName: merchant.name,
             toKind: 'merchant',
+            amount: total,
+            currency: 'USDC',
           },
         );
       } else if (config.protocol === 'ucp') {
@@ -286,6 +294,8 @@ export async function runMerchantBuy(
             toId: 'merch:' + merchIdUcp,
             toName: merchant.name,
             toKind: 'merchant',
+            amount: totalUsd,
+            currency: 'USDC',
           },
         );
       } else if (config.protocol === 'x402') {
@@ -327,6 +337,8 @@ export async function runMerchantBuy(
             toId: 'merch:x402:' + String(endpoint.id),
             toName: endpoint.name,
             toKind: 'merchant',
+            amount: price,
+            currency: 'USDC',
           },
         );
       }

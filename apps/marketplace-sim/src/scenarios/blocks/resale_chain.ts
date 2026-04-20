@@ -14,7 +14,7 @@
  * Kill-switch aware: drops killed resellers or buyers from the active pool each cycle.
  */
 
-import { SlyClient, isSuspensionError } from '../../sly-client.js';
+import { SlyClient, isSuspensionError, isStaleAgentTokenError } from '../../sly-client.js';
 import type { SimAgent, PersonaStyle } from '../../processors/types.js';
 import type { ScenarioContext, ScenarioResult } from '../types.js';
 import { filterByStyle, createAgentClient } from '../../agents/registry.js';
@@ -92,9 +92,15 @@ export async function runResaleChain(
   }
 
   const handleSuspension = (err: unknown, agent: SimAgent): boolean => {
-    if (!isSuspensionError(err)) return false;
-    agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
-    return true;
+    if (isSuspensionError(err)) {
+      agentState.markKilled(agent.agentId, 'kill_switch', { agentName: agent.name });
+      return true;
+    }
+    if (isStaleAgentTokenError(err)) {
+      agentState.markKilled(agent.agentId, 'stale_token', { agentName: agent.name });
+      return true;
+    }
+    return false;
   };
 
   let cycle = 0;
@@ -260,6 +266,8 @@ export async function runResaleChain(
           toId: 'merch:' + String(merchant.id),
           toName: merchant.name,
           toKind: 'merchant',
+          amount: resalePrice,
+          currency: 'USDC',
         },
       );
     } catch (e: any) {

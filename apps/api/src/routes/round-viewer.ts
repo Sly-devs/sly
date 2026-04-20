@@ -209,6 +209,63 @@ roundViewerRouter.get('/agents', async (c) => {
 });
 
 /**
+ * GET /admin/round/merchants
+ * UCP-discoverable merchants in the sim tenant (or the tenant hinted by
+ * SIM_TENANT_ID). Same permissive-CORS path as /agents so the live viewer
+ * can populate its sidebar without crashing on CORS preflight.
+ */
+roundViewerRouter.get('/merchants', async (c) => {
+  const supabase = createClient();
+  const tenantId = process.env.SIM_TENANT_ID || 'aaaaaaaa-0000-0000-0000-000000000002';
+
+  const { data: accounts } = await supabase
+    .from('accounts')
+    .select('id, name, currency, metadata')
+    .eq('tenant_id', tenantId)
+    .not('metadata->pos_provider', 'is', null)
+    .limit(100);
+
+  const merchants = (accounts || []).map((a: any) => ({
+    id: a.id,
+    name: a.name,
+    merchant_id: a.metadata?.invu_merchant_id,
+    type: a.metadata?.merchant_type,
+    country: a.metadata?.country,
+    city: a.metadata?.city,
+    currency: a.currency,
+    description: a.metadata?.description,
+    pos_provider: a.metadata?.pos_provider,
+    product_count: Array.isArray(a.metadata?.catalog)
+      ? a.metadata.catalog.length
+      : Array.isArray(a.metadata?.catalog?.products)
+        ? a.metadata.catalog.products.length
+        : 0,
+  }));
+
+  return c.json({ data: merchants });
+});
+
+/**
+ * GET /admin/round/x402-endpoints
+ * Merchant-owned x402 endpoints in the sim tenant. The viewer filters down to
+ * the /x402/merchants/* path prefix to avoid sidebar noise from agent-skill
+ * endpoints, but we return everything active here and let the client narrow.
+ */
+roundViewerRouter.get('/x402-endpoints', async (c) => {
+  const supabase = createClient();
+  const tenantId = process.env.SIM_TENANT_ID || 'aaaaaaaa-0000-0000-0000-000000000002';
+
+  const { data: endpoints } = await supabase
+    .from('x402_endpoints')
+    .select('id, name, path, method, base_price, currency, status, description')
+    .eq('tenant_id', tenantId)
+    .eq('status', 'active')
+    .limit(100);
+
+  return c.json({ data: endpoints || [] });
+});
+
+/**
  * GET /admin/round/agent/:id
  * Full agent profile with skills, wallets, on-chain identity — cross-tenant.
  */

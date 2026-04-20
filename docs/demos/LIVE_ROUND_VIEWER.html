@@ -519,15 +519,16 @@ async function connect() {
     });
 
     // Load merchants + x402 endpoints (one-shot — merchants don't change mid-round).
-    // Two parallel admin-authed calls. Any failure is non-fatal (sidebar just
-    // shows an empty "Merchants" section).
+    // Hits admin-round proxies for permissive CORS + service-role sim-tenant
+    // scoping (the /v1/* versions go through strict CORS + tenant-key auth
+    // which the viewer's admin key doesn't have). Any failure is non-fatal.
     try {
       const [ucpRes, x402Res] = await Promise.all([
-        fetch(url + '/v1/ucp/merchants?limit=50', { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch(url + '/v1/x402/endpoints?limit=50', { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch(url + '/admin/round/merchants', { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch(url + '/admin/round/x402-endpoints', { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
       ]);
-      const ucpMerchants = ucpRes?.data || ucpRes?.merchants || [];
-      const x402Endpoints = x402Res?.data || x402Res?.endpoints || [];
+      const ucpMerchants = ucpRes?.data || [];
+      const x402Endpoints = x402Res?.data || [];
       state.merchants = {};
       for (const m of ucpMerchants) {
         // ACP vs UCP distinction is usage-time — both live in the same table.

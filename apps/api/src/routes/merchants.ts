@@ -21,6 +21,7 @@ import { z } from 'zod';
 import { createClient } from '../db/client.js';
 import { computeMerchantStats } from '../services/merchant-stats.js';
 import { addProduct, updateProduct, deleteProduct } from '../services/merchant-catalog.js';
+import { logCatalogView, viewerFromCtx } from '../services/catalog-view-log.js';
 import type { RequestContext } from '../middleware/auth.js';
 
 // Routes attached under /v1/accounts (for the :id/merchant-stats path).
@@ -288,11 +289,23 @@ merchantsAliasRouter.get('/:id/ratings', async (c) => {
 
   // Verify tenant ownership.
   const { data: merchant } = await (supabase.from('accounts') as any)
-    .select('id')
+    .select('id, subtype, metadata')
     .eq('id', accountId)
     .eq('tenant_id', ctx.tenantId)
     .maybeSingle();
   if (!merchant) return c.json({ error: 'Merchant not found' }, 404);
+
+  // Log the ratings-page view — agents checking reputation before buying.
+  if (merchant.subtype === 'merchant' || merchant.metadata?.pos_provider) {
+    const { viewerType, viewerAgentId } = viewerFromCtx(ctx);
+    logCatalogView(supabase, {
+      tenantId: ctx.tenantId,
+      merchantAccountId: accountId,
+      endpoint: 'ratings',
+      viewerType,
+      viewerAgentId,
+    });
+  }
 
   const [recentRes, allRes] = await Promise.all([
     (supabase.from('merchant_ratings') as any)
@@ -355,6 +368,20 @@ merchantsAliasRouter.get('/:id', async (c) => {
     .maybeSingle();
 
   if (!account) return c.json({ error: 'Merchant not found' }, 404);
+
+  // Fire-and-forget: log the catalog view so the merchant can see who
+  // browsed without buying. Only for merchants, only on detail endpoints.
+  if (account.subtype === 'merchant' || account.metadata?.pos_provider) {
+    const { viewerType, viewerAgentId } = viewerFromCtx(ctx);
+    logCatalogView(supabase, {
+      tenantId: ctx.tenantId,
+      merchantAccountId: accountId,
+      endpoint: 'detail',
+      viewerType,
+      viewerAgentId,
+      refererSku: c.req.query('sku') || undefined,
+    });
+  }
 
   const rawCatalog = account.metadata?.catalog;
   const products: any[] = Array.isArray(rawCatalog)

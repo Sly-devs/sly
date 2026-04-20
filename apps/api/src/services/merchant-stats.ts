@@ -38,6 +38,25 @@ export interface MerchantStatsResult {
   topBuyers: Array<{ agentId: string; name: string; sales: number; spend: number }>;
   recentSales: Array<{ protocol: 'acp' | 'ucp' | 'x402'; amount: number; buyerName: string | null; at: string; item: string }>;
   endpoints: Array<{ id: string; name: string; path: string; method: string; base_price: number; total_calls: number; total_revenue: number; status: string }>;
+  /** Discovery + abandonment: how often agents looked at this merchant without buying. */
+  discovery: {
+    views: number;
+    uniqueViewers: number;
+    conversionRate: number;            // purchases / views (0-1)
+    funnel: { views: number; checkouts: number; completed: number; abandoned: number };
+    abandonedCarts: {
+      count: number;
+      value: number;                    // total_amount sum of abandoned carts
+      recent: Array<{
+        checkoutId: string;
+        buyerName: string | null;
+        amount: number;
+        items: string;                  // comma-joined item names
+        createdAt: string;
+        expiredAt: string | null;
+      }>;
+    };
+  };
 }
 
 /**
@@ -60,6 +79,13 @@ export async function computeMerchantStats(
   if (tenantId) accountQuery = accountQuery.eq('tenant_id', tenantId);
   const { data: accountRow } = await accountQuery.maybeSingle();
 
+  const emptyDiscovery = {
+    views: 0,
+    uniqueViewers: 0,
+    conversionRate: 0,
+    funnel: { views: 0, checkouts: 0, completed: 0, abandoned: 0 },
+    abandonedCarts: { count: 0, value: 0, recent: [] as any[] },
+  };
   const empty: MerchantStatsResult = {
     merchant: null,
     isMerchant: false,
@@ -68,6 +94,7 @@ export async function computeMerchantStats(
     topBuyers: [],
     recentSales: [],
     endpoints: [],
+    discovery: emptyDiscovery,
   };
   if (!accountRow) return empty;
 
@@ -104,6 +131,32 @@ export async function computeMerchantStats(
   // ACP: checkouts with merchant_account_id OR (pre-backfill) merchant_id TEXT
   // matching metadata.invu_merchant_id. Prefer the UUID column.
   const posTextId = accountRow.metadata?.invu_merchant_id ?? null;
+
+  // Discovery + abandonment side queries (scoped here so posTextId is in scope).
+  // catalog_views for this merchant in the window.
+  let viewsQuery = (supabase.from('catalog_views') as any)
+    .select('viewer_agent_id, created_at')
+    .eq('merchant_account_id', accountId)
+    .gte('created_at', cutoff);
+  if (tenantId) viewsQuery = viewsQuery.eq('tenant_id', tenantId);
+  viewsQuery = viewsQuery.order('created_at', { ascending: false }).limit(2000);
+
+  // Abandoned ACP carts: status=pending AND expires_at < now (OR null expiry +
+  // > 1 hour old, so checkouts that never settled don't sit as "pending" forever).
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  let abandonedAcpQuery = (supabase.from('acp_checkouts') as any)
+    .select('id, checkout_id, agent_id, agent_name, total_amount, created_at, expires_at, metadata, merchant_id, merchant_account_id')
+    .eq('status', 'pending')
+    .or(`expires_at.lt.${new Date().toISOString()},and(expires_at.is.null,created_at.lt.${oneHourAgo})`)
+    .gte('created_at', cutoff);
+  if (tenantId) abandonedAcpQuery = abandonedAcpQuery.eq('tenant_id', tenantId);
+  // Match either the UUID column or legacy TEXT merchant_id.
+  if (posTextId) {
+    abandonedAcpQuery = abandonedAcpQuery.or(`merchant_account_id.eq.${accountId},merchant_id.eq.${posTextId}`);
+  } else {
+    abandonedAcpQuery = abandonedAcpQuery.eq('merchant_account_id', accountId);
+  }
+  abandonedAcpQuery = abandonedAcpQuery.order('created_at', { ascending: false }).limit(20);
   let acpQuery = supabase
     .from('acp_checkouts')
     .select('id, status, total_amount, agent_id, agent_name, merchant_id, merchant_account_id, created_at, metadata')
@@ -146,12 +199,16 @@ export async function computeMerchantStats(
   if (tenantId) epQuery = epQuery.eq('tenant_id', tenantId);
   epQuery = epQuery.order('created_at', { ascending: true }).limit(50);
 
-  const [acpRes, ucpRes, txRes, epRes] = await Promise.all([acpQuery, ucpQuery, txQuery, epQuery]);
+  const [acpRes, ucpRes, txRes, epRes, viewsRes, abandonedAcpRes] = await Promise.all([
+    acpQuery, ucpQuery, txQuery, epQuery, viewsQuery, abandonedAcpQuery,
+  ]);
 
   const acpRows = (acpRes.data || []) as any[];
   const ucpRows = (ucpRes.data || []) as any[];
   const txRows = (txRes.data || []) as any[];
   const epRows = (epRes.data || []) as any[];
+  const viewsRows = (viewsRes.data || []) as any[];
+  const abandonedAcpRows = (abandonedAcpRes.data || []) as any[];
 
   // Filter UCP sessions to those addressed to this merchant via metadata.
   const ucpMine = ucpRows.filter((s: any) => {
@@ -278,6 +335,45 @@ export async function computeMerchantStats(
     status: e.status,
   }));
 
+  // ─── 7. Discovery + abandonment ───────────────────────────────────────
+  const uniqueViewerSet = new Set<string>();
+  for (const v of viewsRows) {
+    if (v.viewer_agent_id) uniqueViewerSet.add(v.viewer_agent_id);
+  }
+  const views = viewsRows.length;
+  const checkouts = counts.total;           // all checkouts (any status) this window
+  const completed = acpRows.length + ucpMine.length + x402Completed.length;
+  const abandoned = abandonedAcpRows.length;
+  const conversionRate = views > 0 ? completed / views : 0;
+
+  // Resolve buyer names for recent abandoned carts — reuse the buyerAgg map
+  // where possible, fall back to the agent_name text column on the checkout row.
+  const abandonedRecent = abandonedAcpRows.slice(0, 10).map((c: any) => {
+    const items = Array.isArray(c.metadata?.cart_items)
+      ? c.metadata.cart_items.map((i: any) => i.name).filter(Boolean).slice(0, 3).join(', ')
+      : (c.agent_name ? `${c.agent_name}'s basket` : 'Basket');
+    return {
+      checkoutId: c.checkout_id || c.id,
+      buyerName: buyerAgg[c.agent_id]?.name || c.agent_name || null,
+      amount: Number(c.total_amount || 0),
+      items,
+      createdAt: c.created_at,
+      expiredAt: c.expires_at || null,
+    };
+  });
+
+  const discovery = {
+    views,
+    uniqueViewers: uniqueViewerSet.size,
+    conversionRate,
+    funnel: { views, checkouts, completed, abandoned },
+    abandonedCarts: {
+      count: abandoned,
+      value: abandonedAcpRows.reduce((s, c) => s + Number(c.total_amount || 0), 0),
+      recent: abandonedRecent,
+    },
+  };
+
   return {
     merchant,
     isMerchant: true,
@@ -286,5 +382,6 @@ export async function computeMerchantStats(
     topBuyers,
     recentSales,
     endpoints,
+    discovery,
   };
 }

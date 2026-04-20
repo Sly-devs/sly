@@ -479,7 +479,7 @@ export default function AccountDetailPage() {
 
 function CommerceTab({ stats }: { stats: any }) {
   if (!stats) return <div className="p-8 text-center text-gray-500">Loading commerce data…</div>;
-  const { volume, counts, topBuyers, recentSales } = stats;
+  const { volume, counts, topBuyers, recentSales, discovery } = stats;
   return (
     <div className="space-y-6">
       {/* Volume breakdown */}
@@ -508,6 +508,67 @@ function CommerceTab({ stats }: { stats: any }) {
             </div>
           ) : (
             <div className="text-gray-500 dark:text-gray-400 text-sm">No purchases yet in this window.</div>
+          )}
+        </div>
+
+        {/* Discovery + abandonment */}
+        <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">Discovery & Abandonment</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Agents who browsed the catalog — who bought, who walked away.</p>
+          {discovery ? (
+            <>
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                <div>
+                  <div className="text-2xl font-bold text-gray-900 dark:text-white">{discovery.views}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">catalog views</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold text-gray-900 dark:text-white">{discovery.uniqueViewers}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">unique agents</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                    {discovery.views > 0 ? `${(discovery.conversionRate * 100).toFixed(0)}%` : '—'}
+                  </div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">conversion</div>
+                </div>
+              </div>
+              {/* Funnel */}
+              <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 font-mono border-t border-gray-100 dark:border-gray-900 pt-3">
+                <span>{discovery.funnel.views} views</span>
+                <span>→</span>
+                <span>{discovery.funnel.checkouts} carts</span>
+                <span>→</span>
+                <span className="text-emerald-600 dark:text-emerald-400">{discovery.funnel.completed} paid</span>
+                <span>·</span>
+                <span className="text-amber-600 dark:text-amber-400">{discovery.funnel.abandoned} abandoned</span>
+              </div>
+              {/* Abandoned carts feed */}
+              {discovery.abandonedCarts.count > 0 && (
+                <div className="mt-4 border-t border-gray-100 dark:border-gray-900 pt-3">
+                  <div className="flex items-baseline justify-between mb-2">
+                    <span className="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Recent Abandoned Carts</span>
+                    <span className="text-sm font-semibold text-amber-600 dark:text-amber-400">${Number(discovery.abandonedCarts.value).toFixed(2)} left on the table</span>
+                  </div>
+                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {discovery.abandonedCarts.recent.map((ac: any) => (
+                      <div key={ac.checkoutId} className="flex items-start justify-between text-xs py-1 border-b border-gray-100 dark:border-gray-900 last:border-0">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-gray-900 dark:text-white">{ac.buyerName || '(unknown agent)'}</div>
+                          <div className="text-gray-400 truncate">{ac.items}</div>
+                        </div>
+                        <div className="text-right ml-2">
+                          <div className="font-medium text-amber-600 dark:text-amber-400">${Number(ac.amount).toFixed(2)}</div>
+                          <div className="text-[10px] text-gray-400">{new Date(ac.createdAt).toLocaleDateString()}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-gray-500 text-sm">No discovery data yet.</div>
           )}
         </div>
 

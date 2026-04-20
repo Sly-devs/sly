@@ -13,6 +13,7 @@ import { createClient } from '../db/client.js';
 import { NotFoundError } from '../middleware/error.js';
 import { trackOp } from '../services/ops/track-op.js';
 import { OpType } from '../services/ops/operation-types.js';
+import { logCatalogView, viewerFromCtx } from '../services/catalog-view-log.js';
 
 const router = new Hono();
 
@@ -125,6 +126,19 @@ router.get('/:id', async (c) => {
     success: true,
     data: { merchantId: meta.invu_merchant_id, name: account.name, type: meta.merchant_type },
   });
+
+  // Also log as a catalog view for the merchant Discovery panel.
+  if ((account as any).subtype === 'merchant' || meta.pos_provider) {
+    const { viewerType, viewerAgentId } = viewerFromCtx(ctx);
+    logCatalogView(supabase, {
+      tenantId: ctx.tenantId,
+      merchantAccountId: (account as any).id,
+      endpoint: 'detail',
+      viewerType,
+      viewerAgentId,
+      refererSku: c.req.query('sku') || undefined,
+    });
+  }
 
   return c.json({
     id: account.id,

@@ -31,10 +31,28 @@ function pick<T>(arr: T[]): T {
 
 type Strategy = 'lowest_price' | 'highest_rating' | 'weighted';
 
+/**
+ * Persona-driven shopping strategy. The earlier default ('weighted' for
+ * everyone except whale/quality/mm) produced a monoculture — the weighted
+ * 60/40 blend always favored the cheapest merchant when prices varied more
+ * than ratings. The current mapping spreads personas across all three
+ * strategies so market share actually diversifies across merchants.
+ *
+ *   Quality-first (highest_rating):
+ *     whale, quality-reviewer, researcher, conservative
+ *   Price-first (lowest_price):
+ *     mm, budget, budget-trader, opportunist, newcomer, rogue-spam
+ *   Balanced 50/50 (weighted):
+ *     honest, colluder, rogue-disputer, (default)
+ *
+ * Also rebalanced weighted from 60% price / 40% rating to 50/50 so rating
+ * isn't swamped when price ranges widen.
+ */
 function strategyFor(style: SimAgent['style'] | string | undefined): Strategy {
   if (!style) return 'weighted';
-  if (['whale', 'quality-reviewer'].includes(style as string)) return 'highest_rating';
-  if (['mm'].includes(style as string)) return 'lowest_price';
+  const s = style as string;
+  if (['whale', 'quality-reviewer', 'researcher', 'conservative'].includes(s)) return 'highest_rating';
+  if (['mm', 'budget', 'budget-trader', 'opportunist', 'newcomer', 'rogue-spam'].includes(s)) return 'lowest_price';
   return 'weighted';
 }
 
@@ -164,17 +182,31 @@ export async function runMerchantComparison(
     } else if (strategy === 'highest_rating') {
       winner = [...listings].sort((a, b) => b.rating - a.rating)[0];
     } else {
-      // Weighted: normalize price (lower = better) and rating (higher = better).
+      // Weighted 50/50 with PROBABILISTIC selection — real shoppers don't
+      // always pick the argmax. Each merchant's blend score is normalized
+      // into a sampling weight, then we draw one at random. Middle-tier
+      // merchants win proportionally even when an extreme always scores
+      // highest, producing realistic market-share distribution.
       const minP = Math.min(...listings.map((l) => l.price));
       const maxP = Math.max(...listings.map((l) => l.price));
       const priceRange = maxP - minP || 1;
-      winner = [...listings].sort((a, b) => {
-        const aPriceScore = 1 - (a.price - minP) / priceRange;
-        const bPriceScore = 1 - (b.price - minP) / priceRange;
-        const aRatingScore = a.rating / 5;
-        const bRatingScore = b.rating / 5;
-        return bPriceScore * 0.6 + bRatingScore * 0.4 - (aPriceScore * 0.6 + aRatingScore * 0.4);
-      })[0];
+      const scored = listings.map((l) => {
+        const priceScore = 1 - (l.price - minP) / priceRange;
+        const ratingScore = l.rating / 5;
+        return { l, score: priceScore * 0.5 + ratingScore * 0.5 };
+      });
+      // Temperature sharpens (higher → winner-take-all) vs flattens (lower →
+      // closer to random). 3 gives "the best wins ~60%, middle ~30%, worst ~10%".
+      const T = 3;
+      const weights = scored.map((s) => Math.pow(s.score, T));
+      const total = weights.reduce((a, b) => a + b, 0) || 1;
+      let r = Math.random() * total;
+      let chosen = scored[0];
+      for (let i = 0; i < scored.length; i++) {
+        r -= weights[i];
+        if (r <= 0) { chosen = scored[i]; break; }
+      }
+      winner = chosen.l;
     }
 
     if (dryRun) { completedTrades++; break; }

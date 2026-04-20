@@ -182,6 +182,22 @@ export async function runResaleChain(
         }
       }
 
+      // Merchant purchase happened — emit a milestone NOW so the merchant
+      // shows on the graph even if the downstream A2A resale fails.
+      await adminClient.milestone(
+        `\u{1F6D2} ${reseller.name} sourced "${item.name}" from ${merchant.name} ($${merchantCost.toFixed(2)}) — preparing resale`,
+        {
+          agentId: reseller.agentId,
+          agentName: reseller.name,
+          icon: '\u{1F6D2}',
+          toId: 'merch:' + String(merchant.id),
+          toName: merchant.name,
+          toKind: 'merchant',
+          amount: merchantCost,
+          currency: 'USDC',
+        },
+      );
+
       // ─── 2. Reseller opens A2A offer to the end-buyer ────────────────
       const resalePrice = Math.round(merchantCost * markup * 100) / 100;
       const pitch = `Resale offer: "${item.name}" (sourced from ${merchant.name}). Price $${resalePrice.toFixed(2)} (merchant cost $${merchantCost.toFixed(2)}, markup ×${markup.toFixed(2)}). Fulfillment on acceptance.`;
@@ -257,17 +273,17 @@ export async function runResaleChain(
       completedTrades++;
       totalVolume += resalePrice;
 
+      // Resale-complete milestone. No `amount` — we already counted the
+      // merchant leg in the sourced milestone; counting again would
+      // double the volume number. The A2A task + AP2 mandate created above
+      // will surface as regular agent→agent activity and their volume flows
+      // through the normal mandate-completion aggregator.
       await adminClient.milestone(
         `\u{1F501} ${reseller.name} resold "${item.name}" (${merchant.name} → ${buyer.name}, margin $${(resalePrice - merchantCost).toFixed(2)})`,
         {
           agentId: reseller.agentId,
           agentName: reseller.name,
           icon: '\u{1F501}',
-          toId: 'merch:' + String(merchant.id),
-          toName: merchant.name,
-          toKind: 'merchant',
-          amount: resalePrice,
-          currency: 'USDC',
         },
       );
     } catch (e: any) {

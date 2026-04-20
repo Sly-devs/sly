@@ -99,9 +99,8 @@ export async function runMerchantBuy(
   let merchants: any[] = [];
   let x402Endpoints: any[] = [];
   if (config.protocol === 'x402') {
+    // Proxy pre-filters to /x402/merchants/* — no client-side filter needed.
     x402Endpoints = await adminClient.listX402Endpoints({ status: 'active', limit: 50 });
-    // Filter down to MERCHANT endpoints (paths starting with /x402/merchants/)
-    x402Endpoints = x402Endpoints.filter((e) => typeof e.path === 'string' && e.path.startsWith('/x402/merchants/'));
   } else {
     merchants = await adminClient.listMerchants({
       type: config.merchantTypeFilter,

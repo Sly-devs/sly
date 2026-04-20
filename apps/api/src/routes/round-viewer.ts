@@ -255,9 +255,10 @@ roundViewerRouter.get('/merchants', async (c) => {
 
 /**
  * GET /admin/round/x402-endpoints
- * Merchant-owned x402 endpoints in the sim tenant. The viewer filters down to
- * the /x402/merchants/* path prefix to avoid sidebar noise from agent-skill
- * endpoints, but we return everything active here and let the client narrow.
+ * Merchant-owned x402 endpoints in the sim tenant. Scopes to paths with the
+ * `/x402/merchants/` prefix (seeded by scripts/seed-sim-commerce.ts) so the
+ * sim + viewer don't get swamped by agent-skill x402 endpoints that share
+ * the same table but are noise for merchant flows.
  */
 roundViewerRouter.get('/x402-endpoints', async (c) => {
   const supabase = createClient();
@@ -265,9 +266,11 @@ roundViewerRouter.get('/x402-endpoints', async (c) => {
 
   const { data: endpoints } = await supabase
     .from('x402_endpoints')
-    .select('id, name, path, method, base_price, currency, status, description')
+    .select('id, name, path, method, base_price, currency, status, description, account_id')
     .eq('tenant_id', tenantId)
     .eq('status', 'active')
+    .like('path', '/x402/merchants/%')
+    .order('created_at', { ascending: true })
     .limit(100);
 
   return c.json({ data: endpoints || [] });

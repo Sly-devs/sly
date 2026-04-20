@@ -107,8 +107,8 @@ export async function runConcierge(
   let merchants: any[] = [];
   let x402Endpoints: any[] = [];
   if (config.protocol === 'x402') {
-    x402Endpoints = (await adminClient.listX402Endpoints({ status: 'active', limit: 50 }))
-      .filter((e) => typeof e.path === 'string' && e.path.startsWith('/x402/merchants/'));
+    // Proxy pre-filters to /x402/merchants/* — no client-side filter needed.
+    x402Endpoints = await adminClient.listX402Endpoints({ status: 'active', limit: 50 });
   } else {
     merchants = await adminClient.listMerchants({ limit: 50 });
   }

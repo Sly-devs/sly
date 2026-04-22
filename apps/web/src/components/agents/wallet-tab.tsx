@@ -74,8 +74,13 @@ export function WalletTab({ agentId }: WalletTabProps) {
     queryKey: ['agent-wallet', agentId],
     queryFn: async () => {
       if (!api) return null;
-      const raw = await api.agents.getWallet(agentId);
-      return raw?.data?.data || raw?.data || raw;
+      const raw: any = await api.agents.getWallet(agentId);
+      // API returns { success, data } — unwrap and treat null as "no wallet
+      // in this environment" rather than passing a null-data envelope down
+      // (which makes WalletOverviewCard render a phantom $0.00 card).
+      const unwrapped = raw?.data?.data ?? raw?.data ?? raw;
+      if (!unwrapped || (typeof unwrapped === 'object' && unwrapped.data === null)) return null;
+      return unwrapped;
     },
     enabled: !!api,
   });
@@ -143,25 +148,35 @@ export function WalletTab({ agentId }: WalletTabProps) {
     );
   }
 
-  if (!walletData) {
-    return (
-      <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 text-center">
-        <p className="text-gray-500 dark:text-gray-400">No wallet found for this agent.</p>
-        <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Create a wallet via the API or SDK to get started.</p>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
-      {/* Top row: 2-col grid on lg */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <WalletOverviewCard wallet={walletData} agentId={agentId} />
-        <ContractPolicyConfig wallet={walletData} agentId={agentId} />
-      </div>
-
-      {/* External x402 signing address — agent's EOA for paying external services */}
+      {/* Primary: external x402 signing address (EOA). This is the wallet an
+          agent actually spends from when paying external x402 services. Shows
+          live on-chain balance — the Sly number IS the chain number. */}
       <X402EoaCard agentId={agentId} />
+
+      {/* Secondary: Circle custodial wallet + policy, only when one exists in
+          the current environment. Different wallet, different address, different
+          balance — so we label clearly and hide when absent instead of showing
+          $0.00 which reads as "agent is broke." */}
+      {walletData ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <WalletOverviewCard wallet={walletData} agentId={agentId} />
+          <ContractPolicyConfig wallet={walletData} agentId={agentId} />
+        </div>
+      ) : (
+        <div className="bg-gray-50 dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
+          <div className="flex items-start gap-2">
+            <Info className="h-4 w-4 text-gray-500 dark:text-gray-400 flex-shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <div className="font-medium text-gray-900 dark:text-gray-200">No Circle custodial wallet in this environment</div>
+              <div className="text-gray-500 dark:text-gray-400 mt-0.5">
+                This agent doesn't have a Circle-managed wallet for the current environment. External x402 spend uses the on-chain EOA above — no Circle wallet required.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Counterparty Exposures */}
       <ExposuresTable exposures={exposuresData || []} isLoading={exposuresLoading} />
@@ -220,12 +235,15 @@ function WalletOverviewCard({ wallet, agentId }: { wallet: any; agentId: string 
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Wallet Overview</h3>
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Circle Custodial Wallet</h3>
         <Badge variant={isFrozen ? 'warning' : 'success'}>
           {wallet.status || 'active'}
         </Badge>
       </div>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+        Circle-managed off-chain balance. Separate from the on-chain x402 EOA above.
+      </p>
 
       {/* Balance */}
       <div className="mb-6">

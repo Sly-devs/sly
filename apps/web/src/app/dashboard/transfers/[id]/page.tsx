@@ -388,8 +388,127 @@ export default function TransferDetailPage() {
             </div>
           </div>
 
-          {/* x402 Metadata Section */}
-          {isX402 && safeTransfer.x402Metadata && (
+          {/* External x402 (agent paid an on-chain address outside Sly) */}
+          {isX402 && safeTransfer.x402Metadata && safeTransfer.x402Metadata.direction === 'external' && (() => {
+            const m: any = safeTransfer.x402Metadata;
+            const chainId = Number(m.chain_id);
+            const network = chainId === 8453 ? 'base' : chainId === 84532 ? 'base-sepolia' : `eip155:${chainId}`;
+            const scanBase =
+              chainId === 8453 ? 'https://basescan.org' :
+              chainId === 84532 ? 'https://sepolia.basescan.org' :
+              null;
+            const addrLink = (addr: string | undefined) => {
+              if (!addr) return <span className="text-purple-400">—</span>;
+              const short = `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+              return scanBase ? (
+                <a href={`${scanBase}/address/${addr}`} target="_blank" rel="noopener noreferrer"
+                   className="font-mono text-sm text-blue-600 dark:text-blue-400 hover:underline" title={addr}>
+                  {short}
+                </a>
+              ) : (
+                <code className="font-mono text-sm text-purple-900 dark:text-white" title={addr}>{short}</code>
+              );
+            };
+            const validBeforeTs = Number(m.valid_before);
+            const validBeforeLabel = Number.isFinite(validBeforeTs) && validBeforeTs > 0
+              ? new Date(validBeforeTs * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
+              : '—';
+            const now = Math.floor(Date.now() / 1000);
+            const expired = Number.isFinite(validBeforeTs) && validBeforeTs < now;
+            return (
+              <div className="bg-purple-50 dark:bg-gray-900 rounded-2xl border border-purple-200 dark:border-purple-500/30 p-6">
+                <h3 className="text-lg font-semibold text-purple-900 dark:text-purple-300 mb-1 flex items-center gap-2">
+                  <Zap className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+                  External x402 Authorization
+                  <span className="ml-2 inline-flex items-center rounded bg-blue-100 dark:bg-blue-950 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-blue-700 dark:text-blue-300">
+                    {network}
+                  </span>
+                </h3>
+                <p className="text-sm text-purple-700 dark:text-gray-400 mb-4">
+                  Signed EIP-3009 <code>transferWithAuthorization</code> for an on-chain address outside the Sly ledger (e.g. an agentic.market service).
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-white/50 dark:bg-gray-800/50 rounded-xl p-4">
+                    <h4 className="text-sm font-medium text-purple-700 dark:text-purple-400 mb-3 flex items-center gap-2">
+                      <Wallet className="h-4 w-4" />
+                      On-chain parties
+                    </h4>
+                    <dl className="space-y-3">
+                      <div className="flex justify-between items-center">
+                        <dt className="text-purple-600 dark:text-gray-400 text-sm">From (agent EOA)</dt>
+                        <dd>{addrLink(m.from_address)}</dd>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <dt className="text-purple-600 dark:text-gray-400 text-sm">To (recipient)</dt>
+                        <dd>{addrLink(m.to_address)}</dd>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <dt className="text-purple-600 dark:text-gray-400 text-sm">Token (USDC)</dt>
+                        <dd>{addrLink(m.token_address)}</dd>
+                      </div>
+                      <div className="flex justify-between">
+                        <dt className="text-purple-600 dark:text-gray-400 text-sm">Chain ID</dt>
+                        <dd className="font-mono text-sm text-purple-900 dark:text-white">{chainId || '—'}</dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  <div className="bg-white/50 dark:bg-gray-800/50 rounded-xl p-4">
+                    <h4 className="text-sm font-medium text-purple-700 dark:text-purple-400 mb-3 flex items-center gap-2">
+                      <FileText className="h-4 w-4" />
+                      Signed payload
+                    </h4>
+                    <dl className="space-y-3">
+                      <div className="flex justify-between">
+                        <dt className="text-purple-600 dark:text-gray-400 text-sm">Value (micro-units)</dt>
+                        <dd className="font-mono text-sm text-purple-900 dark:text-white">{m.token_value_microunits ?? '—'}</dd>
+                      </div>
+                      <div className="flex justify-between">
+                        <dt className="text-purple-600 dark:text-gray-400 text-sm">Valid before</dt>
+                        <dd className="font-mono text-xs text-purple-900 dark:text-white">
+                          {validBeforeLabel}
+                          {expired && <span className="ml-2 text-amber-600 dark:text-amber-400">(expired)</span>}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-purple-600 dark:text-gray-400 text-sm mb-1">Nonce</dt>
+                        <dd className="font-mono text-[11px] break-all text-purple-900 dark:text-white">{m.nonce ?? '—'}</dd>
+                      </div>
+                      <div className="flex justify-between">
+                        <dt className="text-purple-600 dark:text-gray-400 text-sm">Signature</dt>
+                        <dd className="font-mono text-xs text-purple-900 dark:text-white" title="First 16 bytes of the 65-byte EIP-712 signature">
+                          {m.signature_prefix ?? '—'}…
+                        </dd>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <dt className="text-purple-600 dark:text-gray-400 text-sm">Settlement tx</dt>
+                        <dd>
+                          {safeTransfer.txHash || (safeTransfer as any).tx_hash
+                            ? (() => {
+                                const h = safeTransfer.txHash || (safeTransfer as any).tx_hash;
+                                return scanBase ? (
+                                  <a href={`${scanBase}/tx/${h}`} target="_blank" rel="noopener noreferrer"
+                                     className="font-mono text-xs text-blue-600 dark:text-blue-400 hover:underline">
+                                    {h.slice(0, 10)}…{h.slice(-6)}
+                                  </a>
+                                ) : <code className="font-mono text-xs text-purple-900 dark:text-white">{h}</code>;
+                              })()
+                            : <span className="text-xs text-purple-400">not yet submitted on-chain</span>}
+                        </dd>
+                      </div>
+                    </dl>
+                  </div>
+                </div>
+                <div className="mt-4 p-3 bg-white/50 dark:bg-gray-800/50 rounded-lg text-xs text-purple-700 dark:text-gray-400">
+                  Status <strong>pending</strong> means the authorization was signed and recorded — the facilitator has not yet submitted it on-chain, or hasn't reported settlement back.
+                  Once the facilitator calls <code>transferWithAuthorization</code> and the tx is mined, the settlement tx hash populates above and status flips to <strong>completed</strong>.
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Internal x402 Metadata Section (marketplace endpoint payments) */}
+          {isX402 && safeTransfer.x402Metadata && safeTransfer.x402Metadata.direction !== 'external' && (
             <div className="bg-purple-50 dark:bg-gray-900 rounded-2xl border border-purple-200 dark:border-purple-500/30 p-6">
               <h3 className="text-lg font-semibold text-purple-900 dark:text-purple-300 mb-4 flex items-center gap-2">
                 <Zap className="h-5 w-5 text-purple-600 dark:text-purple-400" />

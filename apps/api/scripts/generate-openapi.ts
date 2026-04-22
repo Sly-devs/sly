@@ -101,7 +101,14 @@ async function main(): Promise<void> {
   console.log('Internal paths:', Object.keys(internalFiltered.paths).length);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    // Force exit: imported modules (rate-limit middleware, caches) keep timers
+    // alive in the event loop, which would otherwise hang the process after
+    // main() resolves. The specs are already on disk; we're done.
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });

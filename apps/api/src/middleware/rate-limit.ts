@@ -25,9 +25,14 @@ export interface RateLimitConfig {
   keyGenerator?: (c: Context) => string;
 }
 
+// Tunable via env (RATE_LIMIT_MAX_REQUESTS / RATE_LIMIT_WINDOW_MS) so ops can
+// loosen the ceiling without a redeploy — dashboards with lots of parallel
+// analytics calls routinely need more than 100/min. Defaults stay conservative.
+const envMax = Number(process.env.RATE_LIMIT_MAX_REQUESTS);
+const envWindow = Number(process.env.RATE_LIMIT_WINDOW_MS);
 const defaultConfig: RateLimitConfig = {
-  windowMs: 60000,     // 1 minute
-  maxRequests: 100,    // 100 requests per minute per IP
+  windowMs: Number.isFinite(envWindow) && envWindow > 0 ? envWindow : 60_000,
+  maxRequests: Number.isFinite(envMax) && envMax > 0 ? envMax : 300,
 };
 
 /**

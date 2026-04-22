@@ -2871,12 +2871,14 @@ agents.post('/:id/x402-sign', async (c) => {
 
   // Write a transfers ledger row reflecting the committed external x402 spend.
   // Status 'pending' matches the transfers check constraint; the facilitator's
-  // on-chain settlement is tracked separately (tx_hash + completed_at set by a
-  // reconciler if the signed auth is later submitted).
+  // on-chain settlement is tracked separately — callers POST the settlement
+  // receipt back via /v1/transfers/:id/record-settlement once they see the
+  // X-PAYMENT-RESPONSE header, which flips status → 'completed' + tx_hash.
+  let transferId: string | null = null;
   try {
     // supabase-js resolves with `{ data, error }` on DB rejection instead of
     // throwing — the try/catch alone isn't enough; we must check `.error` too.
-    const { error: ledgerErr } = await (supabase.from('transfers') as any).insert({
+    const { data: insertedRow, error: ledgerErr } = await (supabase.from('transfers') as any).insert({
       tenant_id: ctx.tenantId,
       environment: getEnv(ctx),
       type: 'x402',
@@ -2903,15 +2905,16 @@ agents.post('/:id/x402-sign', async (c) => {
         nonce: signed.params.nonce,
         signature_prefix: String(signed.signature).slice(0, 18),
       },
-    });
-    if (ledgerErr) {
+    }).select('id').single();
+    if (ledgerErr || !insertedRow?.id) {
       console.error('[x402-sign] ledger insert failed', ledgerErr);
       return c.json({
         error: 'Failed to record signed authorization; signature not returned',
         code: 'LEDGER_WRITE_FAILED',
-        details: ledgerErr.message,
+        details: ledgerErr?.message,
       }, 500);
     }
+    transferId = insertedRow.id;
   } catch (ledgerErr: any) {
     // Network-level failures that DO throw (e.g. Supabase unreachable).
     console.error('[x402-sign] ledger insert threw', ledgerErr);
@@ -2930,6 +2933,7 @@ agents.post('/:id/x402-sign', async (c) => {
 
   return c.json({
     success: true,
+    transferId,
     signature: signed.signature,
     v: signed.v,
     r: signed.r,

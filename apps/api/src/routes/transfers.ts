@@ -713,12 +713,127 @@ transfers.post('/:id/cancel', async (c) => {
     actorName: ctx.actorName,
   });
   
-  return c.json({ 
+  return c.json({
     data: mapTransferFromDb(data),
     links: {
       self: `/v1/transfers/${id}`,
       from_account: `/v1/accounts/${data.from_account_id}`,
       to_account: `/v1/accounts/${data.to_account_id}`,
+    },
+  });
+});
+
+// ============================================
+// POST /v1/transfers/:id/record-settlement
+// Called by x402_fetch (or any client holding the X-PAYMENT-RESPONSE receipt)
+// after an external x402 facilitator settles the signed auth on-chain. Flips
+// the row to 'completed' and records the settlement tx hash so the dashboard
+// stops showing it as 'pending' forever.
+// ============================================
+const recordSettlementSchema = z.object({
+  txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/, 'tx_hash must be 0x + 64 hex chars'),
+  network: z.string().optional(),       // echo what the facilitator reported ('base', 'base-sepolia', …)
+  payer: z.string().optional(),         // EOA that actually paid — sanity-checkable against protocol_metadata.from_address
+  settledAt: z.string().datetime().optional(),
+});
+
+transfers.post('/:id/record-settlement', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid transfer ID format');
+
+  let body: any = {};
+  try { body = await c.req.json(); } catch { throw new ValidationError('Invalid JSON body'); }
+  const parsed = recordSettlementSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ValidationError('Invalid body', parsed.error.issues);
+  }
+  const { txHash, network, payer, settledAt } = parsed.data;
+
+  const supabase = createClient();
+
+  const { data: row, error: fetchErr } = await supabase
+    .from('transfers')
+    .select('*')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .single();
+
+  if (fetchErr || !row) throw new NotFoundError('Transfer', id);
+
+  if (row.type !== 'x402' || (row as any).protocol_metadata?.direction !== 'external') {
+    throw new ValidationError('record-settlement only applies to external x402 transfers');
+  }
+
+  // Idempotency: if already recorded with the same tx_hash, return the row
+  // unchanged. If the hashes differ, refuse — two different settlements for
+  // the same signed auth would indicate a facilitator bug or replay.
+  if ((row as any).tx_hash) {
+    if ((row as any).tx_hash.toLowerCase() === txHash.toLowerCase()) {
+      return c.json({ data: mapTransferFromDb(row), already_recorded: true });
+    }
+    const err: any = new ValidationError('Transfer already has a different settlement tx hash recorded');
+    err.details = { existing: (row as any).tx_hash, submitted: txHash };
+    throw err;
+  }
+
+  if (row.status !== 'pending') {
+    throw new ValidationError(`Cannot record settlement for transfer in status '${row.status}'`);
+  }
+
+  // Sanity: if the facilitator says the payer address, it should match our
+  // stored from_address. Soft warn only — don't fail the write.
+  const pm: any = (row as any).protocol_metadata || {};
+  if (payer && pm.from_address && payer.toLowerCase() !== String(pm.from_address).toLowerCase()) {
+    console.warn(`[record-settlement] payer mismatch on ${id}: facilitator=${payer} ledger=${pm.from_address}`);
+  }
+
+  const now = settledAt || new Date().toISOString();
+  const { data: updated, error: updateErr } = await (supabase.from('transfers') as any)
+    .update({
+      status: 'completed',
+      tx_hash: txHash,
+      completed_at: now,
+      settled_at: now,
+      settlement_network: network || (row as any).settlement_network,
+      protocol_metadata: {
+        ...pm,
+        settlement: {
+          facilitator_payer: payer || null,
+          facilitator_network: network || null,
+          recorded_at: new Date().toISOString(),
+          recorded_by_actor_type: ctx.actorType,
+          recorded_by_actor_id: ctx.actorId,
+        },
+      },
+    })
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .select()
+    .single();
+
+  if (updateErr || !updated) {
+    console.error('[record-settlement] update failed', updateErr);
+    throw new Error('Failed to record settlement');
+  }
+
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'transfer',
+    entityId: id,
+    action: 'settlement_recorded',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+    metadata: { tx_hash: txHash, network: network || null },
+  });
+
+  return c.json({
+    data: mapTransferFromDb(updated),
+    already_recorded: false,
+    links: {
+      self: `/v1/transfers/${id}`,
     },
   });
 });

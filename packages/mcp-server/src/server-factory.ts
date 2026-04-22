@@ -1460,19 +1460,47 @@ export function createMcpServer(
         if (body !== undefined) secondInit.body = body;
         const secondRes = await fetch(url, secondInit);
         const secondText = await secondRes.text();
+        const paid = secondRes.status >= 200 && secondRes.status < 300;
+        const paymentResponseHeader = secondRes.headers.get('x-payment-response') || null;
+
+        // If the facilitator settled and returned a tx hash, reconcile the
+        // ledger so the transfer row flips from 'pending' to 'completed'.
+        // Fire-and-forget style — the paid response is still returned to the
+        // caller even if reconciliation fails.
+        let settlementRecorded: any = null;
+        const receipt = decodeX402PaymentResponse(paymentResponseHeader);
+        if (paid && receipt?.transaction && signed.transferId) {
+          try {
+            const recordRes = await ctx.sly.request(`/v1/transfers/${signed.transferId}/record-settlement`, {
+              method: 'POST',
+              body: JSON.stringify({
+                txHash: receipt.transaction,
+                network: receipt.network || undefined,
+                payer: receipt.payer || undefined,
+              }),
+            });
+            settlementRecorded = { ok: true, transferId: signed.transferId, txHash: receipt.transaction, response: recordRes };
+          } catch (e: any) {
+            settlementRecorded = { ok: false, transferId: signed.transferId, error: e?.message || String(e) };
+          }
+        }
+
         return {
           content: [{
             type: 'text',
             text: JSON.stringify({
-              paid: secondRes.status >= 200 && secondRes.status < 300,
+              paid,
               status: secondRes.status,
-              paymentResponseHeader: secondRes.headers.get('x-payment-response') || null,
+              paymentResponseHeader,
+              settlement: receipt,
+              ledgerReconciled: settlementRecorded,
               signedAuthorization: {
                 from: signed.from,
                 to: signed.to,
                 value: signed.value,
                 chainId: signed.chainId,
                 nonce: signed.nonce,
+                transferId: signed.transferId || null,
               },
               body: safeParseJson(secondText),
             }, null, 2),
@@ -1855,6 +1883,28 @@ export function createMcpServer(
 
 function safeParseJson(text: string): any {
   try { return JSON.parse(text); } catch { return text; }
+}
+
+// Decode the base64 X-PAYMENT-RESPONSE receipt that x402 facilitators return
+// after settling an authorization on-chain. Shape:
+// { success, errorReason, payer, transaction, network }
+function decodeX402PaymentResponse(header: string | null): {
+  success?: boolean;
+  errorReason?: string | null;
+  payer?: string;
+  transaction?: string;
+  network?: string;
+} | null {
+  if (!header) return null;
+  try {
+    const json = typeof Buffer !== 'undefined'
+      ? Buffer.from(header, 'base64').toString('utf8')
+      // @ts-ignore — atob for edge runtimes
+      : decodeURIComponent(escape(atob(header)));
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
 }
 
 // Return the first usable `accepts[]` entry. Accepts either the full 402 body

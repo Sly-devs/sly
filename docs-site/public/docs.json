@@ -47,6 +47,16 @@
             ]
           },
           {
+            "group": "Onboarding",
+            "pages": [
+              "onboarding/overview",
+              "onboarding/api-monetization",
+              "onboarding/e-commerce",
+              "onboarding/agent-commerce",
+              "onboarding/recurring-payments"
+            ]
+          },
+          {
             "group": "Authentication",
             "pages": [
               "authentication/overview",

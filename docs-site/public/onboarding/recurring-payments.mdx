@@ -1,0 +1,199 @@
+---
+title: "Onboarding: Recurring Payments"
+description: "Subscription and mandate-based agent payments. ~12 minutes."
+---
+
+This wizard sets up pre-authorized recurring payments using [AP2](/protocols/ap2) mandates. A mandate defines the rules under which an agent can spend on a user's behalf; the agent executes within those rules without per-transaction friction.
+
+**Dashboard path:** [app.getsly.ai/dashboard/onboarding/wizard/recurring-payments](https://app.getsly.ai/dashboard/onboarding/wizard/recurring-payments)
+
+**Estimated time:** ~12 minutes
+
+## Who this is for
+
+- SaaS subscriptions — monthly / annual billing where an agent manages the renewal
+- AI service retainers — "Agent pays OpenAI up to $500/month for API access"
+- Recurring procurement — monthly office supplies, recurring software renewals
+- Usage-based billing — "Pay per API call, reconcile daily, cap at $1,000/month"
+- Any flow where a user pre-authorizes a repeating spend envelope
+
+## What you'll have when done
+
+- A dedicated wallet for mandate-executed payments
+- A registered agent with identity (Ed25519 keypair)
+- An active mandate with defined scope and rules
+- A confirmed test mandate execution
+
+## Steps
+
+### 1. Create subscription wallet (required, ~2 min)
+
+Wallet that funds mandate executions. Keep it separate from your main operating wallet so mandate spending is bounded by its balance.
+
+**Wizard asks you:**
+- Wallet name (e.g. `subscription-mandates`)
+- Currency (USDC default)
+
+**API equivalent:**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/wallets \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{
+    "owner_type": "account",
+    "owner_id": "acc_...",
+    "currency": "USDC",
+    "name": "Subscription Mandates"
+  }'
+```
+
+### 2. Fund your wallet (optional, ~3 min)
+
+Add USDC for mandate executions. In sandbox this is free; in live use on-ramp or transfer from another wallet.
+
+<Warning>
+If the wallet runs out of funds mid-period, mandate executions fail. Monitor `wallet.runway_alert` webhook and top up proactively.
+</Warning>
+
+**If you skip:** mandates remain `active` but executions will fail with `INSUFFICIENT_BALANCE` until you fund.
+
+**API equivalent (sandbox):**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/wallets/wal_.../fund \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{ "amount": "1000.00" }'
+```
+
+### 3. Register your agent (required, ~3 min)
+
+The agent is the entity that executes the mandate. It has identity (an Ed25519 keypair) and a [KYA tier](/agents/kya-tiers) that caps its spending independently of the mandate.
+
+**Wizard asks you:**
+- Agent name (e.g. `subscription-manager`)
+- Description (what the agent does)
+- KYA tier — default **Tier 1 (Declared)**. Higher tiers unlock higher spending limits but require a Declared Spending Declaration or 30-day history.
+
+<Note>
+Agent KYA tier and mandate scope both apply. Effective limit = `min(kya_tier_cap, mandate_scope)`. Set KYA tier based on risk; set mandate scope based on specific business authorization.
+</Note>
+
+**API equivalent:**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/agents \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{
+    "parent_account_id": "acc_...",
+    "name": "Subscription Manager",
+    "description": "Manages monthly SaaS subscriptions",
+    "kya_tier": 1,
+    "generate_keypair": true
+  }'
+```
+
+The response includes the Ed25519 private key — **save it once**; Sly keeps only the public key.
+
+### 4. Create payment mandate (required, ~4 min)
+
+The mandate defines when, where, and how much the agent can spend.
+
+**Wizard asks you:**
+- **Max per transaction** (e.g. $100)
+- **Max per day** (e.g. $500)
+- **Max per month** (e.g. $5,000)
+- **Currency** (USD default)
+- **Allowed merchants** — specific merchant IDs the mandate permits
+- **Allowed categories** — broader categories (`saas`, `compute`, `api`, etc.)
+- **Blocked merchants / categories** — explicit denies
+- **Expires at** — when the mandate automatically revokes
+
+The mandate becomes a signed JWT the agent presents on every execution — merchants and facilitators can verify it offline.
+
+**API equivalent:**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/ap2/mandates \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{
+    "account_id": "acc_...",
+    "agent_id": "agt_...",
+    "scope": {
+      "max_per_tx": "100.00",
+      "max_per_day": "500.00",
+      "max_per_month": "5000.00",
+      "currency": "USD",
+      "allowed_merchant_categories": ["saas", "api"],
+      "allowed_merchants": ["mer_openai", "mer_anthropic"]
+    },
+    "expires_at": "2027-01-01T00:00:00Z"
+  }'
+```
+
+### 5. Test mandate execution (optional, ~3 min)
+
+Sly triggers one mandate payment against a test merchant and verifies:
+- Mandate scope check passes
+- Wallet has funds
+- Agent KYA tier allows the amount
+- Payment settles
+- Webhook fires
+
+**If you skip:** first live execution is the first test. Consider testing before you ship.
+
+## After the wizard
+
+**Hand the mandate JWT to the agent.** The agent presents it on every execution:
+
+```bash
+curl -X POST https://api.getsly.ai/v1/ap2/mandates/ap2_mnd_.../execute \
+  -H "Authorization: Bearer sess_..." \
+  -d '{
+    "merchant_id": "mer_openai",
+    "amount": "49.00",
+    "currency": "USD",
+    "description": "ChatGPT Plus — April"
+  }'
+```
+
+Each execution:
+1. Verifies mandate scope (amount within caps, merchant allowed, not expired)
+2. Sums prior spend in the current day / month window
+3. Runs KYA tier + wallet policy checks
+4. Executes the transfer if all pass
+
+**Monitor mandate health.** Dashboard → Mandates → [mandate] shows:
+- Spend-to-date vs. caps
+- Recent executions + any rejections
+- Remaining runway at current pace
+- Revoke button
+
+**Set up webhook alerts** for:
+- `ap2.mandate_executed` — per-execution confirmation
+- `ap2.mandate_threshold_warning` — approaching a cap
+- `wallet.runway_alert` — wallet running low
+
+See [webhook events](/webhooks/events).
+
+**Revoke when needed:**
+```bash
+curl -X DELETE https://api.getsly.ai/v1/ap2/mandates/ap2_mnd_...
+```
+
+Revocation is instant. Any in-flight executions fail.
+
+## Patterns worth knowing
+
+- **Pause vs. revoke** — `PATCH /mandates/:id { "status": "paused" }` stops executions without losing the record. Resume later.
+- **Scope expansion** — `PATCH /mandates/:id { "scope": {...} }` updates caps in-place. The audit log retains the prior state.
+- **Mandate rotation** — for annual renewals, create a new mandate before the old expires; the agent picks it up automatically if you update the ID in its config.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Mandate executions keep failing with `INSUFFICIENT_BALANCE`">
+    The wallet is underfunded relative to the execution amounts. Fund more, or lower the mandate's per-tx cap so partial months don't exhaust the wallet.
+  </Accordion>
+  <Accordion title="`POLICY_VIOLATION` on execution">
+    Check dashboard → Wallet Policies. The wallet policy layers on top of the mandate — if the wallet policy says "no gambling category" but your mandate says "yes saas", and the merchant is in both, the wallet policy wins (narrower set).
+  </Accordion>
+  <Accordion title="Mandate JWT fails verification at merchant">
+    Merchant is using the wrong public key. Our public keys rotate quarterly; merchants should pull from `https://api.getsly.ai/.well-known/jwks` not hardcode.
+  </Accordion>
+</AccordionGroup>

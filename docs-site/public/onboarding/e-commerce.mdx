@@ -1,0 +1,138 @@
+---
+title: "Onboarding: E-Commerce"
+description: "Accept customer payments via hosted checkout. ~12 minutes."
+---
+
+This wizard sets up a hosted checkout page for your online store using the [UCP](/protocols/ucp) protocol. Customers complete purchases via a Sly-hosted form; you handle orders, Sly handles payment settlement.
+
+**Dashboard path:** [app.getsly.ai/dashboard/onboarding/wizard/e-commerce](https://app.getsly.ai/dashboard/onboarding/wizard/e-commerce)
+
+**Estimated time:** ~12 minutes
+
+## Who this is for
+
+- Online stores — D2C e-commerce, subscription boxes, digital downloads
+- Marketplaces — platforms facilitating transactions between buyers and sellers
+- SaaS sign-up flows — one-time or first-month payment collection
+- Event / ticket sales
+
+## What you'll have when done
+
+- A connected payment processor (Stripe or PayPal via OAuth)
+- A hosted checkout page configured for your store
+- Branded styling matching your site
+- A confirmed test purchase
+
+## Steps
+
+### 1. Connect payment processor (required, ~3 min)
+
+Sly proxies to your existing Stripe or PayPal account — no new merchant account, no duplicate payout destinations. OAuth connection is one click.
+
+**Wizard asks you:**
+- Processor choice: **Stripe** or **PayPal**
+- OAuth approval (redirects to processor, then back)
+
+Once connected, Sly can create Stripe PaymentIntents / PayPal orders on your behalf via the hosted checkout.
+
+**API equivalent** (Stripe Connect link):
+```bash
+curl https://sandbox.getsly.ai/v1/payment-handlers/connect?processor=stripe \
+  -H "Authorization: Bearer $SLY_API_KEY"
+# Returns { url: 'https://connect.stripe.com/...' } — redirect the user there
+```
+
+### 2. Create hosted checkout (required, ~4 min)
+
+Configure the checkout page your customers will see.
+
+**Wizard asks you:**
+- Store name (shown on the checkout header)
+- Default currency (USD, EUR, GBP, etc.)
+- Checkout style:
+  - **Modal** — overlay on your page (least friction)
+  - **Redirect** — full-page redirect to Sly-hosted URL
+  - **Embedded** — iframe inside your own checkout page
+
+**API equivalent:**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/ucp/checkouts \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{
+    "store_name": "Acme Store",
+    "default_currency": "USD",
+    "checkout_style": "modal",
+    "payment_handler_id": "ph_..."
+  }'
+```
+
+### 3. Brand your checkout (optional, ~3 min)
+
+Match your store's look and feel.
+
+**Wizard asks you:**
+- Logo upload (SVG or PNG)
+- Primary color (hex)
+- Support email (shown on receipts)
+- Return URL (where customers land after success)
+
+**If you skip:** default Sly branding applies. You can customize anytime from Settings → Checkout Branding.
+
+### 4. Test purchase (optional, ~2 min)
+
+Complete a test purchase as a customer would.
+
+**Wizard provides:**
+- Test card: `4242 4242 4242 4242`, any future expiry, any CVC, any ZIP
+- Or test stablecoin (testnet USDC funded from Sly faucet)
+
+You'll see the checkout exactly as a customer will — including redirect, success page, webhook delivery, receipt email.
+
+**If you skip:** you can test anytime from the dashboard → Checkouts → Test.
+
+## After the wizard
+
+**Integrate checkout URLs into your store.** When a customer hits "Buy" on your site:
+
+```bash
+curl -X POST https://api.getsly.ai/v1/ucp/checkouts/sessions \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{
+    "checkout_id": "chk_...",
+    "items": [
+      { "sku": "WIDGET-PRO", "quantity": 1, "unit_price": "24.99", "currency": "USD" }
+    ],
+    "success_url": "https://yourstore.com/thanks",
+    "cancel_url": "https://yourstore.com/cart"
+  }'
+```
+
+Returns a `session_url` — redirect the customer there (or open in modal / iframe depending on your style choice).
+
+**Listen for webhooks.** Subscribe to:
+- `ucp.settlement_completed` — payment succeeded
+- `ucp.checkout_fulfilled` — you've fulfilled (shipped, delivered, granted access)
+
+See [webhook events](/webhooks/events).
+
+**Go live.** Flip to `pk_live_*` keys. Your Stripe or PayPal account receives real payouts on their standard schedule.
+
+## What to configure next
+
+- **[Settlement rules](/api-reference/openapi)** — automatic fee splits (e.g. 2.5% platform fee → another account)
+- **[Refunds](/api-reference/openapi)** — full or partial reversal of completed checkouts
+- **[Disputes](/api-reference/openapi)** — chargeback handling
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Test card doesn't work">
+    Only `4242 4242 4242 4242` works in sandbox. Real cards return "declined" because sandbox doesn't hit the card network. Use the provided test card.
+  </Accordion>
+  <Accordion title="Customer completes checkout but payout doesn't appear in Stripe">
+    In sandbox there's no real payout — it's simulated. In live, payouts follow Stripe's standard schedule (typically 2 business days for card, faster for stablecoin).
+  </Accordion>
+  <Accordion title="I get a webhook but my handler doesn't process it">
+    Check [signature verification](/webhooks/signature-verification) — unverified webhooks should be rejected. Your handler may be rejecting the valid webhook due to a secret mismatch or clock skew.
+  </Accordion>
+</AccordionGroup>

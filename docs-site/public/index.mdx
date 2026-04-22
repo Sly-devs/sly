@@ -22,30 +22,33 @@ Sly is the payments platform for AI agents. Agents transact with merchants, each
   </Card>
 </CardGroup>
 
-## Get started in 5 minutes
+## Two paths to your first integration
+
+<CardGroup cols={2}>
+  <Card title="Guided wizard (recommended)" icon="wand-magic-sparkles" href="/onboarding/overview">
+    Pick a use-case template — API monetization, e-commerce, agent commerce, or recurring payments. The wizard walks you through every step and hands you working credentials in 10-15 minutes.
+  </Card>
+  <Card title="5-minute API quickstart" icon="bolt" href="/get-started/quickstart">
+    Raw cURL or Node SDK. Best if you've integrated payments before and want to understand the primitives first.
+  </Card>
+</CardGroup>
+
+## Or start from scratch
 
 <Steps>
-  <Step title="Sign up">
-    Create a Sly account and grab your sandbox API keys at [app.getsly.ai/signup](https://app.getsly.ai/signup).
+  <Step title="Apply for beta access">
+    [app.getsly.ai/auth/signup](https://app.getsly.ai/auth/signup) — Sly is currently invitation-only. Approval in 1-3 business days.
   </Step>
-  <Step title="Make your first call">
-    Hit the sandbox with your API key — no code required.
-    ```bash
-    curl https://sandbox.getsly.ai/v1/accounts \
-      -H "Authorization: Bearer pk_test_..."
-    ```
+  <Step title="Complete signup with your invite code">
+    Choose email + password or Google/GitHub SSO.
   </Step>
-  <Step title="Install the SDK">
-    ```bash
-    npm install @sly_ai/sdk
-    ```
+  <Step title="Pick your onboarding path">
+    Guided wizard or raw API — [see the onboarding overview](/onboarding/overview).
   </Step>
   <Step title="Ship">
     Move to [live](/get-started/environments) when you're ready. Swap `pk_test_` for `pk_live_` — same API, real money.
   </Step>
 </Steps>
-
-[**Jump to the quickstart →**](/get-started/quickstart)
 
 ## Built for agents
 

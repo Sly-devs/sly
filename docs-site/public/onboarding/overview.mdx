@@ -1,0 +1,87 @@
+---
+title: "Onboarding — pick your path"
+description: "Four guided templates that match how you'll use Sly. 10-15 minutes each."
+---
+
+The fastest way to a working integration is one of four onboarding wizards in the dashboard at [app.getsly.ai/dashboard/onboarding](https://app.getsly.ai/dashboard/onboarding). Each is purpose-built around a use case — you pick the closest match, the wizard sets up the right primitives, and you're testing in minutes.
+
+<CardGroup cols={2}>
+  <Card title="API Monetization" icon="bolt" href="/onboarding/api-monetization">
+    **~10 min** · Monetize your APIs with pay-per-call pricing using [x402](/protocols/x402). Perfect for SaaS companies, AI APIs, and data providers who want agents to pay per request.
+  </Card>
+  <Card title="E-Commerce" icon="cart-shopping" href="/onboarding/e-commerce">
+    **~12 min** · Accept customer payments via hosted checkout using [UCP](/protocols/ucp). For online stores, marketplaces, and anywhere human buyers complete purchases.
+  </Card>
+  <Card title="Agent Commerce" icon="robot" href="/onboarding/agent-commerce">
+    **~15 min** · Let AI agents buy things on behalf of users using [ACP](/protocols/acp). For shopping assistants, procurement bots, and autonomous task runners.
+  </Card>
+  <Card title="Recurring Payments" icon="arrows-rotate" href="/onboarding/recurring-payments">
+    **~12 min** · Set up subscription and mandate-based payments using [AP2](/protocols/ap2). For SaaS subscriptions, retainers, and any pre-authorized recurring flow.
+  </Card>
+</CardGroup>
+
+## How the wizards work
+
+Every template is a sequence of steps. Each step:
+- **Explains what it does** in plain language
+- **Saves progress automatically** — close the tab and come back; you'll resume where you left off
+- **Can be skipped** where safe (skippable steps are marked; Sly warns you about the consequences)
+- **Calls the same APIs documented here** — you're not locked into the UI
+
+When a wizard completes, you have working credentials, a funded test wallet, and a verified end-to-end test. You're ready to ship.
+
+## Picking the right template
+
+<AccordionGroup>
+  <Accordion title="I run an API and want agents to pay per call">
+    **→ [API Monetization](/onboarding/api-monetization)**
+    Uses x402 (HTTP 402 Payment Required). Agents call your endpoint, you respond `402` with a price, they pay, retry with proof, get the response. No sign-up flow for consumers — they just start paying.
+  </Accordion>
+
+  <Accordion title="I have a storefront and want customers to buy things">
+    **→ [E-Commerce](/onboarding/e-commerce)**
+    Uses UCP (Unified Commerce Protocol) with hosted checkout. Cart → checkout URL → customer pays → settlement. Works with cards, stablecoin, bank rails.
+  </Accordion>
+
+  <Accordion title="I'm building an AI agent that shops for users">
+    **→ [Agent Commerce](/onboarding/agent-commerce)**
+    Uses ACP (Agentic Commerce Protocol). Your agent discovers merchants, opens checkouts, completes payment — all under spending policies you control. Includes kill-switch + approval workflows.
+  </Accordion>
+
+  <Accordion title="I want subscriptions or recurring pre-authorized payments">
+    **→ [Recurring Payments](/onboarding/recurring-payments)**
+    Uses AP2 mandates. Issue a mandate defining what an agent can spend and when; the agent executes within those bounds. Revocable anytime.
+  </Accordion>
+
+  <Accordion title="My use case spans multiple templates">
+    Pick the closest match and run that wizard first. Then run additional wizards — each adds the primitives it needs without disrupting what's already set up. Many tenants end up with multiple templates enabled.
+  </Accordion>
+
+  <Accordion title="I don't see my use case">
+    All four protocols are exposed via the [API](/api-reference/openapi) and [SDKs](/sdks/overview) directly. See the [quickstart](/get-started/quickstart) for the raw API path, or reach out on [support](/resources/support) — we're probably building for your case.
+  </Accordion>
+</CardGroup>
+
+## What every wizard sets up
+
+Regardless of template, by the end you'll have:
+
+- A **tenant** (your organization) — already done at signup
+- At least one **account** (person or business that holds funds)
+- At least one **wallet** (with test funds in sandbox)
+- Protocol-specific primitives (endpoints, checkouts, agents, mandates — per template)
+- A **test run** confirming the flow works end-to-end
+- API credentials + sample code to carry over to your backend
+
+## Starting over
+
+Mid-wizard you can:
+- **Pause** — your progress is saved, close the tab anytime
+- **Switch templates** — restart from the template picker; progress on the current one is preserved
+- **Reset** — clear progress and start fresh (dashboard → Onboarding → ⋯ menu)
+
+After completion you can run additional templates whenever your use case expands.
+
+## Skip the wizard?
+
+If you'd rather code directly, the [5-minute quickstart](/get-started/quickstart) does the same setup in a handful of cURL commands. The wizards are just an ergonomic wrapper over the same API endpoints.

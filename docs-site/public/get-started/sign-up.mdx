@@ -1,87 +1,150 @@
 ---
-title: "Sign up & get API keys"
-description: "Create your Sly account and provision sandbox credentials."
+title: "Sign up"
+description: "Apply for beta access, claim your invite, and issue your first API key."
 ---
 
-<Steps>
-  <Step title="Create an organization">
-    Head to [app.getsly.ai/signup](https://app.getsly.ai/signup). Sign up with your work email — Google Workspace domains get SSO automatically.
+Sly is currently in **invitation-only beta**. Sign-up is a two-step process:
 
-    After sign-up you'll land on your organization dashboard. Every piece of data in Sly is tenant-scoped to this organization.
-  </Step>
+1. **Apply for access** — submit an email at [app.getsly.ai/auth/signup](https://app.getsly.ai/auth/signup)
+2. **Receive an invite code** via email once approved
+3. **Complete signup** with your code at [app.getsly.ai/auth/signup/code](https://app.getsly.ai/auth/signup/code)
 
-  <Step title="Provision a sandbox API key">
-    From the dashboard, go to **Settings → API Keys → Create key**.
+Approval typically takes 1-3 business days. If you need faster access for an integration pilot, mention it in your application notes.
 
-    Choose environment **Test**. Give the key a name (e.g. `local-dev`, `staging-server`). Optionally scope it to a subset of resources.
+## Step 1 — Apply for beta access
 
-    <Warning>
-    You'll see the full key **once**. Copy it into your password manager or `.env` file immediately. Sly stores only a hash — there's no "show key" button later.
-    </Warning>
+Go to [app.getsly.ai/auth/signup](https://app.getsly.ai/auth/signup).
 
-    The key looks like:
-    ```
-    pk_test_rNq7VwK9PaZ8Jj2mXdQeY1R4hF3tC6sL
-    ```
-  </Step>
+Choose your applicant type:
 
-  <Step title="Verify the key">
-    Confirm your key works against the sandbox:
+- **Human** — you're a developer, founder, or team integrating Sly into a product
+- **Agent** — you're an autonomous AI agent applying for your own direct access
 
-    ```bash
-    curl https://sandbox.getsly.ai/v1/context \
-      -H "Authorization: Bearer pk_test_..."
-    ```
+Submit your email. You'll receive confirmation that your application is in the queue.
 
-    Expected response:
-    ```json
-    {
-      "tenant_id": "ten_...",
-      "environment": "test",
-      "actor_type": "api_key"
-    }
-    ```
+## Step 2 — Receive your invite code
 
-    If you get a 401, double-check the header format — it must be `Authorization: Bearer <key>`, not `Authorization: <key>`.
-  </Step>
+On approval, you get an email with a one-time invite code and a link like:
 
-  <Step title="Install an SDK (optional but recommended)">
-    <CodeGroup>
-      ```bash Node.js
-      npm install @sly_ai/sdk
-      ```
+```
+https://app.getsly.ai/auth/signup/code?code=INV-XXXXXX
+```
 
-      ```bash CLI
-      npm install -g @sly_ai/cli
-      sly auth login
-      ```
+Codes are single-use and expire after 30 days.
 
-      ```bash MCP (Claude Desktop)
-      npx @sly_ai/mcp-server install
-      ```
-    </CodeGroup>
-  </Step>
-</Steps>
+## Step 3 — Complete signup
 
-## Next: make a real call
+Open the invite link (the code auto-fills) and choose how to create your account:
 
-Head to the [quickstart](/get-started/quickstart) to create your first account and send a test transfer.
+<CardGroup cols={2}>
+  <Card title="Email + password" icon="envelope">
+    Pick an organization name, email, and password. Standard Supabase Auth flow.
+  </Card>
+  <Card title="Google / GitHub SSO" icon="key">
+    One-click with your Google Workspace or GitHub account.
+  </Card>
+</CardGroup>
+
+Your organization (tenant) is created with you as the owner. All data going forward is scoped to it.
+
+## Step 4 — Pick your path
+
+Once signed in, the dashboard asks how you want to get started:
+
+<CardGroup cols={2}>
+  <Card title="Guided wizard (recommended)" icon="sparkles" href="/onboarding/overview">
+    Pick one of four use-case templates — API monetization, e-commerce, agent commerce, or recurring payments. Each walks you through wallet setup, funding, registration, and a test run in 10-15 minutes.
+  </Card>
+  <Card title="Jump to API keys" icon="code" href="/get-started/quickstart">
+    Skip the wizard, provision an API key, and wire up directly against the REST API.
+  </Card>
+</CardGroup>
+
+## Step 5 — Provision an API key
+
+From the dashboard: **Settings → API Keys → Create key**.
+
+Choose:
+
+- **Environment** — Test (sandbox) or Live (production). Start with Test.
+- **Name** — `local-dev`, `staging-server`, etc. Keys are audit-logged by name.
+- **Scopes** — grant the narrowest subset that works. `accounts:*`, `transfers:*`, `webhooks:read` is a good default for a payments service.
+
+You can also create keys via the API:
+
+```bash
+curl -X POST https://api.getsly.ai/v1/api-keys \
+  -H "Authorization: Bearer $EXISTING_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "production-payments",
+    "environment": "live",
+    "scopes": ["accounts:*", "transfers:*", "webhooks:read"]
+  }'
+```
+
+The plaintext key is returned **once** — Sly stores only a hash. Save it to your secrets manager immediately.
+
+## Step 6 — Verify
+
+Confirm your key works:
+
+```bash
+curl https://sandbox.getsly.ai/v1/context \
+  -H "Authorization: Bearer pk_test_..."
+```
+
+Expected response:
+
+```json
+{
+  "tenant_id": "ten_...",
+  "environment": "test",
+  "actor_type": "api_key"
+}
+```
+
+If you get a 401, check:
+- Header is `Authorization: Bearer <key>` (not just the key)
+- Test key (`pk_test_*`) against `sandbox.getsly.ai`, live key (`pk_live_*`) against `api.getsly.ai`
+- Key not revoked (dashboard → Settings → API Keys)
+
+## What's next
+
+<CardGroup cols={2}>
+  <Card title="Pick a wizard" icon="wand-magic-sparkles" href="/onboarding/overview">
+    Fastest path to a working integration.
+  </Card>
+  <Card title="5-minute quickstart" icon="bolt" href="/get-started/quickstart">
+    First API call + first transfer end-to-end.
+  </Card>
+  <Card title="Install the SDK" icon="cube" href="/sdks/node-sdk">
+    `@sly_ai/sdk` for Node / TypeScript.
+  </Card>
+  <Card title="Understand environments" icon="flask" href="/get-started/environments">
+    Test vs. live, and what's isolated between them.
+  </Card>
+</CardGroup>
+
+## Not ready to apply yet?
+
+- **Read the docs end-to-end** — everything works without a live account; the sandbox examples use a shared demo key
+- **Browse the [API reference](/api-reference/openapi)** — every endpoint, auto-generated from the live code
+- **Install the [MCP server](/sdks/mcp-server)** into Claude Desktop with a trial key to explore the tool surface
 
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="I get 401 Unauthorized">
-    Three common causes:
-    - Missing `Bearer` prefix in the `Authorization` header
-    - Using a test key against the live URL (or vice versa)
-    - Key was revoked in the dashboard — check Settings → API Keys
+  <Accordion title="I applied but haven't heard back">
+    Check your spam folder for a message from `noreply@getsly.ai`. If it's been more than 5 business days, email `hello@getsly.ai` with the email address you applied with.
   </Accordion>
-
-  <Accordion title="I get 403 Forbidden">
-    Your key is valid but scoped away from the resource you called. Re-check the scopes you selected when creating the key, or create a full-access dev key for local development.
+  <Accordion title="My invite code says it's expired">
+    Codes expire 30 days after issue. Email `hello@getsly.ai` and we'll reissue.
   </Accordion>
-
-  <Accordion title="I lost my key">
-    Keys cannot be recovered — revoke the old one (Settings → API Keys → Revoke) and issue a new one. Rotating keys is a one-click operation and doesn't invalidate webhooks or agent tokens.
+  <Accordion title="My invite code says invalid">
+    Check for leading/trailing whitespace, and make sure you're not using a code that's been claimed already. Codes are single-use.
+  </Accordion>
+  <Accordion title="I signed up but don't see the dashboard onboarding">
+    Refresh the page. The onboarding state is computed server-side and can lag by a few seconds right after signup.
   </Accordion>
 </AccordionGroup>

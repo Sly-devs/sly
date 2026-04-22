@@ -1,16 +1,23 @@
 ---
 title: "Quickstart"
-description: "First account, first agent, first transfer — five minutes end-to-end."
+description: "First transfer in 5 minutes — dashboard wizard or raw API, your choice."
 ---
 
-This quickstart walks through the entire core flow: create a business account, register an AI agent under it, fund the wallet, and run a transfer. You'll do it in the sandbox — no real money moves.
+Two paths to your first transfer. Both land in the same place — one just holds your hand more.
+
+<CardGroup cols={2}>
+  <Card title="Dashboard wizard" icon="wand-magic-sparkles" href="/onboarding/overview">
+    Pick a use-case template (API monetization, e-commerce, agent commerce, recurring payments). Each wizard walks you through wallet, agent, and test in 10-15 minutes with UI checkpoints.
+  </Card>
+  <Card title="Raw API (this page)" icon="code">
+    Direct REST calls. Best if you've done payments integrations before and want to understand the primitives first.
+  </Card>
+</CardGroup>
 
 ## Prerequisites
 
-- A Sly sandbox API key ([get one here](/get-started/sign-up))
+- A Sly sandbox API key — see [sign up](/get-started/sign-up) or grab the shared playground key on any page's "Try it" panel
 - Node.js 18+ *or* `curl`
-
-Set your key as an environment variable:
 
 ```bash
 export SLY_API_KEY=pk_test_...
@@ -116,7 +123,8 @@ curl https://sandbox.getsly.ai/v1/transfers \
     "to_account_id": "acc_peer_...",
     "amount": "42.00",
     "currency": "USDC",
-    "memo": "Quickstart test"
+    "memo": "Quickstart test",
+    "idempotency_key": "quickstart-2026-04-22"
   }'
 ```
 
@@ -127,6 +135,7 @@ const transfer = await sly.transfers.create({
   amount: '42.00',
   currency: 'USDC',
   memo: 'Quickstart test',
+  idempotencyKey: 'quickstart-2026-04-22',
 });
 
 console.log(transfer.status); // 'pending' → 'processing' → 'completed'
@@ -142,30 +151,49 @@ curl https://sandbox.getsly.ai/v1/transfers/$TRANSFER_ID \
   -H "Authorization: Bearer $SLY_API_KEY"
 ```
 
-In sandbox, transfers usually settle in <5 seconds. You'll see the status progress from `pending` → `processing` → `completed`.
+In sandbox, transfers usually settle in <5 seconds. Status progresses `pending` → `processing` → `completed`.
+
+## Shortcut: single-call setup
+
+If you want an even shorter version that creates the account + agent + wallet in one call, use the onboarding helper:
+
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/onboarding/agent \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "account_name": "Acme Robotics",
+    "account_type": "business",
+    "agent_name": "Acme Payables Bot",
+    "kya_tier": 1,
+    "initial_funding": "500.00"
+  }'
+```
+
+Returns `{ account, agent, wallet, credentials }` in one shot. Useful for scripted setups and CI.
 
 ## What just happened
 
 You touched the full core loop:
 
 1. **Tenant → Account → Agent → Wallet** hierarchy
-2. **API key auth** (the simplest of the [five auth methods](/authentication/overview))
+2. **API key auth** (simplest of the [five methods](/authentication/overview))
 3. **Sandbox faucet** for test money
 4. **Transfer lifecycle** with observable state transitions
 
 ## Where to go next
 
 <CardGroup cols={2}>
-  <Card title="Pick an auth method" icon="lock" href="/authentication/overview">
-    API keys work for servers. For agents running autonomously, move to Ed25519 session tokens.
+  <Card title="Pick an onboarding wizard" icon="wand-magic-sparkles" href="/onboarding/overview">
+    If you prefer the UI-driven path going forward, start from a template that matches your use case.
   </Card>
-  <Card title="Learn the protocols" icon="network-wired" href="/protocols/overview">
+  <Card title="Upgrade auth" icon="lock" href="/authentication/ed25519-sessions">
+    Agent tokens are fine to start. Move to Ed25519 sessions before production — same code, better security.
+  </Card>
+  <Card title="Understand the protocols" icon="network-wired" href="/protocols/overview">
     Transfers are the simplest case. UCP, ACP, AP2, x402, A2A, and MCP unlock merchant checkout, mandates, micropayments, and peer-to-peer agent tasks.
   </Card>
   <Card title="Set wallet policies" icon="shield-halved" href="/agents/wallet-policies">
-    Before you ship to production, configure spending limits, allowlists, and kill-switches.
-  </Card>
-  <Card title="Receive webhooks" icon="webhook" href="/webhooks/overview">
-    Don't poll — subscribe to events and let Sly push updates to you.
+    Before shipping to production, configure spending limits, allowlists, and kill-switches.
   </Card>
 </CardGroup>

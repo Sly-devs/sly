@@ -1,0 +1,158 @@
+---
+title: "Onboarding: Agent Commerce"
+description: "Let AI agents buy on behalf of users under spending controls. ~15 minutes."
+---
+
+This wizard sets up autonomous agent purchasing using the [ACP](/protocols/acp) protocol. Your AI agent discovers merchants, opens checkouts, and completes payment — all within spending policies, kill-switches, and approval workflows that you control.
+
+**Dashboard path:** [app.getsly.ai/dashboard/onboarding/wizard/agent-commerce](https://app.getsly.ai/dashboard/onboarding/wizard/agent-commerce)
+
+**Estimated time:** ~15 minutes
+
+## Who this is for
+
+- Shopping assistant agents — "find and buy flights under $500"
+- Procurement bots — automated office supplies, recurring stock reorders
+- AI copilots with purchasing authority — subscription management, vendor renewals
+- Research agents — paying for data / compute / API access autonomously
+
+## What you'll have when done
+
+- A connected payment processor for completing agent purchases
+- A dedicated agent wallet with spending budget
+- Configured spending limits and approval rules
+- A registered agent with Ed25519 credentials
+- A confirmed end-to-end agent purchase test
+
+## Steps
+
+### 1. Connect payment processing (required, ~3 min)
+
+Same as the [e-commerce](/onboarding/e-commerce) wizard — OAuth to your Stripe or PayPal account. Agents don't use a separate processor; they settle through your existing merchant infrastructure.
+
+**API equivalent:**
+```bash
+curl https://sandbox.getsly.ai/v1/payment-handlers/connect?processor=stripe \
+  -H "Authorization: Bearer $SLY_API_KEY"
+```
+
+### 2. Create agent wallet (required, ~3 min)
+
+Dedicated wallet the agent draws from. Kept separate from your main account wallet so agent spending is bounded by wallet balance.
+
+**Wizard asks you:**
+- Wallet name (e.g. `shopping-bot-budget`)
+- Currency (USDC recommended)
+
+**API equivalent:**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/agent-wallets \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{
+    "name": "Shopping Bot Budget",
+    "currency": "USDC",
+    "parent_account_id": "acc_..."
+  }'
+```
+
+### 3. Fund agent wallet (optional, ~3 min)
+
+Load USDC into the agent's wallet. In sandbox this is free (faucet); in live it's funded from your main account wallet or external on-ramp.
+
+**If you skip:** the agent can't make purchases until you fund the wallet. Dashboard → Agent Wallets → [wallet] → Fund.
+
+**API equivalent (sandbox):**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/agent-wallets/awl_.../fund \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{ "amount": "500.00" }'
+```
+
+### 4. Set agent spending controls (optional, ~4 min)
+
+This is the heart of the template — [wallet policies](/agents/wallet-policies) that govern what the agent can and cannot do.
+
+**Wizard asks you:**
+- **Per-transaction limit** (default $100)
+- **Daily spending cap** (default $1,000)
+- **Approval threshold** — amount above which a human must approve (default $500)
+- **Allowed merchant categories** (e.g. `["saas", "electronics"]`)
+- **Blocked categories** (e.g. `["gambling", "crypto_exchanges"]`)
+
+Beyond the wizard defaults, you can also configure velocity rules, time-of-day restrictions, and per-merchant allowlists. See [wallet policies](/agents/wallet-policies).
+
+**If you skip:** defaults of $100/tx, $1,000/day, no approval threshold apply. You can tighten from the dashboard anytime.
+
+**API equivalent:**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/agent-wallets/awl_.../policy \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{
+    "global_limits": {
+      "per_tx": "100.00",
+      "daily": "1000.00",
+      "monthly": "10000.00",
+      "currency": "USDC"
+    },
+    "merchant_rules": [
+      { "merchant_category": "gambling", "action": "block" }
+    ],
+    "approval_threshold": {
+      "amount": "500.00",
+      "approver_role": "admin"
+    }
+  }'
+```
+
+### 5. Test agent purchase (optional, ~3 min)
+
+Sly simulates an agent completing a test checkout — including the approval flow if the amount triggers your threshold.
+
+**Wizard shows you:**
+- Real-time view of the agent's decision-making
+- The spending-policy evaluation (`allow` / `require_approval` / `block`)
+- The full ACP checkout flow
+- Approval notification (if triggered)
+
+**If you skip:** you can test anytime from the dashboard → Agents → [agent] → Test Purchase.
+
+## After the wizard
+
+**Your agent is provisioned with Ed25519 credentials.** The wizard displays the private key once — save it immediately. See [Ed25519 sessions](/authentication/ed25519-sessions) for the challenge-response handshake the agent uses from here on.
+
+**Give your agent a system prompt that references its Sly tools.** If using the [MCP server](/sdks/mcp-server) in Claude Desktop or similar, the agent discovers available actions automatically:
+
+```
+You have access to the Sly MCP tools. You can browse merchants, 
+open ACP checkouts, and complete purchases. Respect the wallet 
+policy — purchases above $500 need human approval.
+```
+
+**Monitor agent activity.** Dashboard → Agents → [agent] shows:
+- Recent transactions
+- Policy evaluations (allowed / rejected / approvals pending)
+- Current wallet balance and projected runway
+- Kill-switch button (freeze spending instantly)
+
+**Go live.** Flip to `pk_live_*` keys. Real money moves; policies still enforce.
+
+## Governance features worth turning on before you ship
+
+- **[Approval workflows](/agents/approval-workflows)** — route large purchases to Slack / email for human confirmation
+- **[Kill-switch](/agents/kill-switch)** — named operators who can freeze the agent instantly
+- **[KYA tier upgrade](/agents/kya-tiers)** — higher spending caps unlock at Tier 2+ after 30-day history
+- **[Persistent SSE](/agents/persistent-sse)** — the agent receives real-time notifications (task assigned, approval pending, wallet alert)
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Agent's purchases keep getting rejected">
+    Policy evaluation is rejecting them. Check dashboard → Agent Wallets → [wallet] → Evaluations for the most recent rejections and their reason codes (`KYA_LIMIT_EXCEEDED`, `POLICY_VIOLATION`, `MERCHANT_BLOCKED`, etc.). Adjust the policy or raise the KYA tier.
+  </Accordion>
+  <Accordion title="Approvals aren't being delivered to Slack">
+    Check Settings → Integrations → Slack; the Sly app must be connected and the destination channel must exist. Also verify the approver has the right role — only `admin` and `owner` see approvals by default.
+  </Accordion>
+  <Accordion title="Wallet keeps hitting 'insufficient balance' before daily cap">
+    The wallet balance is separate from the daily cap. You can have $500 daily cap but only $200 in the wallet — that's the binding constraint. Fund the wallet more generously than the cap.
+  </Accordion>
+</AccordionGroup>

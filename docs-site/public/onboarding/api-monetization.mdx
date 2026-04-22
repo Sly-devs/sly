@@ -1,0 +1,144 @@
+---
+title: "Onboarding: API Monetization"
+description: "Monetize your API with per-call pricing using x402. ~10 minutes."
+---
+
+This wizard sets up pay-per-call monetization on one of your API endpoints using the [x402](/protocols/x402) protocol. When an agent hits a protected endpoint, your API responds `402 Payment Required`; the agent pays, retries with proof, and gets the real response.
+
+**Dashboard path:** [app.getsly.ai/dashboard/onboarding/wizard/api-monetization](https://app.getsly.ai/dashboard/onboarding/wizard/api-monetization)
+
+**Estimated time:** ~10 minutes
+
+## Who this is for
+
+- SaaS APIs — pay-per-query or per-operation billing
+- AI / ML inference — per-prompt, per-image, per-generation
+- Data providers — per-record, per-query
+- Any endpoint where sign-up-free, machine-initiated payment is valuable
+
+## What you'll have when done
+
+- A receiving wallet collecting x402 payments (USDC, on low-fee network by default)
+- A test-funded wallet for sandbox verification
+- Your API endpoint registered with x402 pricing
+- Price-per-request rules applied
+- A confirmed end-to-end test payment
+
+## Steps
+
+### 1. Create your receiving wallet (required, ~2 min)
+
+Sly creates a dedicated wallet that will collect payments from API consumers.
+
+**Wizard asks you:**
+- Wallet name (e.g. `x402-receipts`)
+- Network — **Solana** is recommended for lowest fees; **Base** if you prefer Ethereum L2
+
+**API equivalent:**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/wallets \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{
+    "owner_type": "account",
+    "owner_id": "acc_...",
+    "currency": "USDC",
+    "network": "solana-devnet"
+  }'
+```
+
+### 2. Fund your wallet (optional, ~3 min)
+
+Add initial USDC so you can test flows that reverse (refunds, disputes). In sandbox this is free (faucet); in live it uses card / Apple Pay / Google Pay / bank.
+
+**If you skip:** the wallet starts at zero balance. You can fund anytime from the dashboard.
+
+**API equivalent (sandbox faucet):**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/wallets/wal_.../fund \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{ "amount": "100.00", "currency": "USDC" }'
+```
+
+### 3. Register your API endpoint (required, ~3 min)
+
+Tell Sly which API endpoint accepts x402 payments.
+
+**Wizard asks you:**
+- Your API base URL (e.g. `https://api.yourcompany.com`)
+- The specific path + method you're protecting (`POST /v1/infer`)
+- Name + description (for your dashboard)
+
+Sly generates an x402 gateway URL for this endpoint. Agents call the gateway; Sly handles the 402 dance + proof verification; the real request reaches your origin once payment is confirmed.
+
+**API equivalent:**
+```bash
+curl -X POST https://sandbox.getsly.ai/v1/x402/endpoints \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{
+    "name": "Inference API",
+    "path": "/v1/infer",
+    "method": "POST",
+    "accountId": "acc_...",
+    "basePrice": 0.05,
+    "currency": "USDC",
+    "network": "solana-mainnet"
+  }'
+```
+
+### 4. Configure pricing (optional, ~2 min)
+
+Set price per request. Common ranges:
+- **$0.001** — simple lookups, cheap compute
+- **$0.01-$0.10** — AI / ML inference, heavier operations
+- **$0.10+** — expensive compute, premium data
+
+You can also set **volume discounts** — reduced per-call price after an agent has made N calls. Useful for power-user pricing.
+
+**If you skip:** default pricing of $0.01 per request applies.
+
+**API equivalent** (volume discounts):
+```bash
+curl -X PATCH https://sandbox.getsly.ai/v1/x402/endpoints/epd_... \
+  -H "Authorization: Bearer $SLY_API_KEY" \
+  -d '{
+    "basePrice": 0.05,
+    "volumeDiscounts": [
+      { "threshold": 100,  "priceMultiplier": 0.8 },
+      { "threshold": 1000, "priceMultiplier": 0.5 }
+    ]
+  }'
+```
+
+### 5. Test your integration (optional, ~3 min)
+
+Sly simulates an agent making a paid API call using testnet funds, showing the full 402 → pay → retry → 200 flow.
+
+**If you skip:** you can test anytime from the dashboard → Endpoints → [endpoint] → Test.
+
+## After the wizard
+
+**Share your gateway URL with API consumers.** They call it like any HTTP endpoint — agents using the Sly SDK auto-handle the 402 → pay → retry cycle. See [x402 client usage](/protocols/x402#the-sdk-shortcut).
+
+**Monitor revenue.** Dashboard → Endpoints → [endpoint] shows total calls, unique payers, revenue by window, and top payers.
+
+**Go live.** When ready, flip to a `pk_live_*` key and your gateway serves real x402 traffic on mainnet.
+
+## What to configure next
+
+- **[Webhook events](/webhooks/events)** — subscribe to `x402.payment.completed` to get notified per payment
+- **[Rate limits](/resources/rate-limits)** — in addition to x402 gating, apply call rate limits to prevent abuse
+- **[x402 bridge](/protocols/x402#x402-bridge)** — if you want to accept USDC but settle in fiat via Circle
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Agents get 402 but payment doesn't go through">
+    Check the endpoint `status` is `active` (dashboard → Endpoints). Check the target URL in the x402 registration resolves and returns the real response on direct call — the gateway proxies to your origin, it doesn't replace it.
+  </Accordion>
+  <Accordion title="Payments go through but my API doesn't see the request">
+    The gateway only forwards to your origin after payment verification. Confirm your origin allows Sly's IP range (docs → [IP allowlist](/resources/rate-limits)) and that it's not rejecting requests with the payment proof header.
+  </Accordion>
+  <Accordion title="Some agents hit 402 loops">
+    Usually means the agent's wallet is underfunded. The Sly SDK handles this cleanly; raw-HTTP agents must implement the 402 dance themselves.
+  </Accordion>
+</AccordionGroup>

@@ -1604,11 +1604,28 @@ export function createMcpServer(
           },
         };
 
+        // Classify failures so the ledger + dashboard can show WHY a call
+        // failed (agentkit required / facilitator rejected silently / vendor
+        // backend 5xx / etc) instead of just a raw HTTP code.
+        const failureClassification = !paid
+          ? classifyX402Failure({
+              challenge,
+              responseStatus: secondRes.status,
+              responseBody: parsedBody,
+              responseBodyRaw: secondText,
+              responseHeaders: {
+                'x-payment-response': paymentResponseHeader,
+                'www-authenticate': secondRes.headers.get('www-authenticate'),
+                'x-error': secondRes.headers.get('x-error'),
+              },
+            })
+          : null;
+
         // Always write back to the ledger. Success path gets tx_hash +
         // response_metadata; failure path gets failure_reason +
-        // response_metadata. This keeps the row terminal so the
-        // x402-expired-cleanup worker doesn't later cancel a row we already
-        // have a final answer for.
+        // response_metadata + classification. This keeps the row terminal so
+        // the x402-expired-cleanup worker doesn't later cancel a row we
+        // already have a final answer for.
         let settlementRecorded: any = null;
         const receipt = decodeX402PaymentResponse(paymentResponseHeader);
         if (signed.transferId) {
@@ -1619,13 +1636,23 @@ export function createMcpServer(
               if (receipt.network) recordBody.network = receipt.network;
               if (receipt.payer) recordBody.payer = receipt.payer;
             } else if (!paid) {
-              // Extract the most useful failure signal we can from the body.
-              const reason = (bodyIsJson && (parsedBody as any).error)
-                ? (typeof (parsedBody as any).error === 'string'
-                    ? (parsedBody as any).error
-                    : (parsedBody as any).error?.message || JSON.stringify((parsedBody as any).error).slice(0, 200))
-                : `HTTP ${secondRes.status} ${secondRes.statusText || ''}`.trim();
-              recordBody.failureReason = String(reason).slice(0, 500);
+              // Prefer the classifier's human-readable explanation as the
+              // failure_reason so dashboards and logs are immediately useful.
+              recordBody.failureReason = (failureClassification?.explanation || (() => {
+                const reason = (bodyIsJson && (parsedBody as any).error)
+                  ? (typeof (parsedBody as any).error === 'string'
+                      ? (parsedBody as any).error
+                      : (parsedBody as any).error?.message || JSON.stringify((parsedBody as any).error).slice(0, 200))
+                  : `HTTP ${secondRes.status} ${secondRes.statusText || ''}`.trim();
+                return String(reason);
+              })()).slice(0, 500);
+              if (failureClassification) {
+                recordBody.classification = {
+                  code: failureClassification.code,
+                  explanation: failureClassification.explanation,
+                  recommendation: failureClassification.recommendation || null,
+                };
+              }
             }
             const recordRes = await ctx.sly.request(`/v1/transfers/${signed.transferId}/record-settlement`, {
               method: 'POST',
@@ -1637,6 +1664,7 @@ export function createMcpServer(
               outcome: paid ? 'completed' : 'cancelled',
               txHash: recordBody.txHash || null,
               failureReason: recordBody.failureReason || null,
+              classification: recordBody.classification || null,
               response: recordRes,
             };
           } catch (e: any) {
@@ -1655,6 +1683,7 @@ export function createMcpServer(
               sizeBytes: secondText.length,
               paymentResponseHeader,
               settlement: receipt,
+              failureClassification,
               ledgerReconciled: settlementRecorded,
               signedAuthorization: {
                 from: signed.from,
@@ -2089,6 +2118,135 @@ function decodeX402PaymentResponse(header: string | null): {
   } catch {
     return null;
   }
+}
+
+// Classify why an x402 paid call failed. Gives the dashboard something more
+// actionable than raw HTTP status. Ordered from most-specific to most-general;
+// first match wins.
+//
+// Classification codes are stable contract — see epic-79 for the full taxonomy.
+export type X402FailureCode =
+  | 'AGENTKIT_REQUIRED'             // Exa-style: dual-auth, need human-proof signature
+  | 'NON_STANDARD_AUTH_PREPAY'      // Venice-style: pre-pay balance + custom header
+  | 'FACILITATOR_REJECTED_SILENT'   // PaySponge-style: 402 returned again, no error detail
+  | 'FACILITATOR_REJECTED_INVALID'  // Facilitator explicitly said our sig is invalid
+  | 'VENDOR_BACKEND_ERROR'          // 5xx from upstream service
+  | 'VENDOR_EMPTY_RESPONSE'         // 5xx with zero-length body (runtime crash)
+  | 'AUTH_REQUIRED'                 // 401 — API key gate, not x402
+  | 'FORBIDDEN'                     // 403 — allowlist / scope miss
+  | 'HTTP_CLIENT_ERROR'             // other 4xx
+  | 'HTTP_SERVER_ERROR'             // other 5xx
+  | 'UNKNOWN';
+
+interface FailureClassification {
+  code: X402FailureCode;
+  explanation: string;          // one-line human-readable
+  recommendation?: string;       // next-step hint (e.g. "skip this vendor", "wait and retry")
+}
+
+function classifyX402Failure(args: {
+  challenge: any;
+  responseStatus: number;
+  responseBody: any;             // parsed if JSON, string if not
+  responseBodyRaw: string;
+  responseHeaders: Record<string, string | null>;
+}): FailureClassification {
+  const { challenge, responseStatus, responseBody, responseBodyRaw, responseHeaders } = args;
+  const bodyIsObj = typeof responseBody === 'object' && responseBody !== null;
+  const errorField = bodyIsObj ? (responseBody.error ?? responseBody.message) : null;
+  const errorString = typeof errorField === 'string'
+    ? errorField
+    : errorField?.message || (errorField ? JSON.stringify(errorField) : '');
+  const errorTag = bodyIsObj ? responseBody.tag : null;
+
+  // AgentKit / proof-of-humanity detection — check both the original challenge
+  // AND the error response. Exa's 400 response doesn't echo the agentkit block;
+  // we correlate by tag + challenge extensions.
+  const challengeHasAgentKit =
+    challenge?.extensions?.agentkit ||
+    challenge?.agentkit ||
+    (Array.isArray(challenge?.accepts) &&
+      challenge.accepts.some((a: any) => a?.extra?.agentkit || a?.extensions?.agentkit));
+  if (challengeHasAgentKit || errorTag === 'X402_INVALID_SIGNATURE') {
+    return {
+      code: 'AGENTKIT_REQUIRED',
+      explanation: 'Vendor requires an AgentKit proof-of-humanity signature (e.g. World ID on Worldcoin Chain) in addition to x402 payment. Sly does not provision human-attested keys yet.',
+      recommendation: 'Track as coverage gap (Epic 79). Skip this vendor until we add human-attested custody.',
+    };
+  }
+
+  // Non-standard auth (Venice-style pre-pay)
+  const authOptions = challenge?.authOptions;
+  if (authOptions?.x402Wallet?.topUp || authOptions?.apiKey) {
+    const modes = Object.keys(authOptions).join('/');
+    return {
+      code: 'NON_STANDARD_AUTH_PREPAY',
+      explanation: `Vendor declared non-standard auth options (${modes}) — typically a pre-pay balance or API key rather than per-call X-PAYMENT. Our signature was correct; their facilitator doesn't honor it.`,
+      recommendation: 'Skip this vendor unless we add a pre-pay / keyed-auth adapter.',
+    };
+  }
+
+  // Facilitator rejected our payment explicitly
+  if (responseStatus === 400 && /invalid.*signature|invalid.*payment/i.test(errorString)) {
+    return {
+      code: 'FACILITATOR_REJECTED_INVALID',
+      explanation: `Facilitator rejected our signature as invalid: "${errorString.slice(0, 120)}". Envelope + sig verified compliant with @x402/core reference; most likely facilitator-side bug or undocumented requirement.`,
+      recommendation: 'File a coverage gap; correlate with facilitator if support channel exists.',
+    };
+  }
+
+  // Facilitator silently rejects — 402 returned with the same challenge again
+  if (responseStatus === 402) {
+    return {
+      code: 'FACILITATOR_REJECTED_SILENT',
+      explanation: 'Facilitator returned 402 again after receiving X-PAYMENT, with no error detail. Likely their facilitator is not operational or not on our allowlist.',
+      recommendation: 'Skip this vendor; worth a bug report with their support.',
+    };
+  }
+
+  if (responseStatus === 401) {
+    return {
+      code: 'AUTH_REQUIRED',
+      explanation: 'Vendor returned 401 — they require traditional API-key authentication, not x402 payment.',
+      recommendation: 'Use an API key via the credential vault (Epic 78) when shipped.',
+    };
+  }
+
+  if (responseStatus === 403) {
+    return {
+      code: 'FORBIDDEN',
+      explanation: `Vendor returned 403 — allowlist, scope, or geo restriction: "${errorString.slice(0, 120) || responseBodyRaw.slice(0, 120)}"`,
+      recommendation: 'Check if vendor requires additional setup / whitelist.',
+    };
+  }
+
+  if (responseStatus >= 500) {
+    if (responseBodyRaw.length === 0) {
+      return {
+        code: 'VENDOR_EMPTY_RESPONSE',
+        explanation: `Vendor returned ${responseStatus} with empty body — likely an upstream runtime crash after (or despite) accepting payment.`,
+        recommendation: 'Retry later; monitor vendor reliability.',
+      };
+    }
+    return {
+      code: 'VENDOR_BACKEND_ERROR',
+      explanation: `Vendor returned ${responseStatus} with error: "${errorString.slice(0, 120) || responseBodyRaw.slice(0, 120)}"`,
+      recommendation: 'Retry later; likely transient.',
+    };
+  }
+
+  if (responseStatus >= 400 && responseStatus < 500) {
+    return {
+      code: 'HTTP_CLIENT_ERROR',
+      explanation: `Vendor returned ${responseStatus}: "${errorString.slice(0, 120) || responseBodyRaw.slice(0, 120)}"`,
+      recommendation: 'Check request body against vendor schema.',
+    };
+  }
+
+  return {
+    code: 'UNKNOWN',
+    explanation: `Unexpected status ${responseStatus}. Response preview: ${responseBodyRaw.slice(0, 120)}`,
+  };
 }
 
 // Return the first `accepts[]` entry we can actually sign for. Some

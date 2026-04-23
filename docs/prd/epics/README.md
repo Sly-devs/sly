@@ -128,6 +128,10 @@ Every story must meet these criteria before completion:
 ### Agent Custody & External Services ⭐ NEW
 - [Epic 77: BYO Wallet Custody](./epic-77-byo-wallet-custody.md) 🔑 - Session-key delegation + managed providers (Privy/Turnkey/Fireblocks/CDP) + interactive WalletConnect for agent x402 signing
 - [Epic 78: Agentic Credential Vault](./epic-78-agentic-credential-vault.md) 🔐 - Tenant-stored API keys with per-agent grants for non-x402 services (Anthropic, OpenAI, Deepgram, etc.) + unified call dispatcher
+- [Epic 79: AgentKit Proof-of-Humanity for x402](./epic-79-agentkit-proof-of-humanity.md) 🧑‍🔬 - World ID / Worldcoin-anchored human-proof signatures for services that require dual auth (Exa + future); extends Epic 78 with `human_attested` custody mode
+
+### API Monetization ⭐ NEW
+- [Epic 79: API Monetization Gateway](./epic-79-api-monetization-gateway.md) 🚪 - Thin proxy that wraps any REST API in x402 (MPP later) + OpenAPI ingest CLI + dashboard. Closes Sponge Gateway parity gap.
 
 ### Future Considerations (P2/P3)
 - [Epic 37: Facilitator-as-a-Service](./epic-37-facilitator-as-a-service.md) - x402 facilitator for LATAM ecosystem
@@ -242,6 +246,18 @@ Strategic explorations before committing to implementation:
 ---
 
 ## Recent Changes
+
+### April 22, 2026
+- **Epic 79: API Monetization Gateway** — NEW (~35 points, P1)
+  - Triggered by competitive research on Sponge Gateway (YC W26) launch, April 22, 2026
+  - Thin proxy at `ALL /v1/gateway/:gatewayId/*` that wraps any upstream REST API in x402 payments
+  - `sly x402 import --spec openapi.yaml` CLI + dashboard drop-zone for bulk endpoint creation
+  - 3 new MCP tools: `x402_gateway_create`, `x402_gateway_import_openapi`, `x402_gateway_list_routes`
+  - Surfaces the `"upto"` variable-price pattern already shipped in commit `b55ad8c`
+  - MPP protocol dispatch deferred to Phase 5, blocked on Epic 71 Phase 3
+  - 12 stories across 5 phases: Gateway Core (16pt), OpenAPI Ingest (5pt), Dashboard (8pt), MCP + "upto" docs (3pt), MPP extension (3pt)
+  - MVP = Phase 1 + 79.6 = 19pt
+  - Competitive matrix: of Sponge's ~11 features, Sly already fully matches 5, partially covers 4, and closes the remaining 2 via this epic
 
 ### March 16, 2026
 - **Epic 70: Universal Agent Discovery — Tri-Ecosystem Access** — UPDATED (42 → 47 points, 12 → 13 stories, P0)
@@ -520,4 +536,4 @@ Sly supports **FIVE** agentic payment and communication protocols:
 
 ---
 
-*Last updated: March 16, 2026*
+*Last updated: April 22, 2026*

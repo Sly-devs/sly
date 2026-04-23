@@ -746,6 +746,12 @@ const responseMetadataSchema = z.object({
   headers: z.record(z.string()).optional(),   // only a curated subset (facilitator-relevant)
 }).optional();
 
+const classificationSchema = z.object({
+  code: z.string().max(64),
+  explanation: z.string().max(500),
+  recommendation: z.string().max(500).nullable().optional(),
+}).optional();
+
 const recordSettlementSchema = z.object({
   // Success path: on-chain tx hash from the facilitator receipt.
   txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/, 'tx_hash must be 0x + 64 hex chars').optional(),
@@ -756,6 +762,9 @@ const recordSettlementSchema = z.object({
   failureReason: z.string().max(500).optional(),
   // Always captured when the client has it — doesn't require either path.
   responseMetadata: responseMetadataSchema,
+  // Failure classification — tells the dashboard WHY the call failed
+  // (agentkit required / facilitator rejected / vendor backend / etc).
+  classification: classificationSchema,
 }).refine(
   (d) => !!(d.txHash || d.failureReason || d.responseMetadata),
   { message: 'Provide at least one of txHash, failureReason, or responseMetadata' },
@@ -772,7 +781,7 @@ transfers.post('/:id/record-settlement', async (c) => {
   if (!parsed.success) {
     throw new ValidationError('Invalid body', parsed.error.issues);
   }
-  const { txHash, network, payer, settledAt, failureReason, responseMetadata } = parsed.data;
+  const { txHash, network, payer, settledAt, failureReason, responseMetadata, classification } = parsed.data;
 
   const supabase = createClient();
 
@@ -819,6 +828,7 @@ transfers.post('/:id/record-settlement', async (c) => {
   const nowIso = new Date().toISOString();
   const nextProtocolMetadata: any = { ...pm };
   if (responseMetadata) nextProtocolMetadata.response = responseMetadata;
+  if (classification) nextProtocolMetadata.classification = classification;
 
   let updatePayload: any = { protocol_metadata: nextProtocolMetadata };
   let auditAction = 'response_recorded';
@@ -879,6 +889,7 @@ transfers.post('/:id/record-settlement', async (c) => {
       network: network || null,
       failure_reason: failureReason || null,
       response_status: responseMetadata?.status ?? null,
+      classification_code: classification?.code ?? null,
     },
   });
 

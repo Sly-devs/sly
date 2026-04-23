@@ -555,6 +555,41 @@ export default function TransferDetailPage() {
                   Once the facilitator calls <code>transferWithAuthorization</code> and the tx is mined, the settlement tx hash populates above and status flips to <strong>completed</strong>.
                 </div>
 
+                {/* Failure classification — tells the owner WHY a call failed
+                    (agentkit required / facilitator rejected / vendor backend
+                    broken / etc) instead of just showing a raw HTTP status. */}
+                {m.classification && (() => {
+                  const c = m.classification;
+                  const codeStyles: Record<string, string> = {
+                    AGENTKIT_REQUIRED: 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-800',
+                    NON_STANDARD_AUTH_PREPAY: 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-800',
+                    FACILITATOR_REJECTED_SILENT: 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800',
+                    FACILITATOR_REJECTED_INVALID: 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800',
+                    VENDOR_BACKEND_ERROR: 'bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300 border-orange-300 dark:border-orange-800',
+                    VENDOR_EMPTY_RESPONSE: 'bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300 border-orange-300 dark:border-orange-800',
+                    AUTH_REQUIRED: 'bg-sky-100 dark:bg-sky-950 text-sky-700 dark:text-sky-300 border-sky-300 dark:border-sky-800',
+                    FORBIDDEN: 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 border-red-300 dark:border-red-800',
+                    HTTP_CLIENT_ERROR: 'bg-yellow-100 dark:bg-yellow-950 text-yellow-700 dark:text-yellow-300 border-yellow-300 dark:border-yellow-800',
+                    HTTP_SERVER_ERROR: 'bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300 border-orange-300 dark:border-orange-800',
+                    UNKNOWN: 'bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-700',
+                  };
+                  const style = codeStyles[c.code] || codeStyles.UNKNOWN;
+                  return (
+                    <div className={`mt-6 p-4 rounded-xl border ${style}`}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                        <span className="text-xs font-mono font-semibold uppercase tracking-wide">{c.code}</span>
+                      </div>
+                      <p className="text-sm mb-2">{c.explanation}</p>
+                      {c.recommendation && (
+                        <p className="text-xs opacity-80">
+                          <strong>Next step:</strong> {c.recommendation}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Response capture — lets the owner distinguish "paid and got real data"
                     from "paid but the upstream returned garbage / 500 / error envelope." */}
                 {m.response && (() => {

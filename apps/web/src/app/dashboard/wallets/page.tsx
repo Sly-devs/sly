@@ -869,7 +869,7 @@ export default function WalletsPage() {
     queryKey: ['agent-evm-keys', apiEnvironment],
     queryFn: async () => {
       if (!authToken) return { data: [] as AgentEoaKey[] };
-      const res = await fetch(`${apiUrl || ''}/v1/agents/evm-keys/list`, {
+      const res = await fetch(`${apiUrl || ''}/v1/agents/evm-keys`, {
         headers: { Authorization: `Bearer ${authToken}`, 'X-Environment': apiEnvironment },
       });
       if (!res.ok) return { data: [] as AgentEoaKey[] };

@@ -95,6 +95,16 @@
             ]
           },
           {
+            "group": "Recipes",
+            "pages": [
+              "recipes/overview",
+              "recipes/transfers-and-refunds",
+              "recipes/agents-and-auth",
+              "recipes/protocols",
+              "recipes/webhooks"
+            ]
+          },
+          {
             "group": "Settlement & Treasury",
             "pages": [
               "settlement/overview",

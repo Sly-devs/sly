@@ -1792,47 +1792,96 @@ export function createMcpServer(
           body: JSON.stringify({ to: payTo, value: amount, chainId, validBefore, resource: resourcePayload }),
         }) as any;
 
-        const headerValue = buildX402PaymentHeader(challenge, signed);
+        // Defensive fallback: once sign succeeds a ledger row exists. If
+        // ANYTHING after this throws (network error, timeout, parser blowup,
+        // unexpected vendor response shape), we MUST still terminate the row
+        // so it doesn't sit pending until the expired-cleanup worker reaps it
+        // with a generic "signature_expired" reason.
+        const safeRecord = async (failureReason: string, extra: any = {}) => {
+          if (!signed?.transferId) return null;
+          try {
+            return await ctx.sly.request(`/v1/transfers/${signed.transferId}/record-settlement`, {
+              method: 'POST',
+              body: JSON.stringify({ failureReason: failureReason.slice(0, 500), ...extra }),
+            });
+          } catch (e: any) {
+            console.error('[x402_fetch] safeRecord failed:', e?.message || e);
+            return null;
+          }
+        };
+
+        let headerValue: string;
+        try {
+          headerValue = buildX402PaymentHeader(challenge, signed);
+        } catch (e: any) {
+          await safeRecord(`Failed to build X-PAYMENT envelope: ${e?.message || String(e)}`);
+          throw e;
+        }
 
         const secondInit: RequestInit = {
           method,
           headers: { ...baseHeaders, 'X-PAYMENT': headerValue },
         };
         if (body !== undefined) secondInit.body = body;
+
+        let secondRes: Response;
+        let secondText: string;
+        let durationMs: number;
         const tStart = Date.now();
-        const secondRes = await fetch(url, secondInit);
-        const secondText = await secondRes.text();
-        const durationMs = Date.now() - tStart;
+        try {
+          secondRes = await fetch(url, secondInit);
+          secondText = await secondRes.text();
+          durationMs = Date.now() - tStart;
+        } catch (e: any) {
+          // Network-level failure between us and the vendor. Sign happened,
+          // but we never got a response to classify — record as such.
+          durationMs = Date.now() - tStart;
+          const reason = `Network error calling vendor: ${e?.message || String(e)}`;
+          await safeRecord(reason, {
+            responseMetadata: { durationMs, bodyIsJson: false, sizeBytes: 0 },
+            classification: {
+              code: 'UNKNOWN',
+              explanation: reason,
+              recommendation: 'Retry; possible transient network issue or vendor unreachable.',
+            },
+          });
+          return {
+            content: [{ type: 'text', text: JSON.stringify({
+              paid: false,
+              status: null,
+              error: reason,
+              signedAuthorization: { transferId: signed.transferId || null, nonce: signed.nonce, from: signed.from, to: signed.to, value: signed.value, chainId: signed.chainId },
+              ledgerReconciled: { ok: true, transferId: signed.transferId, outcome: 'cancelled', failureReason: reason },
+            }, null, 2) }],
+          };
+        }
         const paid = secondRes.status >= 200 && secondRes.status < 300;
         const paymentResponseHeader = secondRes.headers.get('x-payment-response') || null;
         const contentType = secondRes.headers.get('content-type') || null;
         const parsedBody = safeParseJson(secondText);
         const bodyIsJson = typeof parsedBody === 'object' && parsedBody !== null;
 
-        // Capture response metadata so the ledger + dashboard can tell
-        // "paid and got real data" from "paid but the upstream returned an
-        // empty 500 / error envelope / garbage." Body is capped at 2KB; a
-        // known subset of headers captured for debugging (never auth).
-        const responseMetadata = {
-          status: secondRes.status,
-          statusText: secondRes.statusText,
-          contentType,
-          sizeBytes: secondText.length,
-          durationMs,
-          bodyPreview: secondText.slice(0, 2048),
-          bodyIsJson,
-          headers: {
-            ...(paymentResponseHeader ? { 'x-payment-response': paymentResponseHeader } : {}),
-            ...(secondRes.headers.get('www-authenticate') ? { 'www-authenticate': secondRes.headers.get('www-authenticate') as string } : {}),
-            ...(secondRes.headers.get('x-error') ? { 'x-error': secondRes.headers.get('x-error') as string } : {}),
-          },
-        };
-
-        // Classify failures so the ledger + dashboard can show WHY a call
-        // failed (agentkit required / facilitator rejected silently / vendor
-        // backend 5xx / etc) instead of just a raw HTTP code.
-        const failureClassification = !paid
-          ? classifyX402Failure({
+        // Build response metadata + run classifier. Wrapped defensively so a
+        // bug in either step can't leave the ledger row pending.
+        let responseMetadata: any;
+        let failureClassification: FailureClassification | null = null;
+        try {
+          responseMetadata = {
+            status: secondRes.status,
+            statusText: secondRes.statusText,
+            contentType,
+            sizeBytes: secondText.length,
+            durationMs,
+            bodyPreview: secondText.slice(0, 2048),
+            bodyIsJson,
+            headers: {
+              ...(paymentResponseHeader ? { 'x-payment-response': paymentResponseHeader } : {}),
+              ...(secondRes.headers.get('www-authenticate') ? { 'www-authenticate': secondRes.headers.get('www-authenticate') as string } : {}),
+              ...(secondRes.headers.get('x-error') ? { 'x-error': secondRes.headers.get('x-error') as string } : {}),
+            },
+          };
+          if (!paid) {
+            failureClassification = classifyX402Failure({
               challenge,
               responseStatus: secondRes.status,
               responseBody: parsedBody,
@@ -1842,8 +1891,19 @@ export function createMcpServer(
                 'www-authenticate': secondRes.headers.get('www-authenticate'),
                 'x-error': secondRes.headers.get('x-error'),
               },
-            })
-          : null;
+            });
+          }
+        } catch (e: any) {
+          // Metadata/classifier threw. Still try to terminate the row with
+          // minimal info so we don't leak a pending orphan.
+          console.error('[x402_fetch] metadata/classify error:', e?.message || e);
+          responseMetadata = responseMetadata || {
+            status: secondRes.status,
+            sizeBytes: (secondText || '').length,
+            durationMs,
+            bodyIsJson: false,
+          };
+        }
 
         // Always write back to the ledger. Success path gets tx_hash +
         // response_metadata; failure path gets failure_reason +

@@ -1,0 +1,204 @@
+---
+title: "Migrating from direct card-network integrations"
+description: "Abstracting Visa VIC / Mastercard Agent Pay under one API."
+---
+
+If you integrated directly with **Visa Intelligent Commerce (VIC)** or **Mastercard Agent Pay** — or both — Sly collapses the two interfaces into one. You keep your merchant-side processor (Stripe, Adyen), add Sly's [Cards surface](/protocols/cards), and stop maintaining two divergent Web Bot Auth implementations.
+
+## The pain you're trying to solve
+
+Direct card-network integration means:
+
+- Separate VIC and Agent Pay SDKs / protocols
+- Separate Web Bot Auth signing logic per network
+- Separate network-registry registration and credential rotation
+- Separate dispute flows (each network has its own evidence rules)
+- Ongoing network-program participation requirements
+
+For most partners building agent-driven commerce, this is more than their team should maintain.
+
+## What Sly does for you
+
+| Direct integration | Sly |
+|---|---|
+| Two SDKs (VIC + Agent Pay) | One API surface (`/v1/cards`) |
+| Two Web Bot Auth flows | One `POST /v1/cards/verify` endpoint |
+| Manual card vaulting | Integrated vault via your existing processor |
+| Two dispute flows | Unified [dispute workflow](/guides/handle-dispute) |
+| DIY spending limits | Per-card limits + [wallet policies](/agents/wallet-policies) |
+| DIY network status checks | `GET /v1/cards/networks` |
+| Per-network program enrollment | Sly handles program-level relationships |
+
+Underneath, Sly still interacts with each network's primitives — you just don't see the differences.
+
+## Concept mapping
+
+| Direct VIC / Agent Pay | Sly |
+|---|---|
+| Network identity token | [Web Bot Auth verification](/protocols/cards#web-bot-auth-verification) |
+| Card tokenization via issuer | [Vaulted card](/protocols/cards#vault-a-card) via processor |
+| Per-network spending policy | [Agent wallet policy](/agents/wallet-policies) + per-card limits |
+| Network dispute reason code | Sly dispute `reason` enum with network mapping |
+| Network transaction ID | `network_ref` from `/v1/cards/verify` response |
+| Card Present / Not Present | Checkout context passed on verify |
+
+## Compose: Sly on top of your existing processor
+
+Your existing card processor (Stripe, Adyen) handles:
+- PAN tokenization
+- Fraud signals
+- Settlement to your merchant account
+- Card-network fees
+
+Sly adds:
+- Agent identity verification via Web Bot Auth
+- Unified interface across VIC and Agent Pay
+- Per-agent spending policies on top of card-level controls
+- Dispute workflow unification
+
+## Step-by-step: wrapping your current integration
+
+### 1. Connect your processor to Sly
+
+Same OAuth flow used for e-commerce:
+
+```bash
+curl https://sandbox.getsly.ai/v1/payment-handlers/connect?processor=stripe \
+  -H "Authorization: Bearer $SLY_API_KEY"
+```
+
+Your existing Stripe or Adyen processing becomes the funding rail for card transactions routed through Sly.
+
+### 2. Migrate your card vault
+
+If you already tokenized cards at your processor, vault them into Sly by referencing the processor tokens:
+
+```ts
+await sly.cards.vault({
+  accountId: account.id,
+  processor: 'stripe',
+  processorToken: stripePM.id,           // your existing PaymentMethod ID
+  cardLastFour: stripePM.card.last4,
+  cardBrand: stripePM.card.brand,
+  expiryMonth: stripePM.card.exp_month,
+  expiryYear: stripePM.card.exp_year,
+  label: 'Travel Ops',
+  billingAddress: stripePM.billing_details.address,
+});
+```
+
+No new PAN collection needed — processor tokens transfer over.
+
+### 3. Replace direct Web Bot Auth with Sly
+
+**Before** (example pseudocode for VIC direct):
+
+```ts
+const visaToken = await visaVIC.createIdentityToken({
+  agent_id, merchant_id, amount, ...
+});
+await visaVIC.authorize(cardToken, visaToken);
+```
+
+**After**:
+
+```ts
+const verification = await sly.cards.verify({
+  network: 'visa',        // or 'mastercard' — same call shape
+  agent_id: 'agt_...',
+  transaction_intent: {
+    merchant_id: 'mer_...',
+    amount: '49.99',
+    currency: 'USD',
+  },
+  signed_bot_identity: agentJWS,
+});
+// verification.network_ref — used as auth token for the card transaction
+```
+
+One call per authorization, regardless of which network you're speaking to.
+
+### 4. Migrate dispute handling
+
+Your two dispute flows → one. Existing open disputes at the networks keep flowing through their original channels until resolution; new disputes register with Sly:
+
+```ts
+await sly.disputes.create({
+  transferId: 'tx_...',
+  reason: 'unauthorized',      // Sly enum — maps to network reason code
+  description: '...',
+  evidence: [ ... ],
+});
+```
+
+Sly presents evidence to the network through the same compelling-evidence rules you were already satisfying.
+
+### 5. Layer on agent-specific controls
+
+Once cards are vaulted and verification goes through Sly, you unlock agent-level controls networks don't provide:
+
+```ts
+await sly.cards.setLimits(cardVaultId, {
+  per_tx_cap: '200.00',
+  daily_cap: '500.00',
+  monthly_cap: '3000.00',
+  currency: 'USD',
+  allowed_merchant_categories: ['travel', 'lodging'],
+});
+```
+
+And wallet-level policies apply per-agent regardless of which card is used:
+
+```ts
+await sly.agentWallets.setPolicy(agent.walletId, {
+  approval_threshold: { amount: '500.00', approver_role: 'admin' },
+  kill_switch: { operators: ['ops@acme.example'] },
+});
+```
+
+## What stays direct
+
+- **PCI compliance** — your processor holds PAN; Sly never sees it
+- **Card issuance** (if you issue virtual cards) — keep using Stripe Issuing or equivalent
+- **Network program enrollment** — you're still a VIC / Agent Pay enrolled merchant; Sly doesn't replace that enrollment
+
+## What moves to Sly
+
+- **All runtime interactions with VIC / Agent Pay** — you call Sly; Sly handles network-level API
+- **Dispute flow** — one queue, one UI, one response pipeline
+- **Agent-level spending controls** — per-agent, not just per-card
+- **Analytics across networks** — unified view of VIC + Agent Pay + other rails
+
+## Network program requirements
+
+You still need to be enrolled in VIC and/or Agent Pay. Check status:
+
+```bash
+curl https://sandbox.getsly.ai/v1/cards/networks \
+  -H "Authorization: Bearer pk_live_..."
+```
+
+Returns each network's enrollment status for your tenant. Sly assists with enrollment but doesn't bypass it.
+
+## Migration timeline
+
+| Phase | Duration | Work |
+|---|---|---|
+| 1 | Week 1 | Connect processor, confirm network enrollment mapping |
+| 2 | Week 2-3 | Vault existing cards, migrate one agent's authorizations to Sly |
+| 3 | Week 3-4 | Migrate dispute handler, confirm round-trip for at least one |
+| 4 | Month 2+ | Retire direct VIC / Agent Pay SDK usage |
+
+Partners typically run both in parallel for a week while confirming parity, then cut over fully.
+
+## Gotchas
+
+- **Network reason codes** — Sly maps network-specific reason codes to a common enum. The underlying network evidence is preserved, but your analytics keys off Sly's enum. If you had dashboards keyed off network-specific codes, re-key them.
+- **Settlement file formats** — your processor's payout files are unchanged; Sly reconciles them for you. If you had custom parsing, you can retire it or keep it as a double-check.
+- **Direct network outages** — Sly doesn't route around them, but the `/v1/cards/networks` endpoint shows you live status so you fail fast.
+
+## See also
+
+- [Cards protocol reference](/protocols/cards)
+- [Disputes guide](/guides/handle-dispute)
+- [Agent wallet policies](/agents/wallet-policies)

@@ -1,0 +1,69 @@
+---
+title: "Migration guides"
+description: "Moving to Sly from other payment platforms — Stripe, Circle, direct card networks."
+---
+
+If you're already using another payment platform, you rarely rip-and-replace. Sly is additive for most of the common paths — you keep what works on the old stack and add Sly primitives where they fill real gaps (agent-native auth, multi-protocol routing, KYA verification, mandate flows).
+
+## Start here based on your current stack
+
+<CardGroup cols={2}>
+  <Card title="From Stripe" icon="stripe-s" href="/migration/from-stripe">
+    You use Stripe Connect / Payments / Issuing. Sly adds agent-scoped wallets, KYA tiers, and multi-protocol agentic commerce (ACP, UCP, AP2, x402).
+  </Card>
+  <Card title="From Circle" icon="circle" href="/migration/from-circle">
+    You use Circle for USDC accounts + payouts. Sly adds the agent layer (Ed25519 auth, wallet policies, kill-switch) while you can keep Circle as an underlying rail.
+  </Card>
+  <Card title="From direct card networks" icon="credit-card" href="/migration/from-card-networks">
+    You integrated directly with Visa VIC or Mastercard Agent Pay. Sly abstracts both under one API + adds non-card rails (stablecoin, ACH, Pix).
+  </Card>
+  <Card title="Greenfield" icon="seedling" href="/get-started/quickstart">
+    No prior platform. Skip these guides — start with the [quickstart](/get-started/quickstart).
+  </Card>
+</CardGroup>
+
+## What Sly adds that most platforms don't
+
+| Capability | Typical payment platform | Sly |
+|---|---|---|
+| Agent identity | Shared API key | Per-agent Ed25519 + KYA tier |
+| Spending controls | Fraud rules | Programmable wallet policies |
+| Multi-protocol | One protocol (usually cards) | UCP, ACP, AP2, x402, A2A, MCP, MPP, Cards |
+| Agent-to-agent transactions | Not a thing | A2A native |
+| Mandate-based pre-authorization | OAuth-scoped API keys | AP2 signed mandates |
+| Kill-switch | Rotate API key | Per-wallet freeze + Ed25519 revoke |
+| Approval workflows | DIY | Native routing + Slack/email |
+
+## What Sly doesn't try to replace
+
+- **Card issuing / processing** — partner with Stripe, Adyen, or Issuing providers; Sly sits in front
+- **Merchant onboarding for cards** — Stripe Connect is a better onboarding surface; Sly uses your Stripe Connect account via OAuth
+- **Full-stack KYC providers** — Persona handles KYC; Sly orchestrates but doesn't replace them
+
+## Migration paths are usually additive
+
+The fastest path for most partners:
+
+1. **Keep your existing card processing** (Stripe, Adyen) as-is
+2. **Connect it to Sly** via OAuth in your e-commerce or agent-commerce onboarding wizard
+3. **Add Sly agent primitives** (KYA tiers, wallet policies, Ed25519 auth) for your AI features
+4. **Gradually migrate non-card rails** (stablecoin, ACH, international) where Sly is cheaper or faster
+
+You rarely rebuild your whole stack — you compose.
+
+## Two-way compatibility
+
+Going forward: add Sly without removing your existing integration.
+Going back: Sly transfers are logged in your existing processor's dashboard when using Stripe/Adyen/Circle as the underlying rail — audit trails stay in one place.
+
+## Common migration timeline
+
+| Week | Milestone |
+|---|---|
+| 1 | Sign up, connect existing processor, run a [sandbox wizard](/onboarding/overview) |
+| 2-3 | Migrate one flow (pick something low-risk) end-to-end to Sly |
+| 4 | Go live on that flow; monitor in parallel with old system |
+| 5-8 | Expand to other flows incrementally |
+| 2-3 months | Agents on-boarded with Ed25519 + policies; old system for edge cases only |
+
+Full cutover is rarely the right move — some flows (card-only merchants, existing subscriptions) are better left alone until natural renewal.

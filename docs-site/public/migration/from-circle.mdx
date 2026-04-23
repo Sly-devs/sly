@@ -1,0 +1,176 @@
+---
+title: "Migrating from Circle"
+description: "Keep Circle as your USDC settlement rail; move the agent layer to Sly."
+---
+
+Circle gives you USDC accounts, on-ramp, off-ramp, and payouts. Sly gives you the agent layer — identity, policies, kill-switch, multi-protocol routing. They compose cleanly. You keep your Circle account as the USDC custody + rail; Sly sits on top.
+
+## What Sly adds that Circle doesn't
+
+| Circle gives you | Sly adds |
+|---|---|
+| USDC accounts and wallets | Agent-scoped wallets with per-agent policies |
+| Payouts (ACH, wire) | Same, plus Pix, SPEI, card rails |
+| On-ramp via card/bank | Same, plus Coinbase, Stripe, Crossmint on-ramps |
+| API for transfers | Multi-protocol commerce: UCP, ACP, AP2, x402, A2A, MCP, MPP, Cards |
+| Basic webhooks | Agent-native events (mandates, approvals, KYA tier changes) |
+| — | Ed25519 agent authentication |
+| — | KYA verification tiers |
+| — | AP2 pre-authorized mandate executions |
+| — | A2A peer-to-peer agent marketplace |
+
+## Concept mapping
+
+| Circle | Sly |
+|---|---|
+| `Wallet` (end-user account) | [Account](/core-concepts/accounts) |
+| `Payout` | [Transfer](/core-concepts/transfers) of type `cross_border` or `internal` |
+| `Transfer` (Circle's term for moves) | Depends — internal ledger move vs external rail payout |
+| `Business Account` balance | Parent [Account](/core-concepts/accounts) of type `business` |
+| `Addresses` (deposit) | [Wallet](/core-concepts/wallets) with on-chain `address` field |
+| `Webhook` | [Webhook event](/webhooks/events) — largely same event shapes |
+| `Fraud signals` | [Wallet policies](/agents/wallet-policies) + KYA tier |
+
+## Compose: Circle as Sly's USDC rail
+
+When you configure your Sly tenant, Circle becomes one of the settlement rails. Transfer requests routed through Sly that settle in USDC use your Circle account for the actual custody and rail move.
+
+This means:
+- **Your Circle account remains the source of truth for USDC custody**
+- **Circle still handles on-chain settlement**
+- **Sly adds the agent / policy / protocol layer on top**
+- **Your Circle payout history is still in Circle's dashboard**
+
+The relationship is similar to how partners running Stripe keep Stripe for card processing while adding Sly for the agent layer.
+
+## Step-by-step: add Sly to an existing Circle integration
+
+### 1. Link your Circle account
+
+During setup, connect Circle via OAuth. This is handled by Sly support today (not self-serve yet) — contact [support](/resources/support) to wire it up.
+
+Once linked, USDC-settled transfers through Sly use your Circle balance and addresses.
+
+### 2. Mirror end-user Circle wallets as Sly accounts
+
+For each end-user Circle wallet you manage:
+
+```ts
+const account = await sly.accounts.create({
+  type: 'business',
+  name: circleWallet.description,
+  metadata: { circle_wallet_id: circleWallet.walletId },
+});
+
+const slyWallet = await sly.wallets.create({
+  owner_type: 'account',
+  owner_id: account.id,
+  currency: 'USDC',
+  metadata: { circle_wallet_id: circleWallet.walletId },
+});
+```
+
+Sly tracks its own ledger entries — reconciliation matches them against Circle's settlement data nightly.
+
+### 3. Register agents under those accounts
+
+Now you can layer agents on top:
+
+```ts
+const { data: agent, authKey } = await sly.agents.create({
+  parentAccountId: account.id,
+  name: 'Payables Bot',
+  kyaTier: 1,
+  generateKeypair: true,
+});
+
+// Set a wallet policy — agents enforce at execution
+await sly.agentWallets.setPolicy(agent.walletId, {
+  global_limits: { per_tx: '100.00', daily: '500.00', monthly: '5000.00', currency: 'USDC' },
+  merchant_rules: [{ merchant_category: 'gambling', action: 'block' }],
+});
+```
+
+Circle has no notion of "agent" distinct from "wallet" — Sly fills this gap.
+
+### 4. Route transfers through Sly
+
+Instead of Circle's direct transfer API:
+
+```ts
+// Old: direct Circle call
+await circle.createTransfer({ source, destination, amount });
+
+// New: Sly — same underlying rail, more control
+await sly.transfers.create({
+  from_wallet_id: slyWallet.id,
+  to_account_id: recipientAccount.id,
+  amount: '100.00',
+  currency: 'USDC',
+  idempotencyKey: `payroll-${id}`,
+});
+```
+
+The Sly transfer:
+- Runs wallet-policy checks (KYA tier, limits, merchant allowlist)
+- Routes to Circle as the USDC rail
+- Records a Sly ledger entry
+- Fires Sly webhooks
+- Settles via Circle
+- Reconciles against Circle's settlement file nightly
+
+### 5. Add protocol layers you couldn't do in Circle
+
+- **Agent-driven subscriptions** → [AP2 mandates](/protocols/ap2)
+- **Pay-per-API-call** → [x402](/protocols/x402)
+- **Agent-to-agent commerce** → [A2A](/protocols/a2a)
+- **Hosted checkout** → [UCP](/protocols/ucp) (Circle has nothing here)
+
+These all eventually settle in USDC through your existing Circle account — but expose dramatically different user-facing primitives.
+
+## What stays in Circle
+
+- **USDC custody** — Circle remains the on-chain custody provider
+- **On-ramp via Circle Payments** — keep the Circle-hosted funding flow if it's working
+- **Compliance holds** — Circle's compliance layer continues
+- **Direct blockchain observability** — Circle's dashboard has block-level detail
+
+## What moves to Sly
+
+- **Agent identity + auth** — Ed25519, sessions, per-agent tokens
+- **Per-agent policies** — granular spending controls
+- **Multi-protocol commerce** — UCP, ACP, AP2, x402, A2A, MCP, MPP
+- **Cross-rail routing** — some transfers route off-Circle (to Pix, SPEI, cards) when appropriate
+- **Reconciliation** — matches Sly ledger vs. Circle + other rails
+
+## Non-USDC flows
+
+If you're 100% USDC today via Circle and considering Sly: the big unlock is non-USDC rails. You can:
+
+- **Offer card payments** through Sly's Stripe/Adyen integration without abandoning your Circle-primary flow
+- **Offer LATAM rails** (Pix, SPEI) with minute-level settlement
+- **Offer ACH** for US customers who want familiar bank transfers
+- All while still keeping USDC as the internal denomination
+
+## Migration timeline (typical)
+
+| Phase | Duration | Work |
+|---|---|---|
+| 1 | Week 1 | Sly account setup, Circle account linked (via support) |
+| 2 | Week 2 | Mirror wallets, provision agents, shift one flow |
+| 3 | Week 3-4 | Add new protocols (x402, AP2) that Circle doesn't support |
+| 4 | Month 2+ | Gradually route more flows through Sly as team gets comfortable |
+
+Circle stays underneath the whole time — this is composition, not replacement.
+
+## Gotchas
+
+- **Webhook ordering** — Circle's wallet-level webhooks and Sly's transfer-level webhooks can both fire for the same underlying move. Dedupe by transaction fingerprint (amount + timestamp + counterparty).
+- **Balance reconciliation lag** — Sly's view of Circle balance lags by a few seconds. If you query balance in Sly right after a large Circle-side deposit, you may see stale data briefly. Reconciliation catches this.
+- **Address assignment** — Circle issues wallet addresses; Sly tracks them. Don't create orphan addresses in Circle that Sly doesn't know about.
+
+## See also
+
+- [Core concepts: Wallets](/core-concepts/wallets) — Sly's wallet model
+- [Reconciliation](/settlement/reconciliation) — matching Sly ledger against Circle
+- [Quickstart](/get-started/quickstart) — the base flow to grok before layering over Circle

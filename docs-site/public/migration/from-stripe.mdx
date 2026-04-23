@@ -1,0 +1,143 @@
+---
+title: "Migrating from Stripe"
+description: "What maps, what doesn't, and the recommended incremental path."
+---
+
+You're already on Stripe. You use some mix of Payments, Connect, Issuing, Terminal, Billing. Sly doesn't replace Stripe — it sits in front as an agent-layer abstraction and adds protocols Stripe doesn't cover.
+
+The fastest path is **additive, not migratory**: connect your Stripe account via OAuth, keep the payment flow, add Sly primitives where they give you leverage.
+
+## What Sly adds on top of Stripe
+
+| You already have (Stripe) | Sly adds |
+|---|---|
+| PaymentIntents, Charges, Checkout | Agent-scoped wallets, KYA tiers, wallet policies, kill-switch |
+| Stripe Connect (marketplaces) | Per-agent spending controls + approval workflows |
+| Stripe Issuing (virtual cards) | Card vault with Visa VIC / Mastercard Agent Pay identity verification |
+| Stripe Billing (subscriptions) | AP2 mandates (agent-driven pre-auth) |
+| Stripe Webhooks | Multi-protocol webhook bus (same events + x402, AP2, A2A, MCP events) |
+| — | x402 per-request monetization |
+| — | A2A agent-to-agent commerce |
+| — | MCP tool surface for Claude Desktop |
+| — | Native stablecoin + non-card rails (Pix, SPEI, ACH) |
+
+## Concept mapping
+
+| Stripe | Sly |
+|---|---|
+| `Customer` | [Account](/core-concepts/accounts) (`person` or `business`) |
+| `PaymentMethod` | [Cards vault](/protocols/cards) entry (processor_token references Stripe) |
+| `PaymentIntent` | [ACP checkout](/protocols/acp) (for agent-driven) or direct transfer |
+| `Subscription` | [AP2 mandate](/protocols/ap2) + [scheduled transfer](/settlement/scheduled-transfers) |
+| `Connect Account` | Your merchant connected via OAuth — see [e-commerce onboarding](/onboarding/e-commerce) |
+| `Issuing Card` | [Vaulted card](/protocols/cards) with agent-level spending limits |
+| `Event` / `Webhook` | [Webhook event](/webhooks/events) — similar shape, different event names |
+| `ApplicationFee` | [Settlement rule](/settlement/rules) with fee split action |
+| `Radar` (fraud) | [Wallet policy](/agents/wallet-policies) + KYA tier + sanctions screening |
+
+## Step-by-step: add Sly to an existing Stripe integration
+
+### 1. Connect your Stripe account
+
+Via the [e-commerce onboarding wizard](/onboarding/e-commerce) or direct API:
+
+```bash
+curl https://sandbox.getsly.ai/v1/payment-handlers/connect?processor=stripe \
+  -H "Authorization: Bearer $SLY_API_KEY"
+# Returns { url: 'https://connect.stripe.com/...' } — redirect the user
+```
+
+On return, your Sly tenant has a `payment_handler_id` linked to your Stripe account. All card transactions initiated through Sly route to this Stripe account for settlement; payouts land in your existing Stripe balance.
+
+### 2. Mirror existing customers as Sly accounts
+
+For each Stripe `Customer` you want to transact agentically:
+
+```ts
+const account = await sly.accounts.create({
+  type: stripeCustomer.type === 'business' ? 'business' : 'person',
+  name: stripeCustomer.name,
+  email: stripeCustomer.email,
+  metadata: { stripe_customer_id: stripeCustomer.id },
+});
+```
+
+Use `metadata` to preserve the link — both sides now reference each other.
+
+### 3. Register your first agent under a customer account
+
+```ts
+const { data: agent, credentials, authKey } = await sly.agents.create({
+  parentAccountId: account.id,
+  name: 'Subscription Manager',
+  kyaTier: 1,
+  generateKeypair: true,
+});
+// Save credentials.token and authKey.privateKey
+```
+
+Now you have an agent — distinct from anything Stripe models — with identity and spending controls.
+
+### 4. Replace manual subscription logic with AP2 mandates
+
+Stripe `Subscription` + metered billing ≈ Sly [AP2 mandate](/protocols/ap2) + agent execution.
+
+The key difference: with AP2, the agent decides when to execute within scope. This is right for agent-led buying (copilots, procurement bots, automated vendor renewals). It's wrong for fixed-date customer billing (traditional SaaS subscriptions) — keep those in Stripe.
+
+Rule of thumb: **human-originated recurring → Stripe; agent-originated recurring → AP2.**
+
+### 5. Unified webhook handling
+
+If you're already processing Stripe webhooks, add a second endpoint (or event-type router) for Sly:
+
+```ts
+app.post('/webhooks/stripe', express.raw(), handleStripeWebhook);
+app.post('/webhooks/sly',    express.raw(), handleSlyWebhook);
+```
+
+Sly events cover the Sly-layer primitives (agent actions, mandate executions, protocol flows). Stripe events still cover card-layer primitives (PaymentIntent succeeded, Invoice paid).
+
+### 6. Reconciliation
+
+Sly's [reconciliation](/settlement/reconciliation) matches Sly ledger entries against rail settlement files — including Stripe's payout files. Discrepancies surface as actionable reports.
+
+## What stays in Stripe
+
+- **Card payment capture UI** — Stripe Elements / Stripe.js is better than anything we'd build
+- **Tax calculation** — Stripe Tax handles VAT/sales tax / GST far more completely than we do
+- **Merchant onboarding** — Stripe Connect's KYB flow is best-in-class; we use your Connect account
+- **Consumer-facing invoices / receipts** — keep Stripe's rendered UI if you use Stripe Billing
+- **PCI compliance surface** — Stripe holds the PAN; Sly never sees card numbers
+
+## What moves to Sly
+
+- **Agent identity** — agents are first-class in Sly; they're just API keys in Stripe
+- **Agent spending controls** — per-agent wallet policies, kill-switch, approval flows
+- **Stablecoin rails** — Stripe doesn't settle USDC natively; Sly does
+- **Non-card rails** — Pix, SPEI, ACH with built-in reconciliation
+- **x402 micropayments** — pure Sly primitive; no Stripe analog
+- **A2A transactions** — agent-to-agent commerce; no Stripe analog
+- **Mandate-based pre-auth** — AP2; Stripe's setup_intent is card-network-scoped
+
+## Migration timeline (typical)
+
+| Phase | Duration | Work |
+|---|---|---|
+| 1 | Week 1 | OAuth Stripe connection, sandbox wizard, first test flow |
+| 2 | Week 2-3 | Mirror customers as Sly accounts, provision first agent |
+| 3 | Week 3-4 | Migrate one new feature (agent-driven buying, AP2 subscription, x402 API) |
+| 4 | Month 2+ | Expand coverage; Stripe remains for card-only paths |
+
+Most integrations never fully migrate — they compose permanently. That's the point.
+
+## Gotchas
+
+- **Don't double-charge** — a UCP checkout that's backed by a Stripe PaymentIntent fires Stripe events AND Sly events. Dedupe in your handler.
+- **Don't fork customer identity** — keep the Stripe customer ID in Sly metadata; don't create parallel customer records divorced from Stripe.
+- **Webhook ordering matters** — if Stripe fires `payment_intent.succeeded` at the same moment Sly fires `ucp.settlement_completed`, don't assume either arrives first. Idempotency protects you.
+
+## See also
+
+- [E-commerce onboarding wizard](/onboarding/e-commerce) — the UI path for Stripe connection
+- [ACP protocol](/protocols/acp) — the protocol Stripe co-authored with OpenAI; best-fit for existing Stripe partners
+- [Cards](/protocols/cards) — Visa VIC / Mastercard Agent Pay on top of your Stripe processing

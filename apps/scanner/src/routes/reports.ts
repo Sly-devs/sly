@@ -1,9 +1,6 @@
 /**
- * Stories 56.8, 56.12, 56.16, 56.17:
- * - Snapshot Generator & Trend Tracking
- * - Report Generator
- * - Scheduled Re-scans
- * - Export API
+ * Reports: snapshots, readiness, baseline, rescans, exports.
+ * All reads span the shared corpus; writes (rescans) tag the caller's tenant.
  */
 import { Hono } from 'hono';
 import { generateSnapshot, getSnapshots, formatSnapshotMarkdown, formatTrendMarkdown } from '../demand/snapshots.js';
@@ -14,13 +11,10 @@ import pLimit from 'p-limit';
 
 export const reportsRouter = new Hono();
 
-const DEFAULT_TENANT_ID = process.env.SCANNER_TENANT_ID || 'dad4308f-f9b6-4529-a406-7c2bdf3c6071';
-
 // ============================================
 // SNAPSHOTS (Story 56.8)
 // ============================================
 
-// POST /v1/scanner/snapshots — generate a new snapshot
 reportsRouter.post('/snapshots', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const period = body.period || 'weekly';
@@ -29,7 +23,6 @@ reportsRouter.post('/snapshots', async (c) => {
   return c.json(snapshot, 201);
 });
 
-// GET /v1/scanner/snapshots — list snapshots
 reportsRouter.get('/snapshots', async (c) => {
   const period = c.req.query('period');
   const since = c.req.query('since');
@@ -44,7 +37,6 @@ reportsRouter.get('/snapshots', async (c) => {
   return c.json({ data: snapshots });
 });
 
-// GET /v1/scanner/snapshots/latest — latest snapshot
 reportsRouter.get('/snapshots/latest', async (c) => {
   const snapshots = await getSnapshots({ limit: 1 });
   if (snapshots.length === 0) {
@@ -53,7 +45,6 @@ reportsRouter.get('/snapshots/latest', async (c) => {
   return c.json(snapshots[0]);
 });
 
-// GET /v1/scanner/snapshots/trend — trend comparison
 reportsRouter.get('/snapshots/trend', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') || '12'), 52);
   const snapshots = await getSnapshots({ limit });
@@ -64,12 +55,10 @@ reportsRouter.get('/snapshots/trend', async (c) => {
 // REPORTS (Story 56.12)
 // ============================================
 
-// GET /v1/scanner/reports/readiness — generate readiness report
 reportsRouter.get('/reports/readiness', async (c) => {
   const format = c.req.query('format') || 'json';
-  const tenantId = c.req.header('x-tenant-id') || DEFAULT_TENANT_ID;
-  const stats = await queries.getScanStats(tenantId);
-  const adoption = await queries.getProtocolAdoption(tenantId);
+  const stats = await queries.getScanStats();
+  const adoption = await queries.getProtocolAdoption();
 
   const report = {
     title: 'Agentic Commerce Readiness Report',
@@ -106,13 +95,10 @@ reportsRouter.get('/reports/readiness', async (c) => {
   return c.json(report);
 });
 
-// GET /v1/scanner/reports/baseline — generate baseline summary
 reportsRouter.get('/reports/baseline', async (c) => {
-  const tenantId = c.req.header('x-tenant-id') || DEFAULT_TENANT_ID;
-
-  const { data: scans } = await queries.listMerchantScans(tenantId, { limit: 100, page: 1 });
-  const stats = await queries.getScanStats(tenantId);
-  const adoption = await queries.getProtocolAdoption(tenantId);
+  const { data: scans } = await queries.listMerchantScans({ limit: 100, page: 1 });
+  const stats = await queries.getScanStats();
+  const adoption = await queries.getProtocolAdoption();
 
   return c.json({
     title: 'State of Agentic Commerce — Baseline Report',
@@ -133,8 +119,8 @@ reportsRouter.get('/reports/baseline', async (c) => {
 // RE-SCANS (Story 56.16)
 // ============================================
 
-// POST /v1/scanner/rescan — re-scan stale merchants
 reportsRouter.post('/rescan', async (c) => {
+  const { tenantId } = c.get('ctx');
   const body = await c.req.json().catch(() => ({}));
   const maxAge = body.max_age_days || 7;
   const concurrency = Math.min(body.concurrency || 10, 20);
@@ -144,14 +130,14 @@ reportsRouter.post('/rescan', async (c) => {
   const staleDate = new Date();
   staleDate.setDate(staleDate.getDate() - maxAge);
 
-  const { data: staleScans, error } = await db
-    .from('merchant_scans')
+  // Stale-scan selection is shared-corpus: find globally stale domains.
+  const { data: staleScans, error } = await (db
+    .from('merchant_scans') as any)
     .select('domain, merchant_name, merchant_category, country_code, region')
-    .eq('tenant_id', DEFAULT_TENANT_ID)
     .eq('scan_status', 'completed')
     .lt('last_scanned_at', staleDate.toISOString())
     .order('last_scanned_at', { ascending: true })
-    .limit(limitCount);
+    .limit(limitCount) as { data: Array<{ domain: string; merchant_name: string | null; merchant_category: string | null; country_code: string | null; region: string | null }> | null; error: { message: string } | null };
 
   if (error) {
     return c.json({ error: `Failed to find stale scans: ${error.message}` }, 500);
@@ -161,7 +147,6 @@ reportsRouter.post('/rescan', async (c) => {
     return c.json({ message: 'No stale scans found', rescanned: 0 });
   }
 
-  // Run in background
   const limit = pLimit(concurrency);
   let completed = 0;
   let failed = 0;
@@ -170,7 +155,7 @@ reportsRouter.post('/rescan', async (c) => {
     limit(async () => {
       try {
         await scanDomain({
-          tenantId: DEFAULT_TENANT_ID,
+          tenantId,
           domain: scan.domain,
           merchant_name: scan.merchant_name || undefined,
           merchant_category: scan.merchant_category || undefined,
@@ -184,7 +169,6 @@ reportsRouter.post('/rescan', async (c) => {
     })
   );
 
-  // Don't await — fire and forget
   Promise.allSettled(tasks).then(() => {
     console.log(`[Rescan] Complete: ${completed} ok, ${failed} failed out of ${staleScans.length}`);
   });
@@ -197,7 +181,6 @@ reportsRouter.post('/rescan', async (c) => {
   }, 202);
 });
 
-// GET /v1/scanner/rescan/status — check how many merchants are stale
 reportsRouter.get('/rescan/status', async (c) => {
   const maxAge = parseInt(c.req.query('max_age_days') || '7');
   const db = getClient();
@@ -208,26 +191,22 @@ reportsRouter.get('/rescan/status', async (c) => {
   const { count: staleCount } = await db
     .from('merchant_scans')
     .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', DEFAULT_TENANT_ID)
     .eq('scan_status', 'completed')
     .lt('last_scanned_at', staleDate.toISOString());
 
   const { count: totalCount } = await db
     .from('merchant_scans')
     .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', DEFAULT_TENANT_ID)
     .eq('scan_status', 'completed');
 
   const { count: pendingCount } = await db
     .from('merchant_scans')
     .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', DEFAULT_TENANT_ID)
     .eq('scan_status', 'pending');
 
   const { count: failedCount } = await db
     .from('merchant_scans')
     .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', DEFAULT_TENANT_ID)
     .eq('scan_status', 'failed');
 
   return c.json({
@@ -244,17 +223,15 @@ reportsRouter.get('/rescan/status', async (c) => {
 // EXPORTS (Story 56.17)
 // ============================================
 
-// GET /v1/scanner/export — export scan data as CSV or JSON
 reportsRouter.get('/export', async (c) => {
   const format = c.req.query('format') || 'csv';
-  const tenantId = c.req.header('x-tenant-id') || DEFAULT_TENANT_ID;
   const category = c.req.query('category');
   const region = c.req.query('region');
   const minScore = c.req.query('min_score');
   const maxScore = c.req.query('max_score');
   const limitCount = Math.min(parseInt(c.req.query('limit') || '1000'), 5000);
 
-  const result = await queries.listMerchantScans(tenantId, {
+  const result = await queries.listMerchantScans({
     category: category || undefined,
     region: region || undefined,
     min_score: minScore ? parseInt(minScore) : undefined,
@@ -291,7 +268,6 @@ reportsRouter.get('/export', async (c) => {
     return c.body(md);
   }
 
-  // Default: JSON
   return c.json({
     data: result.data,
     total: result.total,

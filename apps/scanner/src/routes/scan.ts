@@ -5,8 +5,6 @@ import * as queries from '../db/queries.js';
 
 export const scanRouter = new Hono();
 
-const DEFAULT_TENANT_ID = process.env.SCANNER_TENANT_ID || 'dad4308f-f9b6-4529-a406-7c2bdf3c6071';
-
 // Validation schemas
 const scanRequestSchema = z.object({
   domain: z.string().min(1).max(253),
@@ -29,7 +27,7 @@ scanRouter.post('/scan', async (c) => {
     return c.json({ error: 'Validation error', details: parsed.error.flatten() }, 400);
   }
 
-  const tenantId = c.req.header('x-tenant-id') || DEFAULT_TENANT_ID;
+  const { tenantId } = c.get('ctx');
 
   const result = await scanDomain({
     tenantId,
@@ -56,9 +54,8 @@ scanRouter.get('/scan/:id', async (c) => {
   return c.json(scan);
 });
 
-// GET /v1/scanner/scans — list scans with filters
+// GET /v1/scanner/scans — list scans with filters (reads shared corpus)
 scanRouter.get('/scans', async (c) => {
-  const tenantId = c.req.header('x-tenant-id') || DEFAULT_TENANT_ID;
   const category = c.req.query('category');
   const region = c.req.query('region');
   const status = c.req.query('status');
@@ -67,7 +64,7 @@ scanRouter.get('/scans', async (c) => {
   const page = parseInt(c.req.query('page') || '1');
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 100);
 
-  const result = await queries.listMerchantScans(tenantId, {
+  const result = await queries.listMerchantScans({
     category: category || undefined,
     region: region || undefined,
     status: status || undefined,
@@ -88,31 +85,27 @@ scanRouter.get('/scans', async (c) => {
   });
 });
 
-// GET /v1/scanner/scans/stats — aggregate statistics
+// GET /v1/scanner/scans/stats — aggregate statistics (shared corpus)
 scanRouter.get('/scans/stats', async (c) => {
-  const tenantId = c.req.header('x-tenant-id') || DEFAULT_TENANT_ID;
-  const stats = await queries.getScanStats(tenantId);
+  const stats = await queries.getScanStats();
   return c.json(stats);
 });
 
-// GET /v1/scanner/scans/by-domain/:domain — lookup by domain
+// GET /v1/scanner/scans/by-domain/:domain — lookup by domain (shared corpus)
 scanRouter.get('/scans/by-domain/:domain', async (c) => {
-  const tenantId = c.req.header('x-tenant-id') || DEFAULT_TENANT_ID;
   const domain = normalizeDomain(c.req.param('domain'));
-  const scan = await queries.getMerchantScanByDomain(tenantId, domain);
+  const scan = await queries.getMerchantScanByDomain(domain);
 
   if (!scan) {
     return c.json({ error: 'No scan found for this domain' }, 404);
   }
 
-  // Load details
   const full = await queries.getMerchantScanWithDetails(scan.id);
   return c.json(full);
 });
 
-// GET /v1/scanner/scans/protocol-adoption — protocol adoption rates
+// GET /v1/scanner/scans/protocol-adoption — protocol adoption rates (shared corpus)
 scanRouter.get('/scans/protocol-adoption', async (c) => {
-  const tenantId = c.req.header('x-tenant-id') || DEFAULT_TENANT_ID;
-  const adoption = await queries.getProtocolAdoption(tenantId);
+  const adoption = await queries.getProtocolAdoption();
   return c.json(adoption);
 });

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import app from './app.js';
+import { startUsageFlush, stopUsageFlush } from './services/usage.js';
 
 const port = parseInt(process.env.SCANNER_PORT || process.env.PORT || '4100');
 const host = process.env.SCANNER_HOST || '0.0.0.0';
@@ -15,9 +16,18 @@ console.log(`
 ╚══════════════════════════════════════════════════╝
 `);
 
-// Graceful shutdown
-const shutdown = (signal: string) => {
+startUsageFlush();
+
+let shuttingDown = false;
+const shutdown = async (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`${signal} received, shutting down...`);
+  try {
+    await stopUsageFlush();
+  } catch (err) {
+    console.error('[shutdown] usage flush stop failed:', err);
+  }
   process.exit(0);
 };
 

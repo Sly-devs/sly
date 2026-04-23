@@ -1,0 +1,53 @@
+---
+title: "Rate Limits"
+description: "Per-key limits, response headers, and how to handle 429s."
+---
+
+Each scanner API key has a per-minute rate limit. SSO JWT callers share a higher default.
+
+## Defaults
+
+| Token type          | Requests / minute |
+| ------------------- | ----------------- |
+| `psk_test_*`        | 60 (configurable per key) |
+| `psk_live_*`        | 60 (configurable per key) |
+| Sly SSO JWT         | 120               |
+
+Higher limits are available for partners with volume requirements — contact your account manager.
+
+## Response headers
+
+Every authenticated response includes:
+
+```http
+X-RateLimit-Limit: 60
+X-RateLimit-Remaining: 47
+X-RateLimit-Reset: 38
+```
+
+- `Limit` — requests allowed in the current window.
+- `Remaining` — requests left before you hit the cap.
+- `Reset` — seconds until the window resets.
+
+## 429 response
+
+When you exceed the limit:
+
+```json
+// HTTP 429 Too Many Requests
+{
+  "error": "rate_limit_exceeded",
+  "limit": 60,
+  "reset_seconds": 22
+}
+```
+
+Handle this by sleeping for `reset_seconds` before retrying. Exponential backoff is a reasonable default if you're running uncoordinated workers.
+
+## Batch endpoints
+
+Rate limits apply to HTTP requests, not to the number of targets inside a batch. Submitting one batch of 500 domains counts as one request. Batches are processed server-side with internal concurrency controls (~10 targets in flight) — submitting 10 consecutive batches still results in serial processing.
+
+## Credits vs. rate limits
+
+These are independent gates. A request can fail with 402 (insufficient credits) even when you're far below your rate limit, and vice versa. Check balance at `/v1/scanner/credits/balance` before high-cost operations.

@@ -6,7 +6,7 @@
  */
 import { getClient } from '../db/client.js';
 
-const DEFAULT_TENANT_ID = process.env.SCANNER_TENANT_ID || 'dad4308f-f9b6-4529-a406-7c2bdf3c6071';
+// Snapshots aggregate the shared corpus across all tenants — no tenant filter.
 
 export interface SnapshotData {
   snapshot_date: string;
@@ -36,15 +36,21 @@ export async function generateSnapshot(
 ): Promise<SnapshotData> {
   const db = getClient();
 
-  // Get all completed scans
-  const { data: scans, error: scanError } = await db
-    .from('merchant_scans')
+  // Get all completed scans across the shared corpus
+  const { data: scans, error: scanError } = await (db
+    .from('merchant_scans') as any)
     .select('id, readiness_score, protocol_score, data_score, merchant_category, region')
-    .eq('tenant_id', DEFAULT_TENANT_ID)
     .eq('scan_status', 'completed');
 
   if (scanError) throw new Error(`Failed to get scans: ${scanError.message}`);
-  const allScans = scans || [];
+  const allScans = (scans || []) as Array<{
+    id: string;
+    readiness_score: number;
+    protocol_score: number;
+    data_score: number;
+    merchant_category: string | null;
+    region: string | null;
+  }>;
   const total = allScans.length;
 
   if (total === 0) {
@@ -162,8 +168,8 @@ export async function generateSnapshot(
   };
 
   // Upsert to DB
-  const { error } = await db
-    .from('scan_snapshots')
+  const { error } = await (db
+    .from('scan_snapshots') as any)
     .upsert(snapshot, { onConflict: 'snapshot_date,snapshot_period' });
 
   if (error) throw new Error(`Failed to save snapshot: ${error.message}`);

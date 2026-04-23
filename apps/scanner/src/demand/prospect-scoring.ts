@@ -1,7 +1,7 @@
 import type { ProspectScore, HeatMapCell, SalesPriority, DemandScoreBreakdown } from '@sly/types';
 import * as queries from '../db/queries.js';
 
-const DEFAULT_TENANT_ID = process.env.SCANNER_TENANT_ID || 'dad4308f-f9b6-4529-a406-7c2bdf3c6071';
+// Prospect scoring runs against the shared scan corpus — no tenant filter.
 
 // ============================================
 // SCORING WEIGHTS (from PRD 56.23)
@@ -184,8 +184,8 @@ export async function getProspectList(options: {
 } = {}): Promise<ProspectScore[]> {
   const limit = options.limit || 50;
 
-  // 1. Get all completed scans
-  const { data: scans } = await queries.listMerchantScans(DEFAULT_TENANT_ID, {
+  // 1. Get all completed scans (shared corpus)
+  const { data: scans } = await queries.listMerchantScans({
     category: options.category,
     region: options.region,
     status: 'completed',

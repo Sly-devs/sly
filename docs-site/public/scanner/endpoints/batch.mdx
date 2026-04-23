@@ -1,0 +1,111 @@
+---
+title: "Batch"
+description: "Bulk-scan hundreds of merchants with CSV upload or JSON payload."
+---
+
+Batch scans process 10–20 targets concurrently server-side. 500 merchants complete in roughly 5–8 minutes.
+
+## POST /v1/scanner/scan/batch
+
+**Scope required:** `batch` &nbsp; **Cost:** 0.5 credits per target (rounded up)
+
+Accepts either JSON or multipart/form-data.
+
+### JSON payload
+
+```bash
+curl -X POST https://scanner.getsly.ai/v1/scanner/scan/batch \
+  -H "Authorization: Bearer $SCANNER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Q2 prospects",
+    "description": "Shortlist for May outreach",
+    "domains": [
+      { "domain": "shopify.com", "merchant_category": "saas" },
+      { "domain": "amazon.com", "merchant_category": "marketplace" },
+      { "domain": "mercadolibre.com", "region": "latam" }
+    ],
+    "skip_if_fresh": true
+  }'
+```
+
+Response:
+
+```json
+{
+  "batch_id": "uuid",
+  "status": "pending",
+  "total_targets": 3,
+  "credits_charged": 2,
+  "message": "Batch scan started"
+}
+```
+
+### CSV upload
+
+```bash
+curl -X POST https://scanner.getsly.ai/v1/scanner/scan/batch \
+  -H "Authorization: Bearer $SCANNER_KEY" \
+  -F "file=@merchants.csv" \
+  -F "name=Q2 prospects"
+```
+
+CSV format (header row required):
+
+```
+domain,merchant_name,merchant_category,country_code,region
+shopify.com,Shopify,saas,CA,north_america
+amazon.com,Amazon,marketplace,US,north_america
+```
+
+Max batch size: 500 (raise for enterprise tiers).
+
+## GET /v1/scanner/scan/batch/:id
+
+Check progress.
+
+**Scope required:** `read` &nbsp; **Cost:** 0
+
+```json
+{
+  "id": "uuid",
+  "status": "running",
+  "total_targets": 500,
+  "completed_targets": 183,
+  "failed_targets": 2,
+  "started_at": "2026-04-22T10:03:12Z",
+  "completed_at": null
+}
+```
+
+Statuses: `pending`, `running`, `completed`, `failed`, `cancelled`.
+
+## DELETE /v1/scanner/scan/batch/:id
+
+Cancel an in-flight batch. Unprocessed targets are refunded at 0.5 credits each.
+
+**Scope required:** `batch` &nbsp; **Cost:** 0 (may *refund*)
+
+```json
+{
+  "status": "cancelled",
+  "batch_id": "uuid",
+  "credits_refunded": 158
+}
+```
+
+## Retrieving batch results
+
+Once status is `completed`, results are available via the normal scan endpoints:
+
+```bash
+# All scans, any tenant, filtered to this batch's categories
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/scans?min_score=0&limit=500"
+
+# Individual scan by domain
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  https://scanner.getsly.ai/v1/scanner/scans/by-domain/shopify.com
+```
+
+There's no batch-scoped results endpoint — scans are stored in the shared corpus and looked up by domain.

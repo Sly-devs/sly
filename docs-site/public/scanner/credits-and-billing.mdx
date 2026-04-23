@@ -1,0 +1,104 @@
+---
+title: "Credits & Billing"
+description: "Per-endpoint credit costs, balance API, usage reporting, and top-up flow."
+---
+
+Scanner uses a prepaid credit model. You're granted credits when your key is issued (free tier or invoiced), and each scan/batch/test debits your balance. Reads are free.
+
+## Credit costs
+
+| Endpoint                                     | Cost                          |
+| -------------------------------------------- | ----------------------------- |
+| `POST /v1/scanner/scan`                      | 1                             |
+| `POST /v1/scanner/scan/batch`                | 0.5 per target (rounded up)   |
+| `POST /v1/scanner/tests`                     | 5                             |
+| `GET /v1/scanner/scan/:id`                   | 0                             |
+| `GET /v1/scanner/scans`, `scans/stats`, `scans/protocol-adoption`, `scans/by-domain/:id` | 0 |
+| `GET /v1/scanner/prospects`, `prospects/heat-map`, `prospects/export` | 0 |
+| `GET /v1/scanner/reports/*`, `observatory/*`, `snapshots/*` | 0             |
+| `GET /v1/scanner/credits/*`, `usage`         | 0                             |
+
+## Check your balance
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  https://scanner.getsly.ai/v1/scanner/credits/balance
+```
+
+```json
+{
+  "balance": 8432,
+  "grantedTotal": 10000,
+  "consumedTotal": 1568
+}
+```
+
+## Insufficient-credit errors
+
+When your balance is below the cost of a requested operation, the endpoint returns:
+
+```json
+// HTTP 402 Payment Required
+{
+  "error": "insufficient_credits",
+  "balance": 0,
+  "required": 1,
+  "docs": "https://docs.getsly.ai/scanner/credits-and-billing"
+}
+```
+
+Handle this in your integration by falling back to cached data, queueing for later, or notifying the operator.
+
+## Ledger
+
+Every debit and grant is recorded in an append-only ledger. Retrieve history:
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/credits/ledger?from=2026-04-01&limit=100"
+```
+
+Each entry:
+
+```json
+{
+  "id": "uuid",
+  "delta": -1,
+  "reason": "consume",
+  "source": "request:e4f2...",
+  "balance_after": 8432,
+  "metadata": { "endpoint": "POST /v1/scanner/scan", "key_id": "uuid" },
+  "created_at": "2026-04-22T10:15:03Z"
+}
+```
+
+`reason` is one of: `grant`, `consume`, `refund`, `adjustment`. `refund` appears when a batch is cancelled before workers process the remaining targets.
+
+## Usage reporting
+
+Aggregated per-endpoint or per-day usage is available at `/v1/scanner/usage`:
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/usage?group_by=day&from=2026-04-01"
+```
+
+Returns request counts, credits consumed, error counts, and total request duration per bucket. Useful for chargeback reports and tracking which endpoints dominate your spend.
+
+## Topping up
+
+Partners can top up in two ways:
+
+1. **Invoiced** — pay your Sly invoice; credits are granted against your tenant within 1 business day (source tag references the invoice).
+2. **Prepaid bundles** — purchase credit packs in the Sly dashboard. Instant grant.
+
+Both appear in your ledger with `reason: "grant"`.
+
+## Cancelling a batch
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $SCANNER_KEY" \
+  https://scanner.getsly.ai/v1/scanner/scan/batch/<batch_id>
+```
+
+Unprocessed targets are refunded at 0.5 credits each. Already-processed targets are not refunded.

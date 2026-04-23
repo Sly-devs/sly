@@ -1,0 +1,95 @@
+---
+title: "Prospects & Demand Intelligence"
+description: "Opportunity scoring, heat map, CSV export for CRM."
+---
+
+Prospect endpoints combine readiness data (from scans) with demand signals (public intelligence, synthetic tests, AI search mentions, telemetry) to produce an **opportunity_score** — the product of demand and readiness gap:
+
+```
+opportunity_score = demand_score × (1 − readiness_score / 100)
+```
+
+High opportunity = the merchant is getting agent interest *and* would benefit most from an agentic-commerce integration.
+
+## GET /v1/scanner/prospects
+
+**Scope required:** `read` &nbsp; **Cost:** 0
+
+Query parameters:
+
+| Param            | Notes                                                   |
+| ---------------- | ------------------------------------------------------- |
+| `category`       | `retail`, `saas`, `marketplace`, ...                    |
+| `region`         | `latam`, `north_america`, ...                           |
+| `min_opportunity`| Minimum `opportunity_score` (0–100)                     |
+| `priority`       | `critical`, `high`, `medium`, `low`                     |
+| `limit`          | Default 50, max 200                                     |
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/prospects?priority=critical&region=latam&limit=50"
+```
+
+Each prospect is a [`ProspectScore`](/scanner/data-model#prospect-score-from-prospects).
+
+## GET /v1/scanner/prospects/heat-map
+
+Category × region matrix: aggregate readiness, demand, opportunity, and top priority per cell.
+
+**Scope required:** `read` &nbsp; **Cost:** 0
+
+```json
+{
+  "data": [
+    {
+      "category": "retail",
+      "region": "latam",
+      "merchant_count": 82,
+      "avg_readiness": 41,
+      "avg_demand": 68,
+      "avg_opportunity": 58,
+      "top_priority": "high"
+    },
+    ...
+  ]
+}
+```
+
+Sort order is descending by `avg_opportunity`.
+
+## GET /v1/scanner/prospects/export
+
+CSV for CRM import. Same filters as `/prospects`.
+
+**Scope required:** `read` &nbsp; **Cost:** 0
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/prospects/export?priority=high&limit=500" \
+  -o prospects.csv
+```
+
+Columns: domain, merchant name, category, region, readiness score, demand score, opportunity score, sales priority, and the four demand-sub-score components.
+
+## Priority thresholds
+
+| Opportunity score | Priority   |
+| ----------------- | ---------- |
+| > 80              | critical   |
+| 61 – 80           | high       |
+| 41 – 60           | medium     |
+| ≤ 40              | low        |
+
+## Demand score composition
+
+```
+demand_score = 0.30 × public_intelligence
+             + 0.25 × synthetic_test
+             + 0.25 × observatory
+             + 0.20 × telemetry
+```
+
+- **public_intelligence** — matches against the demand_intelligence data points for the merchant's category/region.
+- **synthetic_test** — weighted on how often agents fail at the merchant's checkout (more failures = more demand for an integration).
+- **observatory** — AI search engine mentions (ChatGPT, Perplexity, Claude) and MCP-registry listings for the domain.
+- **telemetry** — real agent checkout attempts observed in production traffic.

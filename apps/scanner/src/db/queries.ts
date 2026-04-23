@@ -62,15 +62,17 @@ export async function updateMerchantScan(
   if (error) throw new Error(`Failed to update merchant scan: ${error.message}`);
 }
 
+// Shared-corpus read: returns the freshest scan of the domain across all tenants.
+// Writes remain tenant-scoped via upsertMerchantScan; reads merge the view.
 export async function getMerchantScanByDomain(
-  tenantId: string,
   domain: string,
 ): Promise<MerchantScan | null> {
   const { data, error } = await db()
     .from('merchant_scans')
     .select('*')
-    .eq('tenant_id', tenantId)
     .eq('domain', domain)
+    .order('last_scanned_at', { ascending: false, nullsFirst: false })
+    .limit(1)
     .maybeSingle();
 
   if (error) throw new Error(`Failed to get merchant scan: ${error.message}`);
@@ -106,8 +108,10 @@ export async function getMerchantScanWithDetails(id: string): Promise<MerchantSc
   };
 }
 
+// Shared-corpus read: no tenant filter. Multiple tenants may have scanned the
+// same domain — rows are not deduped here; callers wanting a single row per
+// domain should use getMerchantScanByDomain.
 export async function listMerchantScans(
-  tenantId: string,
   filters: {
     category?: string;
     region?: string;
@@ -124,8 +128,7 @@ export async function listMerchantScans(
 
   let query = db()
     .from('merchant_scans')
-    .select('*', { count: 'exact' })
-    .eq('tenant_id', tenantId);
+    .select('*', { count: 'exact' });
 
   if (filters.category) query = query.eq('merchant_category', filters.category);
   if (filters.region) query = query.eq('region', filters.region);
@@ -141,7 +144,8 @@ export async function listMerchantScans(
   return { data: data || [], total: count || 0 };
 }
 
-export async function getScanStats(tenantId: string): Promise<{
+// Shared-corpus read: no tenant filter.
+export async function getScanStats(): Promise<{
   total: number;
   completed: number;
   avg_readiness_score: number;
@@ -150,8 +154,7 @@ export async function getScanStats(tenantId: string): Promise<{
 }> {
   const { data, error } = await db()
     .from('merchant_scans')
-    .select('scan_status, readiness_score, merchant_category, region')
-    .eq('tenant_id', tenantId);
+    .select('scan_status, readiness_score, merchant_category, region');
 
   if (error) throw new Error(`Failed to get scan stats: ${error.message}`);
 
@@ -465,7 +468,8 @@ export async function insertDemandIntelligence(
 // PROTOCOL ADOPTION STATS
 // ============================================
 
-export async function getProtocolAdoption(tenantId: string): Promise<Record<string, {
+// Shared-corpus read: no tenant filter.
+export async function getProtocolAdoption(): Promise<Record<string, {
   detected: number;
   functional: number;
   total: number;
@@ -474,7 +478,6 @@ export async function getProtocolAdoption(tenantId: string): Promise<Record<stri
   const { data: scans, error: scanError } = await db()
     .from('merchant_scans')
     .select('id')
-    .eq('tenant_id', tenantId)
     .eq('scan_status', 'completed');
 
   if (scanError) throw new Error(`Failed to get scans: ${scanError.message}`);

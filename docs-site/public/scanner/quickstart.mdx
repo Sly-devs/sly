@@ -1,0 +1,90 @@
+---
+title: "Quickstart"
+description: "Five-minute walkthrough: get a key, run a scan, read the score."
+---
+
+## 1. Get an API key
+
+Scanner keys are issued by Sly to partner tenants. Contact your account manager (or email partners@getsly.ai) with:
+
+- Your tenant ID
+- The scopes you need (`scan`, `batch`, `read`, `tests`)
+- Expected request volume
+
+You'll receive a key of the form `psk_live_...` (or `psk_test_...` for sandbox) and an initial credit grant.
+
+## 2. Check your balance
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  https://scanner.getsly.ai/v1/scanner/credits/balance
+```
+
+```json
+{ "balance": 10000, "grantedTotal": 10000, "consumedTotal": 0 }
+```
+
+## 3. Run your first scan
+
+```bash
+curl -X POST https://scanner.getsly.ai/v1/scanner/scan \
+  -H "Authorization: Bearer $SCANNER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"domain": "shopify.com"}'
+```
+
+Response (truncated):
+
+```json
+{
+  "id": "c5e4f1...",
+  "domain": "shopify.com",
+  "readiness_score": 72,
+  "protocol_score": 80,
+  "data_score": 85,
+  "accessibility_score": 60,
+  "checkout_score": 65,
+  "business_model": "saas",
+  "protocol_results": [
+    { "protocol": "acp", "status": "confirmed", "confidence": "high" },
+    { "protocol": "x402", "status": "not_detected" }
+  ],
+  "scan_status": "completed"
+}
+```
+
+See [data model](/scanner/data-model) for every field.
+
+## 4. Batch-score a merchant list
+
+```bash
+curl -X POST https://scanner.getsly.ai/v1/scanner/scan/batch \
+  -H "Authorization: Bearer $SCANNER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domains": [
+      { "domain": "shopify.com", "merchant_category": "saas" },
+      { "domain": "amazon.com",  "merchant_category": "marketplace" },
+      { "domain": "mercadolibre.com", "region": "latam" }
+    ]
+  }'
+```
+
+Returns `{ batch_id, status: "pending", total_targets: 3, credits_charged: 2 }`.
+
+Poll `/v1/scanner/scan/batch/:id` every few seconds for progress, then query `/v1/scanner/scans?min_score=0` to pull results.
+
+## 5. Find best prospects
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/prospects?priority=critical&limit=25"
+```
+
+Each returned prospect combines demand signals + readiness gap into an `opportunity_score`. Export the full list as CSV with `/v1/scanner/prospects/export`.
+
+## What's next
+
+- [Authentication](/scanner/authentication) — SSO via your Sly account or dedicated API keys.
+- [Credits & billing](/scanner/credits-and-billing) — usage reporting and top-up flow.
+- [Endpoint reference](/scanner/endpoints/scan).

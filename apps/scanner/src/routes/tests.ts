@@ -20,7 +20,8 @@ testsRouter.post('/tests', async (c) => {
     return c.json({ error: 'Validation error', details: parsed.error.flatten() }, 400);
   }
 
-  const result = await runAgentShoppingTest(parsed.data.domain, parsed.data.test_type);
+  const { tenantId } = c.get('ctx');
+  const result = await runAgentShoppingTest(tenantId, parsed.data.domain, parsed.data.test_type);
   return c.json(result);
 });
 

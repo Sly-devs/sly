@@ -153,6 +153,31 @@
       {
         "tab": "API Reference",
         "openapi": "api-reference/openapi.json"
+      },
+      {
+        "tab": "Scanner",
+        "groups": [
+          {
+            "group": "Scanner",
+            "pages": [
+              "scanner/overview",
+              "scanner/quickstart",
+              "scanner/authentication",
+              "scanner/credits-and-billing",
+              "scanner/data-model",
+              "scanner/rate-limits"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "scanner/endpoints/scan",
+              "scanner/endpoints/batch",
+              "scanner/endpoints/prospects",
+              "scanner/endpoints/tests"
+            ]
+          }
+        ]
       }
     ]
   }

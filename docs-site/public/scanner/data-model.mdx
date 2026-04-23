@@ -1,0 +1,161 @@
+---
+title: "Data Model"
+description: "The MerchantScan response shape and every field it contains."
+---
+
+A completed scan returns a `MerchantScan` object with five top-level sections: **metadata**, **scores**, **protocol_results**, **structured_data**, **accessibility**.
+
+## Top-level fields
+
+```ts
+interface MerchantScan {
+  id: string;                    // UUID
+  domain: string;                // normalized, lowercase, no scheme/path
+  url: string;                   // full URL scanned
+  merchant_name?: string;
+  merchant_category?: "retail" | "saas" | "marketplace" | "restaurant" | "b2b"
+    | "travel" | "fintech" | "healthcare" | "media" | "other";
+  country_code?: string;         // ISO 3166-1 alpha-2
+  region?: "latam" | "north_america" | "europe" | "apac" | "africa" | "mena";
+  business_model?: "retail" | "saas" | "marketplace" | "api_provider" | "content";
+
+  // Scores 0-100
+  readiness_score: number;       // composite
+  protocol_score: number;        // which protocols work
+  data_score: number;            // structured data quality
+  accessibility_score: number;   // checkout friction
+  checkout_score: number;        // payment options
+
+  scan_status: "pending" | "scanning" | "completed" | "failed" | "stale";
+  scan_duration_ms: number;
+  last_scanned_at: string;       // ISO 8601
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+
+  protocol_results?: ScanProtocolResult[];
+  structured_data?: StructuredData;
+  accessibility?: Accessibility;
+}
+```
+
+## Protocol detection
+
+```ts
+interface ScanProtocolResult {
+  protocol: "ucp" | "acp" | "x402" | "ap2" | "mcp" | "nlweb" | "visa_vic" | "mastercard_agentpay";
+  status: "confirmed" | "eligible" | "platform_enabled" | "not_detected" | "not_applicable";
+  confidence: "high" | "medium" | "low";
+  detection_method?: string;
+  endpoint_url?: string;
+  capabilities: Record<string, unknown>;
+  is_functional?: boolean;
+  response_time_ms?: number;
+}
+```
+
+Status values:
+- **confirmed** — endpoint responds as expected, protocol is live.
+- **eligible** — heuristic signals suggest the protocol would work if enabled.
+- **platform_enabled** — the underlying commerce platform supports the protocol (e.g. Shopify-hosted sites are ACP-eligible).
+- **not_detected** — probed and not found.
+- **not_applicable** — protocol doesn't apply to this business model.
+
+## Structured data
+
+```ts
+interface StructuredData {
+  has_schema_product: boolean;
+  has_schema_offer: boolean;
+  has_schema_organization: boolean;
+  has_json_ld: boolean;
+  has_open_graph: boolean;
+  has_microdata: boolean;
+  product_count: number;
+  products_with_price: number;
+  products_with_availability: number;
+  products_with_sku: number;
+  products_with_image: number;
+  data_quality_score: number;         // 0-100
+  sample_products: Array<{
+    name: string;
+    price?: number;
+    currency?: string;
+    availability?: string;
+    sku?: string;
+    image_url?: string;
+  }>;
+}
+```
+
+## Accessibility
+
+```ts
+interface Accessibility {
+  robots_txt_exists: boolean;
+  robots_blocks_gptbot: boolean;
+  robots_blocks_claudebot: boolean;
+  robots_blocks_googlebot: boolean;
+  robots_blocks_all_bots: boolean;
+  robots_allows_agents: boolean;
+  requires_javascript: boolean;
+  has_captcha: boolean;
+  requires_account: boolean;
+  guest_checkout_available: boolean;
+  checkout_steps_count?: number;
+  payment_processors: string[];
+  supports_digital_wallets: boolean;
+  supports_crypto: boolean;
+  supports_pix: boolean;
+  supports_spei: boolean;
+  ecommerce_platform?: string;        // e.g. "shopify", "magento"
+  platform_version?: string;
+}
+```
+
+## Prospect score (from `/prospects`)
+
+```ts
+interface ProspectScore {
+  domain: string;
+  merchant_name?: string;
+  merchant_category?: string;
+  region?: string;
+  readiness_score: number;
+  demand_score: number;          // 30% public + 25% synthetic + 25% observatory + 20% telemetry
+  demand_breakdown: {
+    public_intelligence: number;
+    synthetic_test: number;
+    observatory: number;
+    telemetry: number;
+  };
+  opportunity_score: number;     // demand × (1 − readiness/100)
+  sales_priority: "critical" | "high" | "medium" | "low";
+  signals: {
+    has_demand_intelligence: boolean;
+    has_shopping_test: boolean;
+    has_observatory_data: boolean;
+    has_telemetry: boolean;
+  };
+}
+```
+
+## Shopping test result
+
+```ts
+interface AgentShoppingTestResult {
+  id: string;
+  merchant_scan_id: string;
+  domain: string;
+  test_type: "browse" | "search" | "add_to_cart" | "checkout" | "full_flow";
+  status: "passed" | "failed" | "partial";
+  steps: Array<{ name: string; status: string; duration_ms: number; error?: string }>;
+  blockers: Array<{ type: string; description: string; severity: "blocking" | "warning"; step_number: number }>;
+  total_steps: number;
+  completed_steps: number;
+  success_rate: number;          // 0-100
+  failure_point?: { step: string; blocker: string; detail: string };
+  duration_ms: number;
+  tested_at: string;
+}
+```

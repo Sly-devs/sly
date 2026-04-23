@@ -1,0 +1,79 @@
+---
+title: "Synthetic Shopping Tests"
+description: "End-to-end agent checkout runs. Per-step success, blockers, and friction reports."
+---
+
+Synthetic tests run a simulated autonomous-agent checkout against a merchant and report exactly where the agent would succeed or fail: discovery, selection, cart add, checkout form, payment. Useful for quantifying integration gaps before investing engineering time.
+
+## POST /v1/scanner/tests
+
+**Scope required:** `tests` &nbsp; **Cost:** 5 credits
+
+```bash
+curl -X POST https://scanner.getsly.ai/v1/scanner/tests \
+  -H "Authorization: Bearer $SCANNER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domain": "example-merchant.com",
+    "test_type": "full_flow"
+  }'
+```
+
+Request fields:
+
+| Field       | Values                                                             |
+| ----------- | ------------------------------------------------------------------ |
+| `domain`    | Required                                                           |
+| `test_type` | `browse`, `search`, `add_to_cart`, `checkout`, `full_flow` (default) |
+
+Test types run a subset of steps — use `browse` for a quick check, `full_flow` for a complete checkout simulation.
+
+Response is an [`AgentShoppingTestResult`](/scanner/data-model#shopping-test-result) with per-step status and a `blockers` array flagging specific friction points (missing structured data, CAPTCHA, account requirement, unsupported payment method, etc.).
+
+## GET /v1/scanner/tests/:domain
+
+Retrieve previous test results for a domain.
+
+**Scope required:** `read` &nbsp; **Cost:** 0
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/tests/example-merchant.com?limit=5"
+```
+
+Returns the 5 most recent tests in descending `tested_at` order.
+
+## Interpreting results
+
+A test with `status: "passed"` and `success_rate: 100` means the agent completed every step. More common is `status: "partial"` or `"failed"` with populated `blockers` — these are the actionable findings.
+
+Blocker severity:
+
+- **`blocking`** — the agent cannot continue. Common examples: `no_structured_data`, `captcha_required`, `account_required`, `javascript_wall`.
+- **`warning`** — the agent continued but with degraded confidence (e.g., inferred price from OCR instead of a schema.org price field).
+
+`failure_point` on the result root tells you exactly where the run stopped:
+
+```json
+{
+  "failure_point": {
+    "step": "payment",
+    "blocker": "unsupported_payment_method",
+    "detail": "Only accepts AMEX/Discover; agent wallet supports Visa/MC only"
+  }
+}
+```
+
+## Economics metadata
+
+When the merchant has category data, the test enriches the result with:
+
+```json
+{
+  "estimated_monthly_agent_visits": 1200,
+  "estimated_lost_conversions": 36,
+  "estimated_lost_revenue_usd": 2700
+}
+```
+
+These are heuristic projections based on merchant-category baselines (visits, AOV, conversion rate) multiplied by the test's failure rate. Use as directional signal, not as revenue forecasting.

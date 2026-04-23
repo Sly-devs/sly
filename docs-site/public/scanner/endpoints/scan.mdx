@@ -1,0 +1,109 @@
+---
+title: "Scan"
+description: "On-demand single-domain scan, retrieval, and listing."
+---
+
+## POST /v1/scanner/scan
+
+Scan a single domain. Returns in 2–5 seconds for most sites.
+
+**Scope required:** `scan` &nbsp; **Cost:** 1 credit
+
+```bash
+curl -X POST https://scanner.getsly.ai/v1/scanner/scan \
+  -H "Authorization: Bearer $SCANNER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domain": "shopify.com",
+    "merchant_name": "Shopify",
+    "merchant_category": "saas",
+    "country_code": "CA",
+    "region": "north_america",
+    "skip_if_fresh": true
+  }'
+```
+
+Request fields:
+
+| Field              | Type     | Notes                                                    |
+| ------------------ | -------- | -------------------------------------------------------- |
+| `domain`           | string   | Required. Normalized server-side (lowercase, no scheme). |
+| `merchant_name`    | string   | Optional metadata.                                       |
+| `merchant_category`| enum     | `retail`, `saas`, `marketplace`, `restaurant`, `b2b`, `travel`, `fintech`, `healthcare`, `media`, `other`. |
+| `country_code`     | string   | ISO 3166-1 alpha-2.                                      |
+| `region`           | enum     | `latam`, `north_america`, `europe`, `apac`, `africa`, `mena`. |
+| `skip_if_fresh`    | boolean  | If true, returns the cached scan when it's under 24h old (still costs 0 credits). |
+
+Response is a full [`MerchantScan`](/scanner/data-model) object.
+
+## GET /v1/scanner/scan/:id
+
+Retrieve a specific scan by UUID.
+
+**Scope required:** `read` &nbsp; **Cost:** 0
+
+## GET /v1/scanner/scans/by-domain/:domain
+
+Look up the freshest scan across the shared corpus for a given domain.
+
+**Scope required:** `read` &nbsp; **Cost:** 0
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  https://scanner.getsly.ai/v1/scanner/scans/by-domain/shopify.com
+```
+
+Returns `404` if no scan exists for the domain.
+
+## GET /v1/scanner/scans
+
+List scans with filters. Returns rows across all tenants — the shared scan corpus.
+
+**Scope required:** `read` &nbsp; **Cost:** 0
+
+Query parameters:
+
+| Param         | Notes                                  |
+| ------------- | -------------------------------------- |
+| `category`    | Merchant category filter               |
+| `region`      | Region filter                          |
+| `status`      | `completed`, `failed`, `pending`, etc. |
+| `min_score`   | Minimum `readiness_score`              |
+| `max_score`   | Maximum `readiness_score`              |
+| `page`        | 1-indexed                              |
+| `limit`       | Max 100                                |
+
+Response:
+
+```json
+{
+  "data": [ /* MerchantScan[] */ ],
+  "pagination": { "page": 1, "limit": 20, "total": 1423, "totalPages": 72 }
+}
+```
+
+## GET /v1/scanner/scans/stats
+
+Aggregate stats across the shared corpus.
+
+```json
+{
+  "total": 1423,
+  "completed": 1398,
+  "avg_readiness_score": 54,
+  "by_category": { "retail": 412, "saas": 338, "marketplace": 201, ... },
+  "by_region": { "north_america": 720, "europe": 388, ... }
+}
+```
+
+## GET /v1/scanner/scans/protocol-adoption
+
+Detected/functional adoption rates per protocol.
+
+```json
+{
+  "acp": { "detected": 201, "functional": 128, "total": 1398, "adoption_rate": 14 },
+  "x402": { "detected": 33,  "functional": 29,  "total": 1398, "adoption_rate": 2 },
+  ...
+}
+```

@@ -1,0 +1,39 @@
+---
+title: "Scanner Overview"
+description: "Score any merchant domain on agentic-commerce readiness. Built for ecommerce-agent vendors, research teams, and partners prioritizing integrations."
+---
+
+The **Sly Scanner** analyzes merchant websites and returns a structured readiness report: which agentic protocols they support (UCP, ACP, x402, AP2, MCP, NLWeb, Visa VIC, Mastercard), what structured data they expose, how much friction an autonomous agent would hit at checkout, and a composite 0–100 readiness score.
+
+## Who uses this
+
+- **Ecommerce-agent vendors** prioritizing which merchants their agents can transact with today vs. need manual workarounds.
+- **Research teams** tracking agentic-commerce adoption over time.
+- **Sales teams** identifying prospects with high demand and low readiness (the ripest integration targets).
+
+## What you get
+
+- **On-demand scans** — POST a domain, get a full report in 2–5 seconds.
+- **Batch scans** — upload a CSV or JSON array, poll for progress, retrieve results.
+- **Prospect intelligence** — opportunity scores combining demand signals with readiness gaps, sortable by category/region, CSV-exportable.
+- **Synthetic shopping tests** — end-to-end agent checkout runs with per-step success/blocker reporting.
+- **Reads span the shared scan corpus.** When you request a domain, you see the freshest scan anyone has run — not just yours. Your own scan requests are billed to you.
+
+## Pricing model
+
+Credits are the unit of consumption. Reads are free; writes cost credits:
+
+| Action                      | Credits |
+| --------------------------- | ------- |
+| Single scan                 | 1       |
+| Batch scan (per target)     | 0.5     |
+| Synthetic shopping test     | 5       |
+| All reads (scan retrieval, prospects, reports, protocol adoption, stats) | 0 |
+
+See [Credits & billing](/scanner/credits-and-billing) for the ledger, balance API, and top-up flow.
+
+## Next steps
+
+- [Quickstart](/scanner/quickstart) — get a key, run your first scan in under five minutes.
+- [Authentication](/scanner/authentication) — API key and SSO-JWT paths.
+- [Data model](/scanner/data-model) — the full `MerchantScan` shape.

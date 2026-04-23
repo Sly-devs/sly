@@ -1,0 +1,61 @@
+---
+title: "Authentication"
+description: "Scanner API keys and Sly SSO session tokens."
+---
+
+The Scanner service accepts two token types on the `Authorization: Bearer ...` header.
+
+## 1. Scanner API keys
+
+Format: `psk_live_<random>` or `psk_test_<random>`. The `psk_` prefix (for *partner scanner key*) is separate from the main Sly API keyspace (`pk_*`) so leakage of one does not compromise the other.
+
+```bash
+curl -H "Authorization: Bearer psk_live_xxxxx" \
+  https://scanner.getsly.ai/v1/scanner/credits/balance
+```
+
+Key properties:
+
+- **Scoped**: each key has a list of allowed scopes (`scan`, `batch`, `read`, `tests`). Request a key with only what you need.
+- **Rate-limited**: each key has a per-minute rate limit (default 60, higher on request).
+- **Environment-separated**: `psk_test_*` targets the sandbox corpus; `psk_live_*` targets production. No silent cross-environment calls.
+- **Revocable**: keys can be revoked without affecting other keys on the same tenant. Contact Sly support to rotate.
+
+## 2. SSO via Sly account (JWT)
+
+If you already have a Sly dashboard account (`app.getsly.ai`), your logged-in session token works on the Scanner API directly:
+
+```bash
+curl -H "Authorization: Bearer eyJhbGc..." \
+  https://scanner.getsly.ai/v1/scanner/scan \
+  -d '{"domain": "shopify.com"}'
+```
+
+- The JWT is verified against Supabase Auth. Your tenant and role are resolved from `user_profiles`.
+- Session tokens expire in 15 minutes. The dashboard refreshes automatically; custom integrations should refresh on 401.
+- SSO sessions get full scopes — this path is intended for dashboard use, not programmatic integrations.
+
+## Request headers
+
+| Header             | Required | Notes                                              |
+| ------------------ | -------- | -------------------------------------------------- |
+| `Authorization`    | Yes      | `Bearer psk_live_...` or `Bearer eyJ...` (JWT)     |
+| `X-Request-ID`     | No       | Any UUID. Echoed back in `X-Request-ID` response.  |
+| `X-Environment`    | No       | `test` or `live`. Only meaningful for JWT auth.    |
+
+## Errors
+
+| Status | Body                                         | Cause                                  |
+| ------ | -------------------------------------------- | -------------------------------------- |
+| 401    | `{ "error": "Missing or invalid authorization header" }` | No `Authorization` header     |
+| 401    | `{ "error": "Invalid scanner API key" }`     | Wrong key, revoked key, or bad hash    |
+| 403    | `{ "error": "Insufficient scope", ... }`     | Key missing the required scope         |
+| 403    | `{ "error": "Organization is not active" }`  | Tenant disabled                        |
+| 402    | `{ "error": "insufficient_credits", ... }`   | Out of credits — see [billing](/scanner/credits-and-billing) |
+| 429    | `{ "error": "rate_limit_exceeded", ... }`    | Over the per-minute cap for this key   |
+
+## Security notes
+
+- Store keys in a secret manager. Never commit them.
+- Keys are hashed (SHA-256) server-side; the plaintext is shown once at issuance.
+- If a key leaks, rotate immediately. Old key is revoked at the same moment the new one is issued.

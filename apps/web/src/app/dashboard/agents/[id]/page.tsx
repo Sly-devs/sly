@@ -317,6 +317,8 @@ export default function AgentDetailPage() {
             }}
           />
 
+          <AgentReadinessPill agentId={agent.id} agentStatus={agent.status} kyaTier={agent.kyaTier} />
+
           <span className={`px-3 py-1.5 text-sm font-medium rounded-full ${agent.status === 'active'
             ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400'
             : agent.status === 'paused'
@@ -431,11 +433,40 @@ export default function AgentDetailPage() {
           <div className="text-xs text-gray-400 mt-1">{formatCurrency((agent as any).totalVolume ?? (agent as any).total_volume ?? 0)} volume</div>
         </div>
         <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
-          <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">KYA Tier</div>
-          <div className="flex items-center gap-2">
-            <Shield className="h-5 w-5 text-blue-500" />
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm text-gray-500 dark:text-gray-400">KYA Tier</div>
             <KyaTierBadge tier={agent.kyaTier} />
           </div>
+          {limits ? (() => {
+            const daily = (limits as any)?.effectiveLimits?.daily ?? (limits as any)?.limits?.daily ?? 0;
+            const used = (limits as any)?.usage?.daily ?? 0;
+            const pct = daily > 0 ? Math.min(100, (used / daily) * 100) : 0;
+            const near = pct >= 80;
+            const barColor = near ? 'bg-amber-500' : 'bg-emerald-500';
+            return (
+              <div>
+                <div className="flex items-baseline justify-between mb-1">
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Daily budget</div>
+                  <div className="text-xs font-medium text-gray-900 dark:text-white">
+                    {formatCurrency(used)} / {formatCurrency(daily)}
+                  </div>
+                </div>
+                <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full ${barColor} transition-all`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                {near && (
+                  <div className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                    Approaching daily cap
+                  </div>
+                )}
+              </div>
+            );
+          })() : (
+            <div className="text-xs text-gray-400">Loading limits…</div>
+          )}
         </div>
         <Link
           href={`/dashboard/accounts/${agent.parentAccount?.id || (agent as any).parent_account_id || '#'}`}
@@ -2396,3 +2427,128 @@ function ActivityTab({ agentId }: { agentId: string }) {
     </div>
   );
 }
+
+// ─── Agent Readiness Pill ──────────────────────────────
+// Compact "can this agent actually shop?" glance next to the status pill.
+// Rolls up four checks (provisioned EOA · on-chain funds · auto-refill ·
+// KYA tier) into a single Ready / Partial / Setup / Blocked state, with a
+// hover popover that spells each check out. Keeps tenants from having to
+// flip between the Wallet tab, KYA tab, and agent detail to confirm an
+// agent can run.
+
+function AgentReadinessPill({
+  agentId,
+  agentStatus,
+  kyaTier,
+}: {
+  agentId: string;
+  agentStatus: string | undefined;
+  kyaTier: number | undefined;
+}) {
+  const api = useApiClient();
+  const apiFetch = useApiFetch();
+  const { apiUrl, apiEnvironment } = useApiConfig();
+
+  // Agent wallets — want to know if an EOA exists and its balance.
+  const { data: walletData } = useTanstackQuery({
+    queryKey: ['readiness-wallet', agentId, apiEnvironment],
+    queryFn: async () => {
+      if (!api) return null;
+      try {
+        const raw: any = await api.agents.getWallet(agentId);
+        return raw?.data ?? raw ?? null;
+      } catch {
+        return null;
+      }
+    },
+    enabled: !!api,
+    staleTime: 30_000,
+  });
+
+  // Auto-refill policy — unlocks the "has-fallback-funding" check even
+  // when the EOA balance is currently low.
+  const { data: autoRefill } = useTanstackQuery({
+    queryKey: ['readiness-auto-refill', agentId, apiEnvironment],
+    queryFn: async () => {
+      try {
+        const res = await apiFetch(`${apiUrl}/v1/agents/${agentId}/auto-refill`);
+        if (!res.ok) return null;
+        const body = await res.json();
+        return body.data || body;
+      } catch {
+        return null;
+      }
+    },
+    enabled: !!apiUrl,
+    staleTime: 60_000,
+  });
+
+  const eoa = (walletData?.all_wallets || []).find((w: any) => w.wallet_type === 'agent_eoa');
+  const provisioned = !!eoa;
+  const eoaBalance = eoa ? Number(eoa.balance || 0) : 0;
+  const hasAutoRefill = !!autoRefill?.enabled;
+  const funded = eoaBalance > 0 || hasAutoRefill;
+  const isActive = agentStatus === 'active';
+  const tier = typeof kyaTier === 'number' ? kyaTier : null;
+
+  const [state, label, cls] = ((): [string, string, string] => {
+    if (!isActive) return ['blocked', 'Blocked', 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400'];
+    if (provisioned && funded) return ['ready', 'Ready to shop', 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400'];
+    if (provisioned) return ['partial', 'Needs funding', 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400'];
+    return ['setup', 'Setup needed', 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'];
+  })();
+
+  const [showPopover, setShowPopover] = useState(false);
+
+  return (
+    <div className="relative" onMouseEnter={() => setShowPopover(true)} onMouseLeave={() => setShowPopover(false)}>
+      <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-full cursor-help ${cls}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${
+          state === 'ready' ? 'bg-emerald-500'
+          : state === 'partial' ? 'bg-amber-500'
+          : state === 'blocked' ? 'bg-red-500'
+          : 'bg-gray-400'
+        }`} />
+        {label}
+      </span>
+      {showPopover && (
+        <div className="absolute right-0 top-full mt-2 z-50 w-72 p-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-xl">
+          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Readiness</div>
+          <ul className="space-y-1.5 text-sm">
+            <ReadinessLine ok={isActive} label={isActive ? 'Agent is active' : `Agent is ${agentStatus}`} />
+            <ReadinessLine ok={provisioned} label={provisioned ? 'x402 signing key provisioned' : 'No x402 signing key'} />
+            <ReadinessLine
+              ok={funded}
+              label={
+                eoaBalance > 0
+                  ? `Funded (${eoaBalance.toFixed(3)} USDC on-chain)`
+                  : hasAutoRefill
+                    ? 'Auto-refill enabled (falls back to Circle master)'
+                    : 'No funds; auto-refill off'
+              }
+            />
+            <ReadinessLine
+              ok={tier != null}
+              label={tier != null ? `KYA Tier ${tier}` : 'KYA tier unknown'}
+            />
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReadinessLine({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <li className="flex items-start gap-2">
+      {ok
+        ? <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+        : <XCircle className="h-4 w-4 text-gray-400 flex-shrink-0 mt-0.5" />
+      }
+      <span className={ok ? 'text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}>
+        {label}
+      </span>
+    </li>
+  );
+}
+

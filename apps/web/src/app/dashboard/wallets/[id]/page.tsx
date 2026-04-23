@@ -224,10 +224,29 @@ export default function WalletDetailPage() {
                         <ArrowDownLeft className="w-4 h-4 mr-2" />
                         Deposit
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setShowWithdrawModal(true)}>
-                        <ArrowUpRight className="w-4 h-4 mr-2" />
-                        Withdraw
-                    </Button>
+                    {(() => {
+                        // Withdraw routes through Circle rails, which don't apply to
+                        // Sly-managed agent EOAs (the key signs on-chain payments
+                        // directly). Disable with an explanation so users understand
+                        // this is intentional, not a placeholder.
+                        const walletType = wallet.walletType || wallet.wallet_type;
+                        const isAgentEoa = walletType === 'agent_eoa';
+                        return (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => isAgentEoa
+                                    ? toast.info('EOAs spend via x402 signing, not Circle withdraw. Use x402_sign or x402_fetch to move USDC out.')
+                                    : setShowWithdrawModal(true)
+                                }
+                                disabled={isAgentEoa}
+                                title={isAgentEoa ? 'EOAs spend via x402 signing — no Circle withdraw rail' : undefined}
+                            >
+                                <ArrowUpRight className="w-4 h-4 mr-2" />
+                                Withdraw
+                            </Button>
+                        );
+                    })()}
                 </div>
             </div>
 

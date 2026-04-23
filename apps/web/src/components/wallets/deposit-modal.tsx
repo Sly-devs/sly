@@ -48,7 +48,12 @@ type Phase = 'select-provider' | 'coinbase-init' | 'coinbase-ready' | 'stripe-lo
 export function DepositModal({
   walletId, walletName, walletAddress, blockchain, walletType, onClose,
 }: DepositModalProps) {
-  const [phase, setPhase] = useState<Phase>('select-provider');
+  // Agent EOAs are Sly-managed signing keys, not Circle provider wallets —
+  // the fiat onramps (Coinbase/Stripe/Crossmint) route payouts through
+  // Circle, so they don't work here. Land the user directly on the QR
+  // flow which accepts USDC from any wallet via direct on-chain transfer.
+  const isAgentEoa = walletType === 'agent_eoa';
+  const [phase, setPhase] = useState<Phase>(isAgentEoa ? 'qrcode' : 'select-provider');
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null);
@@ -310,9 +315,21 @@ export function DepositModal({
                 </p>
               </div>
 
-              <button onClick={() => setPhase('select-provider')} className="w-full text-center text-sm text-blue-600 dark:text-blue-400 hover:underline">
-                Back to payment options
-              </button>
+              {isAgentEoa && (
+                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                  <p className="text-xs text-blue-800 dark:text-blue-200">
+                    <strong>Tip:</strong> you can also enable auto-refill on the agent&apos;s Wallet tab —
+                    Sly will top up this EOA from the tenant Circle master whenever it runs low, with
+                    a per-day cap you control.
+                  </p>
+                </div>
+              )}
+
+              {!isAgentEoa && (
+                <button onClick={() => setPhase('select-provider')} className="w-full text-center text-sm text-blue-600 dark:text-blue-400 hover:underline">
+                  Back to payment options
+                </button>
+              )}
             </div>
           )}
 

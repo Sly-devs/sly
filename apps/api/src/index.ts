@@ -5,6 +5,7 @@ import { getScheduledTransferWorker } from './workers/scheduled-transfers.js';
 import { startIdempotencyCleanupWorker } from './workers/idempotency-cleanup.js';
 import { startX402ExpiredCleanupWorker } from './workers/x402-expired-cleanup.js';
 import { startAutoRefillWorker } from './workers/agent-auto-refill.js';
+import { startAgentEoaSyncWorker, stopAgentEoaSyncWorker } from './workers/agent-eoa-sync.js';
 import { webhookCleanupWorker } from './workers/webhook-cleanup.js';
 import { SettlementWindowProcessor } from './workers/settlement-window-processor.js';
 import { TreasuryWorker } from './workers/treasury-worker.js';
@@ -98,6 +99,10 @@ const stopX402ExpiredCleanup = startX402ExpiredCleanupWorker(2 * 60 * 1000);
 
 // Start smart wallet balance sync worker (syncs on-chain balances every 5 min)
 startSmartWalletSyncWorker();
+
+// Start agent EOA balance sync worker — keeps dashboard USDC balances
+// fresh for on-chain signing addresses without requiring a page load.
+startAgentEoaSyncWorker();
 
 // Start webhook cleanup worker (runs daily) - Story 27.5
 if (enableWebhookCleanup) {
@@ -204,6 +209,7 @@ const shutdown = async (signal: string) => {
   await stopRequestCounter();
   stopPartitionManager();
   stopSmartWalletSyncWorker();
+  stopAgentEoaSyncWorker();
   stopConnectionCleanupWorker();
   stopTaskBridge();
   process.exit(0);

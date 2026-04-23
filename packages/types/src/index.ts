@@ -146,6 +146,7 @@ export interface AgentPermissions {
 export interface Agent {
   id: string;
   tenantId: string;
+  environment: 'test' | 'live';
   name: string;
   description: string;
   status: AgentStatus;

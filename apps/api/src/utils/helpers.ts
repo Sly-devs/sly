@@ -56,6 +56,7 @@ export function mapAgentFromDb(row: any): Agent {
   return {
     id: row.id,
     tenantId: row.tenant_id,
+    environment: row.environment || 'test',
     name: row.name,
     description: row.description || '',
     status: row.status,

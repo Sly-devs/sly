@@ -29,6 +29,12 @@ import accountsOpenAPIRouter from './routes/openapi/accounts.js';
 import transfersOpenAPIRouter from './routes/openapi/transfers.js';
 import agentsOpenAPIRouter from './routes/openapi/agents.js';
 import walletsOpenAPIRouter from './routes/openapi/wallets.js';
+import streamsOpenAPIRouter from './routes/openapi/streams.js';
+import quotesOpenAPIRouter from './routes/openapi/quotes.js';
+import refundsOpenAPIRouter from './routes/openapi/refunds.js';
+import disputesOpenAPIRouter from './routes/openapi/disputes.js';
+import webhooksOpenAPIRouter from './routes/openapi/webhooks.js';
+import apiKeysOpenAPIRouter from './routes/openapi/api-keys.js';
 
 export function buildOpenAPIApp(): OpenAPIHono {
   const app = new OpenAPIHono();
@@ -54,6 +60,12 @@ export function buildOpenAPIApp(): OpenAPIHono {
   app.route('/v1/transfers', transfersOpenAPIRouter);
   app.route('/v1/agents', agentsOpenAPIRouter);
   app.route('/v1/wallets', walletsOpenAPIRouter);
+  app.route('/v1/streams', streamsOpenAPIRouter);
+  app.route('/v1/quotes', quotesOpenAPIRouter);
+  app.route('/v1/refunds', refundsOpenAPIRouter);
+  app.route('/v1/disputes', disputesOpenAPIRouter);
+  app.route('/v1/webhooks', webhooksOpenAPIRouter);
+  app.route('/v1/api-keys', apiKeysOpenAPIRouter);
 
   return app;
 }

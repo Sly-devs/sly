@@ -114,6 +114,15 @@
             ]
           },
           {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/event-driven",
+              "architecture/queue-model",
+              "architecture/state-machine"
+            ]
+          },
+          {
             "group": "Settlement & Treasury",
             "pages": [
               "settlement/overview",

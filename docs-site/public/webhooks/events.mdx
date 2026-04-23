@@ -1,132 +1,276 @@
 ---
 title: "Event catalog"
-description: "Every webhook event type Sly emits."
+description: "Every webhook event Sly emits, with payload schemas."
 ---
 
-Subscribe to whichever subset you need — you pay no cost for unused events, but narrower subscriptions reduce noise in your handler.
+This page lists the events Sly emits today + their payload shapes. Event types are extracted from `apps/api/src/services/webhooks.ts` — this reflects what actually fires, not what's planned.
 
-## Transfers
+## Envelope
 
-| Event | Fires when |
-|---|---|
-| `transfer.created` | A transfer object is created (not yet executed) |
-| `transfer.processing` | Transfer submitted to the settlement rail |
-| `transfer.completed` | Transfer finalized |
-| `transfer.failed` | Rail rejected or compliance blocked |
-| `transfer.refunded` | A completed transfer was refunded |
-| `transfer.cancelled` | Cancelled from `pending` state |
+Every event is delivered as a POST with this JSON envelope:
 
-Payload: `{ "transfer": { full transfer object } }`
-
-## Streams
-
-| Event | Fires when |
-|---|---|
-| `stream.created` | New stream opened |
-| `stream.modified` | Flow rate or buffer changed |
-| `stream.paused` | Stream paused |
-| `stream.resumed` | Stream resumed |
-| `stream.cancelled` | Stream terminated |
-| `stream.alert` | Runway crosses warning/critical/exhausted threshold |
-
-Payload: `{ "stream": {...}, "alert": { "severity": "warning" | "critical" | "exhausted", "runway_seconds": N } }` (for alerts)
-
-## Agents
-
-| Event | Fires when |
-|---|---|
-| `agent.created` | New agent registered |
-| `agent.tier_upgraded` | KYA tier changed (0→1, 1→2, etc.) |
-| `agent.key_rotated` | Ed25519 key rotated |
-| `agent.key_revoked` | Ed25519 key revoked |
-| `agent.frozen` | Wallet policy freeze triggered |
-| `agent.unfrozen` | Freeze lifted |
-| `agent.revoked` | Agent permanently terminated |
-
-## Approvals
-
-| Event | Fires when |
-|---|---|
-| `approval.requested` | New approval created (action required) |
-| `approval.approved` | Approver approved |
-| `approval.rejected` | Approver rejected |
-| `approval.escalated` | Escalated to higher role |
-| `approval.expired` | Timeout passed with no decision |
-
-## Protocols
-
-| Event | Fires when |
-|---|---|
-| `ucp.token_issued` | New UCP token created |
-| `ucp.settlement_completed` | UCP token settled |
-| `acp.checkout_completed` | ACP session paid |
-| `acp.checkout_fulfilled` | Merchant marked fulfilled |
-| `ap2.mandate_created` | New mandate |
-| `ap2.mandate_executed` | Mandate execution |
-| `ap2.mandate_revoked` | Mandate revoked |
-| `x402.payment_completed` | x402 payment settled |
-| `a2a.task_received` | Peer sent a task |
-| `a2a.task_completed` | Task deliverable submitted |
-| `a2a.task_rated` | Counterparty rated the task |
-| `a2a.task_disputed` | Dispute opened |
-| `mpp.session_opened` | MPP session started |
-| `mpp.payment_completed` | MPP payment executed |
-
-## Quotes
-
-| Event | Fires when |
-|---|---|
-| `quote.created` | New FX quote issued |
-| `quote.expired` | Unused quote expired |
-| `quote.consumed` | Quote used on a transfer |
-
-## Disputes
-
-| Event | Fires when |
-|---|---|
-| `dispute.opened` | New chargeback/dispute filed |
-| `dispute.evidence_requested` | Provider requested supporting evidence |
-| `dispute.won` | Ruled in your favor |
-| `dispute.lost` | Ruled against you |
-| `dispute.withdrawn` | Buyer withdrew |
-
-## Compliance
-
-| Event | Fires when |
-|---|---|
-| `account.verified` | KYC/KYB verification approved |
-| `account.rejected` | Verification rejected |
-| `compliance.alert` | Sanctions hit or high-risk signal |
-| `compliance.review_required` | Manual review queued |
-
-## System
-
-| Event | Fires when |
-|---|---|
-| `webhook.test` | Triggered by `POST /v1/webhooks/:id/test` |
-| `webhook.failing` | Your endpoint has failed 10+ consecutive deliveries |
-
-## Subscribe
-
-```bash
-# Subscribe to multiple events
-curl -X POST https://api.getsly.ai/v1/webhooks \
-  -d '{
-    "url": "https://hooks.example.com/sly",
-    "events": ["transfer.*", "stream.alert", "approval.requested"]
-  }'
-
-# Wildcards supported (transfer.*, agent.*, etc.)
-# Subscribe to everything with "*"
+```json
+{
+  "id": "evt_<uuid>",
+  "type": "<event.type>",
+  "timestamp": "2026-04-23T15:30:00Z",
+  "data": { ... }
+}
 ```
 
-## Available events API
+Headers:
+- `X-Sly-Signature: t=<unix_ts>,v1=<hmac_sha256_hex>` — [verify this](/webhooks/signature-verification)
+- `X-Sly-Event-Id: evt_<uuid>` — stable ID; dedupe in your handler
+- `X-Sly-Delivery-Id: del_<uuid>` — unique per delivery attempt
+- `X-Sly-Webhook-Id: wh_<uuid>` — which subscription triggered this
 
-Programmatic list:
+## Transfer events
+
+| Event | Fires when |
+|---|---|
+| `transfer.created` | New transfer record created |
+| `transfer.completed` | Transfer settled |
+| `transfer.failed` | Transfer settlement failed |
+| `transfer.refunded` | Transfer was refunded |
+
+**`data`:**
+
+```json
+{
+  "transfer_id": "tx_<uuid>",
+  "type": "cross_border | internal | stream_start | stream_withdraw | stream_cancel | wrap | unwrap",
+  "status": "pending | processing | completed | failed | cancelled",
+  "amount": "42.00",
+  "currency": "USDC",
+  "from_account_id": "acc_<uuid>",
+  "to_account_id": "acc_<uuid>",
+  "protocol": "ucp | acp | ap2 | x402 | mpp | internal | cross_border",
+  "completed_at": "2026-04-23T15:30:00Z"
+}
+```
+
+## Settlement events
+
+Fired when payouts transition through Circle (stablecoin → fiat) or other rails.
+
+| Event | Fires when |
+|---|---|
+| `settlement.initiated` | Payout submitted to rail (status: pending) |
+| `settlement.processing` | Payout accepted by rail (status: confirmed) |
+| `settlement.completed` | Payout finalized |
+| `settlement.failed` | Payout rejected by rail |
+| `settlement.returned` | Payout returned (ACH return, chargeback) |
+
+**`data`:**
+
+```json
+{
+  "payoutId": "payout_<external>",
+  "transferId": "tx_<uuid>",
+  "status": "pending | confirmed | complete | failed | returned",
+  "amount": "500.00",
+  "destination": { "type": "bank | wallet", "ref": "..." },
+  "return": { "reason": "R01 — insufficient funds", "code": "R01" },
+  "errorCode": "rejected_by_rail"
+}
+```
+
+`return` and `errorCode` are only present for returned/failed states.
+
+## Batch events
+
+For [batch transfers](/core-concepts/transfers#batch-transfers) and mass operations.
+
+| Event | Fires when |
+|---|---|
+| `batch.created` | Batch queued |
+| `batch.processing` | Batch processing started |
+| `batch.completed` | All items processed (success or failure) |
+| `batch.failed` | Batch processing errored at the batch level |
+
+**`data`:**
+
+```json
+{
+  "batch_id": "bat_<uuid>",
+  "status": "pending | processing | completed | failed",
+  "total_count": 50,
+  "success_count": 48,
+  "failed_count": 2,
+  "total_amount": "12500.00",
+  "currency": "USDC"
+}
+```
+
+## Reconciliation events
+
+| Event | Fires when |
+|---|---|
+| `reconciliation.completed` | Reconciliation run finished |
+| `reconciliation.discrepancy` | Discrepancy detected during recon |
+
+**`data`** for `reconciliation.completed`:
+
+```json
+{
+  "report_id": "recon_<uuid>",
+  "rail": "ach | wire | usdc-base | usdc-solana | pix | spei | card-stripe",
+  "period": { "from": "2026-04-22", "to": "2026-04-22" },
+  "totals": {
+    "matched": 1244,
+    "unmatched_ledger": 3,
+    "unmatched_rail": 1,
+    "discrepancies": 4
+  }
+}
+```
+
+## x402 events
+
+| Event | Fires when |
+|---|---|
+| `x402.payment.completed` | x402 payment settled to endpoint owner |
+| `x402.endpoint.created` | New x402 endpoint registered |
+
+**`data`** for `x402.payment.completed`:
+
+```json
+{
+  "payment_id": "x402_pay_<uuid>",
+  "endpoint_id": "epd_<uuid>",
+  "amount": "0.05",
+  "currency": "USDC",
+  "payer_wallet": "0x...",
+  "proof": "0x...",
+  "tx_hash": "0x..."
+}
+```
+
+## AP2 events
+
+| Event | Fires when |
+|---|---|
+| `ap2.mandate.created` | New mandate signed and issued |
+| `ap2.mandate.executed` | Mandate execution recorded |
+| `ap2.mandate.revoked` | Mandate revoked |
+
+**`data`** for `ap2.mandate.executed`:
+
+```json
+{
+  "mandate_id": "ap2_mnd_<uuid>",
+  "execution_id": "ap2_exec_<uuid>",
+  "agent_id": "agt_<uuid>",
+  "merchant_id": "mer_<uuid>",
+  "amount": "49.00",
+  "currency": "USD",
+  "remaining_daily": "451.00",
+  "remaining_monthly": "4851.00"
+}
+```
+
+## ACP events
+
+| Event | Fires when |
+|---|---|
+| `acp.checkout.created` | New ACP checkout session |
+| `acp.checkout.completed` | Checkout completed with payment |
+| `acp.checkout.expired` | Session expired without completion |
+
+**`data`**:
+
+```json
+{
+  "checkout_id": "acp_chk_<uuid>",
+  "merchant_id": "mer_<uuid>",
+  "status": "created | pending_payment | paid | fulfilled | expired",
+  "total": "49.98",
+  "currency": "USD",
+  "items": [ { "sku": "...", "quantity": 2, "unit_price": "24.99" } ]
+}
+```
+
+## Account events
+
+| Event | Fires when |
+|---|---|
+| `account.created` | New account created |
+| `account.updated` | Account record modified |
+| `account.balance.low` | Account balance below configured threshold |
+
+**`data`** for `account.balance.low`:
+
+```json
+{
+  "account_id": "acc_<uuid>",
+  "wallet_id": "wal_<uuid>",
+  "balance": "42.10",
+  "threshold": "100.00",
+  "currency": "USDC"
+}
+```
+
+## System events
+
+| Event | Fires when |
+|---|---|
+| `webhook.test` | You triggered `POST /v1/webhooks/:id/test` |
+| `webhook.dlq` | A delivery exhausted retries and entered dead-letter queue |
+
+**`data`** for `webhook.test`:
+
+```json
+{
+  "message": "This is a test webhook",
+  "endpoint_id": "wh_<uuid>",
+  "endpoint_name": "Production payments worker"
+}
+```
+
+## Subscribing
+
+```bash
+curl -X POST https://api.getsly.ai/v1/webhooks \
+  -H "Authorization: Bearer pk_live_..." \
+  -d '{
+    "url": "https://hooks.example.com/sly",
+    "events": ["transfer.*", "settlement.completed", "ap2.mandate.executed"],
+    "description": "Production payments"
+  }'
+```
+
+- Specific events: `"transfer.completed"`
+- Wildcards: `"transfer.*"` (all transfer events)
+- Everything: `"*"` (not recommended in production — high volume)
+
+## Enumerate supported events programmatically
 
 ```bash
 curl https://api.getsly.ai/v1/webhooks/events \
   -H "Authorization: Bearer pk_live_..."
 ```
 
-Returns the full list of event types + their payload schemas — useful if you're building a dashboard that lets users pick what to subscribe to.
+Returns the current event catalog in machine-readable form — useful if you're building a dashboard where users pick events to subscribe to.
+
+## Events in planning but NOT emitted yet
+
+The following have been mentioned in platform roadmap docs but **are not wired up in the current API**. Don't subscribe expecting to receive them:
+
+- Most `stream.*` events (runway alerts, pause, resume, cancel)
+- `approval.*` events — use polling + the approvals endpoints instead
+- `dispute.*` / `refund.*` as distinct events — currently surfaced through `transfer.refunded` and audit log; dedicated events planned
+- `agent.*` lifecycle events (tier upgrade, key rotation, etc.)
+- `quote.*`, `mpp.*`, `a2a.task.*`
+- `funding.transaction.*`, `treasury.alert.*`
+- `card.dispute.*`
+
+If any of these are critical for your integration, check [support](/resources/support) — we can either prioritize emission or suggest a polling alternative.
+
+## Delivery behavior recap
+
+- **At-least-once** — dedupe by `X-Sly-Event-Id`
+- **Timeout** — 10 seconds; respond fast, process async
+- **Retries** — 1m → 5m → 15m → 1h → 24h, then DLQ
+- **Envelope** always `{ id, type, timestamp, data }`
+
+See [webhooks overview](/webhooks/overview) for the full delivery contract.

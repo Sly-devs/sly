@@ -74,7 +74,7 @@ Headers include:
 - **2xx** — treated as success; no retry
 - **Any other status** or timeout → retry with exponential backoff
 
-Respond fast. Sly's timeout is 15 seconds; if your processing takes longer, **ack immediately and process async**:
+Respond fast. Sly's timeout is **10 seconds**; if your processing takes longer, **ack immediately and process async**:
 
 ```ts
 app.post('/webhooks/sly', (req, res) => {
@@ -86,13 +86,27 @@ app.post('/webhooks/sly', (req, res) => {
 
 ## Retries
 
-Failed deliveries retry on this schedule (up to 72 hours):
+Failed deliveries retry on this schedule:
 
 ```
-0s → 30s → 5m → 30m → 2h → 12h → 24h → 48h (final)
+1 min → 5 min → 15 min → 1 hour → 24 hours (final)
 ```
+
+Up to 5 attempts total. After the final attempt, the delivery moves to a **dead-letter queue** (DLQ). Subscribe to `webhook.dlq` to be alerted when deliveries land there, or use [replay](/webhooks/replay) to retry from the DLQ manually.
 
 Each retry includes the same `X-Sly-Event-Id` — use it for idempotency.
+
+## Delivery states
+
+```
+pending ─▶ processing ─▶ delivered
+   │             │
+   │             └─▶ failed ─(retry)─▶ processing ─▶ delivered
+   │                                                      │
+   │                  (5 attempts exhausted) ─────────────┘
+   │                            │
+   └──────────────────────────▶ dlq (dead-letter)
+```
 
 ## Idempotency on your side
 

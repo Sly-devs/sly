@@ -916,6 +916,19 @@ app.get('/:id', async (c) => {
     );
     const dailyActualSpent = sumSpend(dailyRows);
     const monthlyActualSpent = sumSpend(monthlyRows);
+    const dailyActualTxCount = (dailyRows || []).length;
+    const monthlyActualTxCount = (monthlyRows || []).length;
+    // Timestamp of the most recent counted row today — used by the UI to
+    // render "last activity X minutes ago" without a separate query.
+    const lastActivityAt = (dailyRows || [])
+      .map((r: any) => r.created_at)
+      .filter(Boolean)
+      .sort()
+      .reverse()[0] || (monthlyRows || [])
+      .map((r: any) => r.created_at)
+      .filter(Boolean)
+      .sort()
+      .reverse()[0] || null;
 
     // Format response
     const response = {
@@ -925,6 +938,9 @@ app.get('/:id', async (c) => {
       // type, including ones that don't persist counters in spending_policy.
       dailyActualSpent,
       monthlyActualSpent,
+      dailyActualTxCount,
+      monthlyActualTxCount,
+      lastActivityAt,
       recentTransactions: recentTxs?.map(tx => ({
         id: tx.id,
         fromAccountId: tx.from_account_id,

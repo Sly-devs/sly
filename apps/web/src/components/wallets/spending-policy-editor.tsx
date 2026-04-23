@@ -14,7 +14,18 @@ import {
 } from "@sly/ui";
 import { SpendingPolicy, Wallet } from "@sly/api-client";
 import { SpendingProgress } from "./spending-progress";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
+
+// For tiny stablecoin amounts, 2-decimal formatting loses the information
+// ($0.003 → "$0.00"). Use up to 4 decimals when the amount is under $1 so
+// micropayment activity actually shows a non-zero number.
+function formatSpendDisplay(amount: number, currency: string): string {
+    if (!amount) return formatCurrency(0, currency);
+    if (amount < 1) {
+        return formatCurrency(amount, currency, { maximumFractionDigits: 4 });
+    }
+    return formatCurrency(amount, currency, { maximumFractionDigits: 2 });
+}
 
 interface SpendingPolicyEditorProps {
     wallet: Wallet;
@@ -192,9 +203,76 @@ export function SpendingPolicyEditor({ wallet, className }: SpendingPolicyEditor
                 counters (agent_eoa, external, smart_wallet). Falls back
                 to the JSON counters for legacy wallets that only ship
                 those. */}
+            {/* Today-at-a-glance summary — always visible regardless of
+                cap utilization, so tenants see activity even when spend
+                is well under limits (the previous UX only made progress
+                bars visible, which read as "quiet" for tiny spend). */}
+            {(() => {
+                const w = wallet as any;
+                const todaySpent = w.dailyActualSpent ?? policy.dailySpent ?? 0;
+                const todayCount = w.dailyActualTxCount ?? 0;
+                const monthSpent = w.monthlyActualSpent ?? policy.monthlySpent ?? 0;
+                const monthCount = w.monthlyActualTxCount ?? 0;
+                const lastAt: string | null = w.lastActivityAt || null;
+                const lastAgeMs = lastAt ? (Date.now() - new Date(lastAt).getTime()) : null;
+                const isRecent = lastAgeMs != null && lastAgeMs < 60 * 60 * 1000;
+                return (
+                    <div className="mb-4 p-4 rounded-lg bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 border border-blue-200 dark:border-blue-900">
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-semibold text-blue-900 dark:text-blue-200 uppercase tracking-wide">
+                                    Activity
+                                </span>
+                                {isRecent && (
+                                    <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+                                        <span className="relative flex h-2 w-2">
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                                        </span>
+                                        live
+                                    </span>
+                                )}
+                            </div>
+                            {lastAt && (
+                                <span className="text-xs text-blue-700 dark:text-blue-300">
+                                    last {(() => {
+                                        const mins = Math.max(0, Math.round((lastAgeMs || 0) / 60000));
+                                        if (mins < 1) return 'just now';
+                                        if (mins < 60) return `${mins}m ago`;
+                                        const hrs = Math.round(mins / 60);
+                                        if (hrs < 24) return `${hrs}h ago`;
+                                        return `${Math.round(hrs / 24)}d ago`;
+                                    })()}
+                                </span>
+                            )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wide text-blue-700/70 dark:text-blue-300/70">Today</div>
+                                <div className="text-lg font-bold text-blue-900 dark:text-blue-100">
+                                    {formatSpendDisplay(todaySpent, wallet.currency || 'USDC')}
+                                </div>
+                                <div className="text-[11px] text-blue-700 dark:text-blue-300">
+                                    {todayCount} {todayCount === 1 ? 'transaction' : 'transactions'}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wide text-blue-700/70 dark:text-blue-300/70">This month</div>
+                                <div className="text-lg font-bold text-blue-900 dark:text-blue-100">
+                                    {formatSpendDisplay(monthSpent, wallet.currency || 'USDC')}
+                                </div>
+                                <div className="text-[11px] text-blue-700 dark:text-blue-300">
+                                    {monthCount} {monthCount === 1 ? 'transaction' : 'transactions'}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
             <div className="space-y-4 mb-6">
                 <div className="text-sm font-medium text-muted-foreground mb-3">
-                    Current Usage
+                    Current Usage vs. Cap
                 </div>
                 <SpendingProgress
                     label="Daily Limit"

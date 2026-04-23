@@ -100,8 +100,10 @@
               "protocols/acp",
               "protocols/ap2",
               "protocols/x402",
+              "protocols/mpp",
               "protocols/a2a",
-              "protocols/mcp"
+              "protocols/mcp",
+              "protocols/cards"
             ]
           },
           {

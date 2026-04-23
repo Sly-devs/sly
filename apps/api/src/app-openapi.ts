@@ -27,6 +27,8 @@ import mcpOpenAPIRouter from './routes/openapi/mcp.js';
 // ---- migrated core CRUD routers ----
 import accountsOpenAPIRouter from './routes/openapi/accounts.js';
 import transfersOpenAPIRouter from './routes/openapi/transfers.js';
+import agentsOpenAPIRouter from './routes/openapi/agents.js';
+import walletsOpenAPIRouter from './routes/openapi/wallets.js';
 
 export function buildOpenAPIApp(): OpenAPIHono {
   const app = new OpenAPIHono();
@@ -50,6 +52,8 @@ export function buildOpenAPIApp(): OpenAPIHono {
   // Core CRUD
   app.route('/v1/accounts', accountsOpenAPIRouter);
   app.route('/v1/transfers', transfersOpenAPIRouter);
+  app.route('/v1/agents', agentsOpenAPIRouter);
+  app.route('/v1/wallets', walletsOpenAPIRouter);
 
   return app;
 }

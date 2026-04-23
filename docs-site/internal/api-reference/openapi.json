@@ -1702,6 +1702,1261 @@
           }
         }
       }
+    },
+    "/v1/agents": {
+      "post": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Create an agent",
+        "description": "Register an AI actor under a parent account. The response contains credentials — the `agent_*` token and (if requested) an Ed25519 keypair. Both the token and the private key are shown **once** and not recoverable.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAgentInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Agent created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Agent"
+                    },
+                    "credentials": {
+                      "$ref": "#/components/schemas/AgentCredentials"
+                    },
+                    "authKey": {
+                      "$ref": "#/components/schemas/AgentAuthKey"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "credentials"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Parent account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "List agents",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "parent_account_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "frozen",
+                "suspended",
+                "revoked"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 3
+            },
+            "required": false,
+            "name": "kya_tier",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "description": "Filter to agents currently holding an SSE session"
+            },
+            "required": false,
+            "description": "Filter to agents currently holding an SSE session",
+            "name": "connected",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "search",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated agents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Agent"
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "totalPages": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "limit",
+                        "total",
+                        "totalPages"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "pagination"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agents/{id}": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Get an agent",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Agent"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Update an agent",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAgentInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Agent"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Delete (revoke) an agent",
+        "description": "Permanent revocation. All credentials (agent_*, sess_*, Ed25519 keys) are invalidated. Agent wallets are detached but not deleted — funds remain claimable.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agents/{id}/limits": {
+      "get": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Get effective spending limits",
+        "description": "Returns agent's KYA tier caps, the parent account's KYC tier caps, and the effective (minimum-of-both) limits. Plus spend-to-date against each.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Limits + usage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentLimits"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agents/{id}/suspend": {
+      "post": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Suspend (freeze) an agent",
+        "description": "Agent can still authenticate and read data; spending is blocked. Non-destructive — unfreeze via /activate. For full revocation use DELETE /agents/:id or DELETE /agents/:id/auth-keys.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Suspended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Agent"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agents/{id}/activate": {
+      "post": {
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Reactivate a suspended agent",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "acknowledgment": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reactivated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Agent"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/wallets": {
+      "post": {
+        "tags": [
+          "Wallets"
+        ],
+        "summary": "Create a wallet",
+        "description": "Create a wallet under an account or agent. Network auto-selects based on currency + tenant config if not specified. Stablecoin wallets get an on-chain address; fiat-ledger wallets don't.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWalletInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Wallet created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Wallet"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner (account or agent) not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Wallets"
+        ],
+        "summary": "List wallets",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "account",
+                "agent"
+              ]
+            },
+            "required": false,
+            "name": "owner_type",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "owner_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "currency",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "frozen",
+                "deactivated"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated wallets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Wallet"
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "totalPages": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "limit",
+                        "total",
+                        "totalPages"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "pagination"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/wallets/external": {
+      "post": {
+        "tags": [
+          "Wallets"
+        ],
+        "summary": "Register an external (customer-owned) wallet",
+        "description": "Register an on-chain address the customer already controls — Sly tracks it but does not custody funds. Useful for payouts to user-controlled wallets.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExternalWalletInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "External wallet registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Wallet"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/wallets/{id}": {
+      "get": {
+        "tags": [
+          "Wallets"
+        ],
+        "summary": "Get a wallet",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wallet detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Wallet"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Wallets"
+        ],
+        "summary": "Update a wallet",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWalletInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Wallet"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Wallets"
+        ],
+        "summary": "Delete a wallet",
+        "description": "Fails if the wallet has a non-zero balance. Drain first via /withdraw.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Non-zero balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/wallets/{id}/balance": {
+      "get": {
+        "tags": [
+          "Wallets"
+        ],
+        "summary": "Get wallet balance",
+        "description": "Point-in-time balance snapshot. `available` = spendable now; `pending` = held by in-flight transfers.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WalletBalance"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/wallets/{id}/deposit": {
+      "post": {
+        "tags": [
+          "Wallets"
+        ],
+        "summary": "Deposit funds into this wallet",
+        "description": "Creates an internal transfer from the specified source wallet to this wallet. Both wallets must be same currency.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletDepositInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deposited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Wallet"
+                    },
+                    "transfer_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "transfer_id"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Insufficient balance on source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/wallets/{id}/withdraw": {
+      "post": {
+        "tags": [
+          "Wallets"
+        ],
+        "summary": "Withdraw funds from this wallet",
+        "description": "Move funds out — to another Sly wallet (internal) or an on-chain address (external). For large amounts may trigger [compliance hold](/settlement/overview#degraded-modes).",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletWithdrawInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Withdrawal initiated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Wallet"
+                    },
+                    "transfer_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "transfer_id"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Insufficient balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Wallet policy / KYA tier blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2880,6 +4135,545 @@
         "required": [
           "fromAccountId",
           "toAccountId",
+          "amount"
+        ]
+      },
+      "Agent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "frozen",
+              "suspended",
+              "revoked"
+            ]
+          },
+          "kya_tier": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "public_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ed25519 public key (base64)"
+          },
+          "connected": {
+            "type": "boolean",
+            "default": false,
+            "description": "True iff an SSE session is currently open"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "parent_account_id",
+          "name",
+          "status",
+          "kya_tier",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "AgentCredentials": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Bearer agent_* token — shown ONCE"
+          },
+          "warning": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "warning"
+        ]
+      },
+      "AgentAuthKey": {
+        "type": "object",
+        "properties": {
+          "keyId": {
+            "type": "string"
+          },
+          "publicKey": {
+            "type": "string",
+            "description": "base64 Ed25519 public key"
+          },
+          "privateKey": {
+            "type": "string",
+            "description": "base64 Ed25519 private key — shown ONCE"
+          },
+          "algorithm": {
+            "type": "string",
+            "enum": [
+              "ed25519"
+            ]
+          },
+          "warning": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyId",
+          "publicKey",
+          "privateKey",
+          "algorithm",
+          "warning"
+        ]
+      },
+      "CreateAgentInput": {
+        "type": "object",
+        "properties": {
+          "parentAccountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "kyaTier": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "default": 0
+          },
+          "generateKeypair": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, returns an Ed25519 keypair (private key shown once)"
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "parentAccountId",
+          "name"
+        ]
+      },
+      "UpdateAgentInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "AgentLimits": {
+        "type": "object",
+        "properties": {
+          "kya_tier": {
+            "type": "integer"
+          },
+          "agent_limits": {
+            "type": "object",
+            "properties": {
+              "per_tx": {
+                "type": "string"
+              },
+              "daily": {
+                "type": "string"
+              },
+              "monthly": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "per_tx",
+              "daily",
+              "monthly"
+            ]
+          },
+          "account_limits": {
+            "type": "object",
+            "properties": {
+              "per_tx": {
+                "type": "string"
+              },
+              "daily": {
+                "type": "string"
+              },
+              "monthly": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "per_tx",
+              "daily",
+              "monthly"
+            ]
+          },
+          "effective_limits": {
+            "type": "object",
+            "properties": {
+              "per_tx": {
+                "type": "string"
+              },
+              "daily": {
+                "type": "string"
+              },
+              "monthly": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "per_tx",
+              "daily",
+              "monthly"
+            ]
+          },
+          "used_today": {
+            "type": "string"
+          },
+          "used_this_month": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kya_tier",
+          "agent_limits",
+          "account_limits",
+          "effective_limits",
+          "used_today",
+          "used_this_month"
+        ]
+      },
+      "Wallet": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_type": {
+            "type": "string",
+            "enum": [
+              "account",
+              "agent"
+            ]
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "balance_available": {
+            "type": "string"
+          },
+          "balance_pending": {
+            "type": "string"
+          },
+          "network": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On-chain address (stablecoin wallets only)"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "frozen",
+              "deactivated"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "frozen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "frozen_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "owner_type",
+          "owner_id",
+          "currency",
+          "balance_available",
+          "balance_pending",
+          "status",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CreateWalletInput": {
+        "type": "object",
+        "properties": {
+          "owner_type": {
+            "type": "string",
+            "enum": [
+              "account",
+              "agent"
+            ]
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "currency": {
+            "type": "string",
+            "default": "USDC"
+          },
+          "network": {
+            "type": "string",
+            "description": "Auto-selected based on currency + tenant config if omitted"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "owner_type",
+          "owner_id"
+        ]
+      },
+      "CreateExternalWalletInput": {
+        "type": "object",
+        "properties": {
+          "owner_type": {
+            "type": "string",
+            "enum": [
+              "account",
+              "agent"
+            ]
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string",
+            "description": "The customer-owned on-chain address"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "owner_type",
+          "owner_id",
+          "currency",
+          "network",
+          "address"
+        ]
+      },
+      "WalletBalance": {
+        "type": "object",
+        "properties": {
+          "wallet_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "available": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "string"
+          },
+          "total": {
+            "type": "string"
+          },
+          "held": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "wallet_id",
+          "currency",
+          "available",
+          "pending",
+          "total",
+          "held",
+          "as_of"
+        ]
+      },
+      "UpdateWalletInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "WalletDepositInput": {
+        "type": "object",
+        "properties": {
+          "source_wallet_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_wallet_id",
+          "amount"
+        ]
+      },
+      "WalletWithdrawInput": {
+        "type": "object",
+        "properties": {
+          "destination_wallet_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "destination_address": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        },
+        "required": [
           "amount"
         ]
       }

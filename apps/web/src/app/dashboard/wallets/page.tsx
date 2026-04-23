@@ -19,16 +19,25 @@ import { formatDistanceToNow } from 'date-fns';
 import { SpendingProgressCompact } from '@/components/wallets/spending-progress';
 import { cn } from '@/lib/utils';
 
-// Helper to calculate spending progress and check near-limit status
-function getSpendingStatus(policy: SpendingPolicy | undefined) {
+// Helper to calculate spending progress and check near-limit status.
+// Prefer live computed spend (dailyActualSpent / monthlyActualSpent from
+// the wallet response) over the stale JSON counters so the status is
+// accurate for every wallet type, not just Circle.
+function getSpendingStatus(
+  policy: SpendingPolicy | undefined,
+  live?: { dailyActualSpent?: number; monthlyActualSpent?: number },
+) {
   if (!policy) return { dailyPercent: null, monthlyPercent: null, isNearLimit: false, hasPolicies: false };
 
+  const dailySpentLive = live?.dailyActualSpent ?? policy.dailySpent ?? 0;
+  const monthlySpentLive = live?.monthlyActualSpent ?? policy.monthlySpent ?? 0;
+
   const dailyPercent = policy.dailySpendLimit
-    ? Math.min(((policy.dailySpent || 0) / policy.dailySpendLimit) * 100, 100)
+    ? Math.min((dailySpentLive / policy.dailySpendLimit) * 100, 100)
     : null;
 
   const monthlyPercent = policy.monthlySpendLimit
-    ? Math.min(((policy.monthlySpent || 0) / policy.monthlySpendLimit) * 100, 100)
+    ? Math.min((monthlySpentLive / policy.monthlySpendLimit) * 100, 100)
     : null;
 
   const isNearLimit = (dailyPercent !== null && dailyPercent >= 80) ||
@@ -331,7 +340,10 @@ function WalletBalanceCard({ wallet, authToken, apiEnvironment, apiUrl, onDelete
 
       {/* Spending Policy Section (for agent wallets) */}
       {(() => {
-        const spendingStatus = getSpendingStatus(wallet.spendingPolicy);
+        const spendingStatus = getSpendingStatus(wallet.spendingPolicy, {
+          dailyActualSpent: (wallet as any).dailyActualSpent,
+          monthlyActualSpent: (wallet as any).monthlyActualSpent,
+        });
         const isAgentWallet = !!(wallet as any).managedByAgentId;
         const policy = wallet.spendingPolicy;
 
@@ -735,11 +747,17 @@ export default function WalletsPage() {
     const activeWallets = wallets.filter((w: any) => w.status === 'active').length;
     const totalBalance = wallets.reduce((sum: number, w: any) => sum + (w.balance || 0), 0);
     const withPolicies = agentWallets.filter((w: any) => {
-      const status = getSpendingStatus(w.spendingPolicy);
+      const status = getSpendingStatus(w.spendingPolicy, {
+        dailyActualSpent: w.dailyActualSpent,
+        monthlyActualSpent: w.monthlyActualSpent,
+      });
       return status.hasPolicies;
     }).length;
     const nearLimit = wallets.filter((w: any) => {
-      const status = getSpendingStatus(w.spendingPolicy);
+      const status = getSpendingStatus(w.spendingPolicy, {
+        dailyActualSpent: w.dailyActualSpent,
+        monthlyActualSpent: w.monthlyActualSpent,
+      });
       return status.isNearLimit;
     }).length;
 

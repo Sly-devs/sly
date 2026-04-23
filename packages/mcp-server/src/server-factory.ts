@@ -1977,6 +1977,13 @@ export function createMcpServer(
                 nonce: signed.nonce,
                 transferId: signed.transferId || null,
               },
+              // Propagate soft spending-policy warnings from x402-sign
+              // so the agent / caller can log or escalate before the
+              // wallet hits its cap. These are advisory — the payment
+              // already went through.
+              walletPolicyWarnings: Array.isArray(signed.warnings) && signed.warnings.length > 0
+                ? signed.warnings
+                : undefined,
               body: parsedBody,
             }, null, 2),
           }],

@@ -2836,6 +2836,93 @@ agents.post('/:id/x402-sign', async (c) => {
     );
   }
 
+  // Wallet-level spending policy enforcement. KYA caps run at the agent
+  // level; spending_policy runs at the wallet level so tenants can
+  // constrain specific signing addresses below the agent's KYA headroom
+  // (e.g. "Tina's EOA can only spend $5/day even though her tier allows
+  // $20"). Check daily + monthly caps against live spend from the
+  // transfers ledger so counters can't drift. Returns a structured
+  // response with nearLimit warnings when spending crosses ≥80%.
+  // ─────────────────────────────────────────────────────────────────
+  let nearLimitWarnings: Array<{ scope: 'daily' | 'monthly'; percent: number; limit: number; spent: number }> = [];
+  {
+    const { data: eoaWallet } = await supabase
+      .from('wallets')
+      .select('id, spending_policy, currency')
+      .eq('managed_by_agent_id', id)
+      .eq('tenant_id', ctx.tenantId)
+      .eq('environment', agentEnvironment)
+      .eq('wallet_type', 'agent_eoa')
+      .eq('status', 'active')
+      .maybeSingle();
+    const policy: any = (eoaWallet as any)?.spending_policy || {};
+    const dailyLimit = policy.dailySpendLimit != null ? Number(policy.dailySpendLimit) : null;
+    const monthlyLimit = policy.monthlySpendLimit != null ? Number(policy.monthlySpendLimit) : null;
+
+    if (dailyLimit != null || monthlyLimit != null) {
+      const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
+      const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
+      // Count completed + in-flight x402 spend attributed to this agent.
+      // Matches the same type-aware filter the wallet GET handler uses.
+      const buildSpendQuery = (sinceIso: string) => supabase
+        .from('transfers')
+        .select('amount')
+        .eq('tenant_id', ctx.tenantId)
+        .eq('environment', agentEnvironment)
+        .eq('initiated_by_id', id)
+        .in('status', ['completed', 'pending', 'processing'])
+        .in('type', ['x402', 'internal', 'mpp', 'ucp_settlement', 'acp_settlement'])
+        .gte('created_at', sinceIso);
+      const [dailyRes, monthlyRes] = await Promise.all([
+        dailyLimit != null ? buildSpendQuery(dayStart.toISOString()) : Promise.resolve({ data: [] as any[] }),
+        monthlyLimit != null ? buildSpendQuery(monthStart.toISOString()) : Promise.resolve({ data: [] as any[] }),
+      ]);
+      const sumAmount = (rows: any[] | null) => (rows || []).reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
+      const dailySpent = dailyLimit != null ? sumAmount((dailyRes as any).data) : 0;
+      const monthlySpent = monthlyLimit != null ? sumAmount((monthlyRes as any).data) : 0;
+
+      // Block when the new sign would cross the cap.
+      if (dailyLimit != null && dailySpent + amountUsdc > dailyLimit) {
+        return c.json({
+          error: {
+            code: 'WALLET_DAILY_LIMIT_EXCEEDED',
+            message: `Wallet daily cap would be exceeded. Already spent $${dailySpent.toFixed(4)} of $${dailyLimit} today; this sign adds $${amountUsdc.toFixed(4)}.`,
+            details: { scope: 'daily', limit: dailyLimit, spent: dailySpent, requested: amountUsdc, remaining: Math.max(0, dailyLimit - dailySpent) },
+          },
+        }, 403);
+      }
+      if (monthlyLimit != null && monthlySpent + amountUsdc > monthlyLimit) {
+        return c.json({
+          error: {
+            code: 'WALLET_MONTHLY_LIMIT_EXCEEDED',
+            message: `Wallet monthly cap would be exceeded. Already spent $${monthlySpent.toFixed(4)} of $${monthlyLimit} this month; this sign adds $${amountUsdc.toFixed(4)}.`,
+            details: { scope: 'monthly', limit: monthlyLimit, spent: monthlySpent, requested: amountUsdc, remaining: Math.max(0, monthlyLimit - monthlySpent) },
+          },
+        }, 403);
+      }
+
+      // Soft warnings at ≥80% post-sign utilization. Don't block.
+      const postDaily = dailyLimit != null ? (dailySpent + amountUsdc) / dailyLimit : 0;
+      const postMonthly = monthlyLimit != null ? (monthlySpent + amountUsdc) / monthlyLimit : 0;
+      if (dailyLimit != null && postDaily >= 0.8) {
+        nearLimitWarnings.push({
+          scope: 'daily',
+          percent: Math.round(postDaily * 100),
+          limit: dailyLimit,
+          spent: dailySpent + amountUsdc,
+        });
+      }
+      if (monthlyLimit != null && postMonthly >= 0.8) {
+        nearLimitWarnings.push({
+          scope: 'monthly',
+          percent: Math.round(postMonthly * 100),
+          limit: monthlyLimit,
+          spent: monthlySpent + amountUsdc,
+        });
+      }
+    }
+  }
+
   // Fetch the agent's secp256k1 key
   const { getAgentEvmKey, signTransferWithAuthorization, usdcDomain, generateNonce } =
     await import('../services/x402/signer.js');
@@ -2981,6 +3068,17 @@ agents.post('/:id/x402-sign', async (c) => {
     validAfter: signed.params.validAfter,
     validBefore: signed.params.validBefore,
     nonce: signed.params.nonce,
+    // Soft warnings when post-sign utilization crosses ≥80% of a
+    // wallet-level spending cap. Agents/clients can log or escalate;
+    // this does NOT block the sign (which already succeeded).
+    warnings: nearLimitWarnings.length > 0 ? nearLimitWarnings.map(w => ({
+      code: w.scope === 'daily' ? 'WALLET_DAILY_LIMIT_NEAR' : 'WALLET_MONTHLY_LIMIT_NEAR',
+      message: `Wallet ${w.scope} spend will reach ${w.percent}% of cap after this sign ($${w.spent.toFixed(4)} of $${w.limit}).`,
+      scope: w.scope,
+      percent: w.percent,
+      limit: w.limit,
+      spent: w.spent,
+    })) : undefined,
   });
 });
 

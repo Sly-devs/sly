@@ -1575,28 +1575,70 @@ export function createMcpServer(
           headers: { ...baseHeaders, 'X-PAYMENT': headerValue },
         };
         if (body !== undefined) secondInit.body = body;
+        const tStart = Date.now();
         const secondRes = await fetch(url, secondInit);
         const secondText = await secondRes.text();
+        const durationMs = Date.now() - tStart;
         const paid = secondRes.status >= 200 && secondRes.status < 300;
         const paymentResponseHeader = secondRes.headers.get('x-payment-response') || null;
+        const contentType = secondRes.headers.get('content-type') || null;
+        const parsedBody = safeParseJson(secondText);
+        const bodyIsJson = typeof parsedBody === 'object' && parsedBody !== null;
 
-        // If the facilitator settled and returned a tx hash, reconcile the
-        // ledger so the transfer row flips from 'pending' to 'completed'.
-        // Fire-and-forget style — the paid response is still returned to the
-        // caller even if reconciliation fails.
+        // Capture response metadata so the ledger + dashboard can tell
+        // "paid and got real data" from "paid but the upstream returned an
+        // empty 500 / error envelope / garbage." Body is capped at 2KB; a
+        // known subset of headers captured for debugging (never auth).
+        const responseMetadata = {
+          status: secondRes.status,
+          statusText: secondRes.statusText,
+          contentType,
+          sizeBytes: secondText.length,
+          durationMs,
+          bodyPreview: secondText.slice(0, 2048),
+          bodyIsJson,
+          headers: {
+            ...(paymentResponseHeader ? { 'x-payment-response': paymentResponseHeader } : {}),
+            ...(secondRes.headers.get('www-authenticate') ? { 'www-authenticate': secondRes.headers.get('www-authenticate') as string } : {}),
+            ...(secondRes.headers.get('x-error') ? { 'x-error': secondRes.headers.get('x-error') as string } : {}),
+          },
+        };
+
+        // Always write back to the ledger. Success path gets tx_hash +
+        // response_metadata; failure path gets failure_reason +
+        // response_metadata. This keeps the row terminal so the
+        // x402-expired-cleanup worker doesn't later cancel a row we already
+        // have a final answer for.
         let settlementRecorded: any = null;
         const receipt = decodeX402PaymentResponse(paymentResponseHeader);
-        if (paid && receipt?.transaction && signed.transferId) {
+        if (signed.transferId) {
           try {
+            const recordBody: any = { responseMetadata };
+            if (paid && receipt?.transaction) {
+              recordBody.txHash = receipt.transaction;
+              if (receipt.network) recordBody.network = receipt.network;
+              if (receipt.payer) recordBody.payer = receipt.payer;
+            } else if (!paid) {
+              // Extract the most useful failure signal we can from the body.
+              const reason = (bodyIsJson && (parsedBody as any).error)
+                ? (typeof (parsedBody as any).error === 'string'
+                    ? (parsedBody as any).error
+                    : (parsedBody as any).error?.message || JSON.stringify((parsedBody as any).error).slice(0, 200))
+                : `HTTP ${secondRes.status} ${secondRes.statusText || ''}`.trim();
+              recordBody.failureReason = String(reason).slice(0, 500);
+            }
             const recordRes = await ctx.sly.request(`/v1/transfers/${signed.transferId}/record-settlement`, {
               method: 'POST',
-              body: JSON.stringify({
-                txHash: receipt.transaction,
-                network: receipt.network || undefined,
-                payer: receipt.payer || undefined,
-              }),
+              body: JSON.stringify(recordBody),
             });
-            settlementRecorded = { ok: true, transferId: signed.transferId, txHash: receipt.transaction, response: recordRes };
+            settlementRecorded = {
+              ok: true,
+              transferId: signed.transferId,
+              outcome: paid ? 'completed' : 'cancelled',
+              txHash: recordBody.txHash || null,
+              failureReason: recordBody.failureReason || null,
+              response: recordRes,
+            };
           } catch (e: any) {
             settlementRecorded = { ok: false, transferId: signed.transferId, error: e?.message || String(e) };
           }
@@ -1608,6 +1650,9 @@ export function createMcpServer(
             text: JSON.stringify({
               paid,
               status: secondRes.status,
+              durationMs,
+              contentType,
+              sizeBytes: secondText.length,
               paymentResponseHeader,
               settlement: receipt,
               ledgerReconciled: settlementRecorded,
@@ -1619,7 +1664,7 @@ export function createMcpServer(
                 nonce: signed.nonce,
                 transferId: signed.transferId || null,
               },
-              body: safeParseJson(secondText),
+              body: parsedBody,
             }, null, 2),
           }],
         };

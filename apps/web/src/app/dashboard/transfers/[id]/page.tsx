@@ -554,6 +554,59 @@ export default function TransferDetailPage() {
                   Status <strong>pending</strong> means the authorization was signed and recorded — the facilitator has not yet submitted it on-chain, or hasn't reported settlement back.
                   Once the facilitator calls <code>transferWithAuthorization</code> and the tx is mined, the settlement tx hash populates above and status flips to <strong>completed</strong>.
                 </div>
+
+                {/* Response capture — lets the owner distinguish "paid and got real data"
+                    from "paid but the upstream returned garbage / 500 / error envelope." */}
+                {m.response && (() => {
+                  const r = m.response;
+                  const isSuccess = typeof r.status === 'number' && r.status >= 200 && r.status < 300;
+                  return (
+                    <div className="mt-6 p-4 bg-white/70 dark:bg-gray-800/70 rounded-xl border border-purple-100 dark:border-purple-900">
+                      <h4 className="text-sm font-medium text-purple-700 dark:text-purple-400 mb-3 flex items-center gap-2">
+                        <FileText className="h-4 w-4" />
+                        Response from vendor
+                        <span className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                          isSuccess
+                            ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300'
+                        }`}>
+                          HTTP {r.status ?? '?'}{r.statusText ? ` · ${r.statusText}` : ''}
+                        </span>
+                      </h4>
+                      <dl className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3">
+                        <div>
+                          <dt className="text-purple-600 dark:text-gray-400 text-xs">Size</dt>
+                          <dd className="font-mono text-purple-900 dark:text-white">{r.sizeBytes != null ? `${r.sizeBytes} B` : '—'}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-purple-600 dark:text-gray-400 text-xs">Duration</dt>
+                          <dd className="font-mono text-purple-900 dark:text-white">{r.durationMs != null ? `${r.durationMs} ms` : '—'}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-purple-600 dark:text-gray-400 text-xs">Content-Type</dt>
+                          <dd className="font-mono text-xs text-purple-900 dark:text-white truncate" title={r.contentType || ''}>{r.contentType || '—'}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-purple-600 dark:text-gray-400 text-xs">Body</dt>
+                          <dd className="font-mono text-purple-900 dark:text-white">{r.bodyIsJson ? 'JSON' : (r.sizeBytes === 0 ? 'empty' : 'text')}</dd>
+                        </div>
+                      </dl>
+                      {r.bodyPreview != null && r.bodyPreview.length > 0 && (
+                        <div className="mt-2">
+                          <div className="text-xs text-purple-600 dark:text-gray-400 mb-1">
+                            Body preview {r.sizeBytes > 2048 ? `(first 2048 of ${r.sizeBytes} bytes)` : `(${r.sizeBytes} bytes, full)`}
+                          </div>
+                          <pre className="font-mono text-[11px] bg-gray-50 dark:bg-gray-950 p-3 rounded border border-gray-200 dark:border-gray-800 text-gray-800 dark:text-gray-200 overflow-x-auto whitespace-pre-wrap break-all max-h-64">{r.bodyPreview}</pre>
+                        </div>
+                      )}
+                      {r.sizeBytes === 0 && (
+                        <div className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                          Vendor returned empty body — likely a runtime error on their side even if the HTTP code was 2xx.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}

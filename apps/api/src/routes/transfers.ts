@@ -725,17 +725,41 @@ transfers.post('/:id/cancel', async (c) => {
 
 // ============================================
 // POST /v1/transfers/:id/record-settlement
-// Called by x402_fetch (or any client holding the X-PAYMENT-RESPONSE receipt)
-// after an external x402 facilitator settles the signed auth on-chain. Flips
-// the row to 'completed' and records the settlement tx hash so the dashboard
-// stops showing it as 'pending' forever.
+// Called by x402_fetch after it submits X-PAYMENT. Records the outcome
+// regardless of success: on paid, flips the row to 'completed' with the
+// facilitator's tx hash; on failure, marks it cancelled with the reason;
+// always captures response metadata (status, size, body preview, duration,
+// content-type) so the dashboard can distinguish "paid but the upstream
+// returned garbage" from "paid and got real data."
+//
+// Body preview is capped at ~2KB to keep rows small and avoid storing
+// long LLM outputs / transcriptions in the ledger.
 // ============================================
+const responseMetadataSchema = z.object({
+  status: z.number().int().optional(),
+  statusText: z.string().optional(),
+  contentType: z.string().optional(),
+  sizeBytes: z.number().int().nonnegative().optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+  bodyPreview: z.string().max(2048).optional(),
+  bodyIsJson: z.boolean().optional(),
+  headers: z.record(z.string()).optional(),   // only a curated subset (facilitator-relevant)
+}).optional();
+
 const recordSettlementSchema = z.object({
-  txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/, 'tx_hash must be 0x + 64 hex chars'),
-  network: z.string().optional(),       // echo what the facilitator reported ('base', 'base-sepolia', …)
-  payer: z.string().optional(),         // EOA that actually paid — sanity-checkable against protocol_metadata.from_address
+  // Success path: on-chain tx hash from the facilitator receipt.
+  txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/, 'tx_hash must be 0x + 64 hex chars').optional(),
+  network: z.string().optional(),
+  payer: z.string().optional(),
   settledAt: z.string().datetime().optional(),
-});
+  // Failure path: no tx hash, just a reason.
+  failureReason: z.string().max(500).optional(),
+  // Always captured when the client has it — doesn't require either path.
+  responseMetadata: responseMetadataSchema,
+}).refine(
+  (d) => !!(d.txHash || d.failureReason || d.responseMetadata),
+  { message: 'Provide at least one of txHash, failureReason, or responseMetadata' },
+);
 
 transfers.post('/:id/record-settlement', async (c) => {
   const ctx = c.get('ctx');
@@ -748,7 +772,7 @@ transfers.post('/:id/record-settlement', async (c) => {
   if (!parsed.success) {
     throw new ValidationError('Invalid body', parsed.error.issues);
   }
-  const { txHash, network, payer, settledAt } = parsed.data;
+  const { txHash, network, payer, settledAt, failureReason, responseMetadata } = parsed.data;
 
   const supabase = createClient();
 
@@ -766,10 +790,11 @@ transfers.post('/:id/record-settlement', async (c) => {
     throw new ValidationError('record-settlement only applies to external x402 transfers');
   }
 
-  // Idempotency: if already recorded with the same tx_hash, return the row
-  // unchanged. If the hashes differ, refuse — two different settlements for
-  // the same signed auth would indicate a facilitator bug or replay.
-  if ((row as any).tx_hash) {
+  const pm: any = (row as any).protocol_metadata || {};
+
+  // Idempotency on success: if this row already carries the same tx_hash,
+  // return unchanged. Different hashes signal a replay/facilitator bug.
+  if (txHash && (row as any).tx_hash) {
     if ((row as any).tx_hash.toLowerCase() === txHash.toLowerCase()) {
       return c.json({ data: mapTransferFromDb(row), already_recorded: true });
     }
@@ -778,36 +803,59 @@ transfers.post('/:id/record-settlement', async (c) => {
     throw err;
   }
 
-  if (row.status !== 'pending') {
-    throw new ValidationError(`Cannot record settlement for transfer in status '${row.status}'`);
+  // Only pending rows can transition. Already-terminal rows just get their
+  // response metadata merged in (non-destructive).
+  const isTerminal = row.status !== 'pending';
+  if (isTerminal && (txHash || failureReason)) {
+    throw new ValidationError(`Cannot transition transfer in status '${row.status}'`);
   }
 
-  // Sanity: if the facilitator says the payer address, it should match our
-  // stored from_address. Soft warn only — don't fail the write.
-  const pm: any = (row as any).protocol_metadata || {};
+  // Sanity: if the facilitator reports the payer, it should match our stored
+  // from_address. Soft warn; don't fail the write.
   if (payer && pm.from_address && payer.toLowerCase() !== String(pm.from_address).toLowerCase()) {
     console.warn(`[record-settlement] payer mismatch on ${id}: facilitator=${payer} ledger=${pm.from_address}`);
   }
 
-  const now = settledAt || new Date().toISOString();
-  const { data: updated, error: updateErr } = await (supabase.from('transfers') as any)
-    .update({
+  const nowIso = new Date().toISOString();
+  const nextProtocolMetadata: any = { ...pm };
+  if (responseMetadata) nextProtocolMetadata.response = responseMetadata;
+
+  let updatePayload: any = { protocol_metadata: nextProtocolMetadata };
+  let auditAction = 'response_recorded';
+
+  if (txHash) {
+    const settledAtIso = settledAt || nowIso;
+    updatePayload = {
+      ...updatePayload,
       status: 'completed',
       tx_hash: txHash,
-      completed_at: now,
-      settled_at: now,
+      completed_at: settledAtIso,
+      settled_at: settledAtIso,
       settlement_network: network || (row as any).settlement_network,
       protocol_metadata: {
-        ...pm,
+        ...nextProtocolMetadata,
         settlement: {
           facilitator_payer: payer || null,
           facilitator_network: network || null,
-          recorded_at: new Date().toISOString(),
+          recorded_at: nowIso,
           recorded_by_actor_type: ctx.actorType,
           recorded_by_actor_id: ctx.actorId,
         },
       },
-    })
+    };
+    auditAction = 'settlement_recorded';
+  } else if (failureReason) {
+    updatePayload = {
+      ...updatePayload,
+      status: 'cancelled',
+      failed_at: nowIso,
+      failure_reason: failureReason.slice(0, 500),
+    };
+    auditAction = 'failure_recorded';
+  }
+
+  const { data: updated, error: updateErr } = await (supabase.from('transfers') as any)
+    .update(updatePayload)
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
     .select()
@@ -822,11 +870,16 @@ transfers.post('/:id/record-settlement', async (c) => {
     tenantId: ctx.tenantId,
     entityType: 'transfer',
     entityId: id,
-    action: 'settlement_recorded',
+    action: auditAction,
     actorType: ctx.actorType,
     actorId: ctx.actorId,
     actorName: ctx.actorName,
-    metadata: { tx_hash: txHash, network: network || null },
+    metadata: {
+      tx_hash: txHash || null,
+      network: network || null,
+      failure_reason: failureReason || null,
+      response_status: responseMetadata?.status ?? null,
+    },
   });
 
   return c.json({

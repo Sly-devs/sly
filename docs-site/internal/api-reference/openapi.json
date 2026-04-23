@@ -3879,8 +3879,8 @@
         "tags": [
           "ACP"
         ],
-        "summary": "Create an ACP checkout session",
-        "description": "Opens an Agentic Commerce Protocol checkout session. The returned client_secret is used to complete payment with the chosen payment method.",
+        "summary": "Create a checkout session",
+        "description": "Opens an Agentic Commerce Protocol session. Returns `client_secret` — use with Stripe.js / Stripe Elements to collect payment client-side.",
         "x-visibility": "public",
         "security": [
           {
@@ -3940,9 +3940,379 @@
                 }
               }
             }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "ACP"
+        ],
+        "summary": "List checkouts",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created",
+                "pending_payment",
+                "paid",
+                "fulfilled",
+                "failed",
+                "expired",
+                "cancelled"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "merchant_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "since",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated checkouts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ACPCheckout"
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "number"
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        },
+                        "totalPages": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "limit",
+                        "total",
+                        "totalPages"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "pagination"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/acp/checkouts/batch": {
+      "post": {
+        "tags": [
+          "ACP"
+        ],
+        "summary": "Batch-create checkouts",
+        "description": "Create up to 100 checkouts in one call. Useful for marketplace baskets where one agent purchase spans many merchants.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "checkouts": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/CreateACPCheckoutInput"
+                    },
+                    "minItems": 1,
+                    "maxItems": 100
+                  },
+                  "idempotency_key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "checkouts"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Batch created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ACPCheckout"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/acp/checkouts/{id}": {
+      "get": {
+        "tags": [
+          "ACP"
+        ],
+        "summary": "Get a checkout",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Checkout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ACPCheckout"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
           },
           "404": {
-            "description": "Merchant not found",
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "ACP"
+        ],
+        "summary": "Update checkout",
+        "description": "Swap items, shipping address, or payment method before completion.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateACPCheckoutInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ACPCheckout"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Invalid state for update",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ACP"
+        ],
+        "summary": "Delete a checkout",
+        "description": "Allowed only for un-paid checkouts. Soft-delete retains audit trail.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Cannot delete paid checkout",
             "content": {
               "application/json": {
                 "schema": {
@@ -3969,13 +4339,292 @@
         }
       }
     },
+    "/v1/acp/checkouts/{id}/complete": {
+      "post": {
+        "tags": [
+          "ACP"
+        ],
+        "summary": "Complete payment",
+        "description": "Execute payment. For card checkouts, pass `payment_method_id` (typically from Stripe Elements or SetupIntent). For stablecoin, pass `from_wallet_id`.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "payment_method_id": {
+                    "type": "string"
+                  },
+                  "from_wallet_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "idempotency_key": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Paid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ACPCheckout"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Card declined or balance insufficient",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "KYA tier or wallet policy blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/acp/checkouts/{id}/cancel": {
+      "patch": {
+        "tags": [
+          "ACP"
+        ],
+        "summary": "Cancel a checkout",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ACPCheckout"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already paid or cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/acp/analytics": {
+      "get": {
+        "tags": [
+          "ACP"
+        ],
+        "summary": "ACP checkout analytics",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "24h",
+                "7d",
+                "30d",
+                "90d"
+              ],
+              "default": "30d"
+            },
+            "required": false,
+            "name": "period",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Analytics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total_checkouts": {
+                      "type": "number"
+                    },
+                    "total_volume": {
+                      "type": "string"
+                    },
+                    "completion_rate": {
+                      "type": "number"
+                    },
+                    "by_status": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "number"
+                      }
+                    }
+                  },
+                  "required": [
+                    "total_checkouts",
+                    "total_volume",
+                    "completion_rate",
+                    "by_status"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/agent-card": {
+      "get": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "AP2 agent card",
+        "description": "Public AP2 capability advertisement — issuer, public key, supported scopes. Used by merchants to verify mandates offline.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent card",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AP2AgentCard"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/ap2/mandates": {
       "post": {
         "tags": [
           "AP2"
         ],
-        "summary": "Create an AP2 mandate",
-        "description": "A mandate is a signed authorization that lets an agent spend on behalf of an account within defined scope. The returned mandate_jwt can be presented at any AP2-compliant merchant.",
+        "summary": "Create a mandate",
+        "description": "Issue a signed mandate authorizing an agent to spend within a scope. Returns `mandate_jwt` — present on every execution.",
         "x-visibility": "public",
         "security": [
           {
@@ -4035,9 +4684,169 @@
                 }
               }
             }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "List mandates",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "agent_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "account_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "paused",
+                "suspended",
+                "cancelled",
+                "revoked",
+                "expired"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated mandates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AP2Mandate"
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "number"
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        },
+                        "totalPages": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "limit",
+                        "total",
+                        "totalPages"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "pagination"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/mandates/{id}": {
+      "get": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "Get a mandate",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Mandate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AP2Mandate"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
           },
           "404": {
-            "description": "Account or agent not found",
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -4056,6 +4865,739 @@
                         "details": {}
                       }
                     }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "Update mandate scope",
+        "description": "Modify caps or merchant rules in-place. Prior scope retained in audit log.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scope": {
+                    "$ref": "#/components/schemas/AP2MandateScope"
+                  },
+                  "expires_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AP2Mandate"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/mandates/{id}/cancel": {
+      "patch": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "Cancel a mandate",
+        "description": "Soft-cancel — mandate goes to `cancelled`, audit trail preserved.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canceld",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AP2Mandate"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Invalid state transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/mandates/{id}/activate": {
+      "post": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "Activate a mandate",
+        "description": "Resume a paused or suspended mandate.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Activated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AP2Mandate"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Invalid state transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/mandates/{id}/suspend": {
+      "post": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "Suspend a mandate",
+        "description": "Temporarily disable — no executions allowed until resumed.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Suspendd",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AP2Mandate"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Invalid state transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/mandates/{id}/revoke": {
+      "post": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "Revoke a mandate",
+        "description": "Hard revoke — mandate state `revoked`, cannot be reactivated.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AP2Mandate"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Invalid state transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/mandates/{id}/execute": {
+      "post": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "Execute a mandate",
+        "description": "Each execution re-checks scope (amount within caps, merchant allowed, not expired) + day/month running totals + KYA tier + wallet policy. If any check fails, returns 403 with the specific reason.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteAP2MandateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Executed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AP2MandateExecution"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Scope, policy, or KYA tier check failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Mandate inactive or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/payments": {
+      "post": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "Initiate an AP2 payment",
+        "description": "Low-level payment primitive used by mandate executions. Rarely called directly — use /mandates/:id/execute.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mandate_id": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "currency": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mandate_id",
+                  "amount",
+                  "currency"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Payment initiated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AP2Payment"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/payments/{id}": {
+      "get": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "Get a payment",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AP2Payment"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/payments/{id}/settle": {
+      "post": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "Settle an AP2 payment",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Settled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AP2Payment"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already settled or in invalid state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ap2/analytics": {
+      "get": {
+        "tags": [
+          "AP2"
+        ],
+        "summary": "AP2 analytics",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "24h",
+                "7d",
+                "30d",
+                "90d"
+              ],
+              "default": "30d"
+            },
+            "required": false,
+            "name": "period",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "active_mandates": {
+                      "type": "number"
+                    },
+                    "executions_total": {
+                      "type": "number"
+                    },
+                    "volume": {
+                      "type": "string"
+                    },
+                    "top_merchants": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "merchant_id": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "number"
+                          },
+                          "volume": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "merchant_id",
+                          "count",
+                          "volume"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "active_mandates",
+                    "executions_total",
+                    "volume",
+                    "top_merchants"
                   ]
                 }
               }
@@ -4164,6 +5706,1101 @@
                   },
                   "required": [
                     "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/pay": {
+      "post": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "One-shot micropayment",
+        "description": "Single M2M payment without opening a session. Useful for first-call or one-off payments.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "service_url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "amount": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "currency": {
+                    "type": "string",
+                    "default": "USDC"
+                  },
+                  "agent_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "wallet_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "service_url",
+                  "amount",
+                  "agent_id",
+                  "wallet_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Paid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MPPTransfer"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/sessions": {
+      "post": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "Open a session",
+        "description": "Pre-deposit a budget for streaming micropayments to a service. Sign vouchers via /sessions/:id/voucher for each call. Close via /sessions/:id/close.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "service_url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "deposit_amount": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "currency": {
+                    "type": "string",
+                    "default": "USDC"
+                  },
+                  "agent_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "wallet_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "service_url",
+                  "deposit_amount",
+                  "agent_id",
+                  "wallet_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MPPSession"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Wallet balance insufficient for deposit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "List sessions",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "agent_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "active",
+                "closed",
+                "exhausted",
+                "error"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MPPSession"
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "number"
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        },
+                        "totalPages": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "limit",
+                        "total",
+                        "totalPages"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "pagination"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/sessions/{sessionId}": {
+      "get": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "Get a session",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "sessionId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session + voucher list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MPPSession"
+                    },
+                    "vouchers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MPPVoucher"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "vouchers"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/sessions/{sessionId}/voucher": {
+      "post": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "Sign a voucher",
+        "description": "Sign a voucher for a unit of service. Budget decrements; remaining balance returned in response.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "sessionId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "request_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "amount"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Voucher signed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MPPVoucher"
+                    },
+                    "budget_remaining": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "budget_remaining"
+                  ]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Insufficient session balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Session closed / exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/sessions/{sessionId}/close": {
+      "post": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "Close session",
+        "description": "Finalize all signed vouchers, debit the agent wallet, return unspent deposit.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "sessionId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Closed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MPPSession"
+                    },
+                    "refunded": {
+                      "type": "string"
+                    },
+                    "settled": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "refunded",
+                    "settled"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/sessions/{sessionId}/stream": {
+      "post": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "Stream session events",
+        "description": "Server-sent event stream of voucher activity for a session. Useful for live dashboards during a long-running session.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "sessionId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream — each event includes voucher_id, amount, budget_remaining",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/transfers": {
+      "get": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "List MPP transfers",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "session_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "service_url",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated transfers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MPPTransfer"
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "number"
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        },
+                        "totalPages": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "limit",
+                        "total",
+                        "totalPages"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "pagination"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/wallets/provision": {
+      "post": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "Provision MPP wallet",
+        "description": "Provision a Tempo wallet capable of voucher signing. One-time per agent.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "agent_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "agent_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Provisioned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "wallet_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "voucher_key": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "wallet_id",
+                    "voucher_key"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/services": {
+      "get": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "Discover MPP services",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "category",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "search",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Services",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MPPService"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/services/{domain}/pricing": {
+      "get": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "Probe service pricing",
+        "description": "Live-probe a service's MPP pricing endpoint (HEAD / well-known probe).",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "domain",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pricing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MPPService"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Service does not advertise MPP",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/receipts/verify": {
+      "post": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "Verify a receipt",
+        "description": "Service-side: verify a voucher claim against the issuing session.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "voucher_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "voucher_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "valid": {
+                      "type": "boolean"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "string"
+                    },
+                    "issued_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "valid"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/analytics": {
+      "get": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "MPP analytics",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "24h",
+                "7d",
+                "30d",
+                "90d",
+                "1y"
+              ],
+              "default": "30d"
+            },
+            "required": false,
+            "name": "period",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "transfer_volume": {
+                      "type": "string"
+                    },
+                    "fees": {
+                      "type": "string"
+                    },
+                    "sessions_opened": {
+                      "type": "number"
+                    },
+                    "budget_utilization": {
+                      "type": "number",
+                      "description": "Average ratio of budget spent to deposited"
+                    }
+                  },
+                  "required": [
+                    "transfer_volume",
+                    "fees",
+                    "sessions_opened",
+                    "budget_utilization"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mpp/reconciliation": {
+      "get": {
+        "tags": [
+          "MPP"
+        ],
+        "summary": "Receipt-level reconciliation",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "session_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "since",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "until",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reconciliation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "matched": {
+                      "type": "number"
+                    },
+                    "unmatched_ledger": {
+                      "type": "number"
+                    },
+                    "unmatched_receipts": {
+                      "type": "number"
+                    },
+                    "discrepancies": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "matched",
+                    "unmatched_ledger",
+                    "unmatched_receipts",
+                    "discrepancies"
                   ]
                 }
               }
@@ -10556,46 +13193,6 @@
           "created_at"
         ]
       },
-      "ACPCheckout": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "created",
-              "pending_payment",
-              "paid",
-              "fulfilled",
-              "failed",
-              "expired",
-              "cancelled"
-            ]
-          },
-          "total": {
-            "type": "string"
-          },
-          "currency": {
-            "type": "string"
-          },
-          "client_secret": {
-            "type": "string"
-          },
-          "expires_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "status",
-          "total",
-          "currency",
-          "expires_at"
-        ]
-      },
       "ACPItem": {
         "type": "object",
         "properties": {
@@ -10621,7 +13218,10 @@
         ]
       },
       "ACPAddress": {
-        "type": "object",
+        "type": [
+          "object",
+          "null"
+        ],
         "properties": {
           "line1": {
             "type": "string"
@@ -10651,6 +13251,82 @@
           "country"
         ]
       },
+      "ACPCheckout": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "merchant_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "created",
+              "pending_payment",
+              "paid",
+              "fulfilled",
+              "failed",
+              "expired",
+              "cancelled"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ACPItem"
+            }
+          },
+          "total": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "shipping_address": {
+            "$ref": "#/components/schemas/ACPAddress"
+          },
+          "payment_method": {
+            "type": "string",
+            "enum": [
+              "card",
+              "bank",
+              "stablecoin"
+            ],
+            "default": "card"
+          },
+          "client_secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "merchant_id",
+          "status",
+          "items",
+          "total",
+          "currency",
+          "expires_at",
+          "created_at"
+        ]
+      },
       "CreateACPCheckoutInput": {
         "type": "object",
         "properties": {
@@ -10665,7 +13341,14 @@
             "minItems": 1
           },
           "shipping_address": {
-            "$ref": "#/components/schemas/ACPAddress"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ACPAddress"
+              },
+              {
+                "type": "object"
+              }
+            ]
           },
           "payment_method": {
             "type": "string",
@@ -10684,6 +13367,33 @@
         "required": [
           "merchant_id",
           "items"
+        ]
+      },
+      "AP2AgentCard": {
+        "type": "object",
+        "properties": {
+          "issuer": {
+            "type": "string"
+          },
+          "public_key": {
+            "type": "string"
+          },
+          "jwks_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "supported_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "issuer",
+          "public_key",
+          "jwks_url",
+          "supported_scopes"
         ]
       },
       "AP2MandateScope": {
@@ -10733,10 +13443,20 @@
           "id": {
             "type": "string"
           },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid"
+          },
           "status": {
             "type": "string",
             "enum": [
               "active",
+              "paused",
+              "suspended",
               "cancelled",
               "revoked",
               "expired"
@@ -10744,10 +13464,15 @@
           },
           "mandate_jwt": {
             "type": "string",
-            "description": "Ed25519-signed JWT; verifiable offline"
+            "description": "Ed25519-signed JWT verifiable offline via the JWKS endpoint"
           },
           "scope": {
             "$ref": "#/components/schemas/AP2MandateScope"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
           },
           "expires_at": {
             "type": "string",
@@ -10760,6 +13485,8 @@
         },
         "required": [
           "id",
+          "account_id",
+          "agent_id",
           "status",
           "mandate_jwt",
           "scope",
@@ -10795,6 +13522,143 @@
           "agent_id",
           "scope",
           "expires_at"
+        ]
+      },
+      "AP2MandateExecution": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mandate_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "merchant_id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transfer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed"
+            ]
+          },
+          "executed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "remaining_daily": {
+            "type": "string"
+          },
+          "remaining_monthly": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "mandate_id",
+          "agent_id",
+          "merchant_id",
+          "amount",
+          "currency",
+          "status",
+          "executed_at",
+          "remaining_daily",
+          "remaining_monthly"
+        ]
+      },
+      "ExecuteAP2MandateInput": {
+        "type": "object",
+        "properties": {
+          "merchant_id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "currency": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "merchant_id",
+          "amount",
+          "currency"
+        ]
+      },
+      "AP2Payment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mandate_id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "settled",
+              "failed"
+            ]
+          },
+          "settled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "mandate_id",
+          "amount",
+          "currency",
+          "status",
+          "created_at"
         ]
       },
       "A2AAgentCardSummary": {
@@ -10860,6 +13724,206 @@
           "name",
           "skills",
           "availability"
+        ]
+      },
+      "MPPTransfer": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "service_url",
+          "amount",
+          "currency",
+          "status",
+          "created_at"
+        ]
+      },
+      "MPPSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "service_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "wallet_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deposit_amount": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "budget_remaining": {
+            "type": "string"
+          },
+          "budget_used": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "active",
+              "closed",
+              "exhausted",
+              "error"
+            ]
+          },
+          "voucher_key": {
+            "type": "string",
+            "description": "Ed25519 public key for voucher verification"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "service_url",
+          "agent_id",
+          "wallet_id",
+          "deposit_amount",
+          "currency",
+          "budget_remaining",
+          "budget_used",
+          "status",
+          "voucher_key",
+          "expires_at",
+          "created_at"
+        ]
+      },
+      "MPPVoucher": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signed_voucher": {
+            "type": "string",
+            "description": "Signed voucher the service verifies to collect payment"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "amount",
+          "signed_voucher",
+          "created_at"
+        ]
+      },
+      "MPPService": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "pricing": {
+            "type": "object",
+            "properties": {
+              "base_price": {
+                "type": "string"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "unit": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "base_price",
+              "currency",
+              "unit"
+            ]
+          },
+          "accepts_sessions": {
+            "type": "boolean"
+          },
+          "min_deposit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "domain",
+          "pricing",
+          "accepts_sessions"
         ]
       },
       "MCPResponse": {

@@ -651,41 +651,6 @@ agents.get('/stats/skills-count', async (c) => {
 });
 
 // ============================================
-// GET /v1/agents/evm-keys — tenant-scoped listing of agent x402 EOAs.
-// Must be registered BEFORE /:id so Hono doesn't treat "evm-keys" as an
-// agent ID. Used by /dashboard/wallets to render each agent's on-chain
-// address as a wallet card alongside Circle custodial wallets. Balance
-// is fetched client-side via Base RPC — no round-trip through the API.
-// ============================================
-agents.get('/evm-keys', async (c) => {
-  const ctx = c.get('ctx');
-  const supabase = createClient();
-
-  const { data, error } = await (supabase.from('agent_signing_keys') as any)
-    .select('agent_id, ethereum_address, smart_account_address, status, created_at, agents!inner(id, name, status, environment)')
-    .eq('tenant_id', ctx.tenantId)
-    .eq('algorithm', 'secp256k1')
-    .eq('status', 'active');
-
-  if (error) {
-    console.error('[agents:evm-keys] fetch failed', error);
-    throw new Error('Failed to list agent EVM keys');
-  }
-
-  const rows = (data || []).map((r: any) => ({
-    agentId: r.agent_id,
-    agentName: r.agents?.name || 'Unknown',
-    agentStatus: r.agents?.status,
-    environment: r.agents?.environment === 'live' ? 'live' : 'test',
-    ethereumAddress: r.ethereum_address,
-    smartAccountAddress: r.smart_account_address || null,
-    createdAt: r.created_at,
-  }));
-
-  return c.json({ data: rows });
-});
-
-// ============================================
 // GET /v1/agents/:id - Get single agent
 // ============================================
 agents.get('/:id', async (c) => {
@@ -3040,7 +3005,7 @@ agents.post('/:id/evm-keys', async (c) => {
 
   const { data: agent } = await supabase
     .from('agents')
-    .select('id, tenant_id, status')
+    .select('id, tenant_id, status, environment, name, parent_account_id')
     .eq('id', id)
     .eq('tenant_id', ctx.tenantId)
     .single();
@@ -3077,6 +3042,30 @@ agents.post('/:id/evm-keys', async (c) => {
 
   if (insertErr) {
     return c.json({ error: `Failed to store key: ${insertErr.message}` }, 500);
+  }
+
+  // Mirror the key as a first-class wallet row so /dashboard/wallets can
+  // render it uniformly with the rest of the wallet types. Non-fatal on
+  // failure — the key works without the wallet row; it just won't appear
+  // on the wallets list until backfilled.
+  const env = (agent as any).environment === 'live' ? 'live' : 'test';
+  const { error: walletErr } = await (supabase.from('wallets') as any).insert({
+    tenant_id: (agent as any).tenant_id,
+    owner_account_id: (agent as any).parent_account_id,
+    managed_by_agent_id: id,
+    wallet_type: 'agent_eoa',
+    wallet_address: keyRecord.ethereum_address,
+    currency: 'USDC',
+    blockchain: env === 'live' ? 'base' : 'base-sepolia',
+    environment: env,
+    name: `${(agent as any).name || 'Agent'} · x402 EOA`,
+    purpose: 'External x402 signing (EIP-3009)',
+    status: 'active',
+    balance: 0,
+    verification_status: 'verified',
+  });
+  if (walletErr) {
+    console.error(`[evm-keys] wallet row creation failed for ${id}:`, walletErr.message);
   }
 
   return c.json({

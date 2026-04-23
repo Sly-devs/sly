@@ -629,148 +629,6 @@ function CircleMasterWalletCard({
   );
 }
 
-// ─── Agent x402 EOA wallet card ────────────────────────
-// Surfaces an agent's on-chain x402 signing address as a wallet card in
-// the main grid. Balance is read directly from the chain (Base mainnet for
-// live, Base Sepolia for test) so the displayed number is always the
-// authoritative one — no sync-from-chain worker round-trip.
-//
-// Not a DB-backed wallet; it's a representation of `agent_signing_keys`
-// entries. Management (provisioning, auto-refill config) happens on the
-// agent's Wallet tab — the "Manage" link deep-links there.
-
-const USDC_BASE_MAINNET_ADDR = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-const USDC_BASE_SEPOLIA_ADDR = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
-
-async function fetchEoaUsdc(addr: string, env: 'live' | 'test'): Promise<number | null> {
-  try {
-    const rpc = env === 'live' ? 'https://mainnet.base.org' : 'https://sepolia.base.org';
-    const usdc = env === 'live' ? USDC_BASE_MAINNET_ADDR : USDC_BASE_SEPOLIA_ADDR;
-    const data = `0x70a08231000000000000000000000000${addr.slice(2).toLowerCase()}`;
-    const res = await fetch(rpc, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to: usdc, data }, 'latest'] }),
-    });
-    const json = await res.json();
-    if (!json.result) return null;
-    return parseInt(json.result, 16) / 1e6;
-  } catch {
-    return null;
-  }
-}
-
-interface AgentEoaKey {
-  agentId: string;
-  agentName: string;
-  agentStatus: string;
-  environment: 'live' | 'test';
-  ethereumAddress: string;
-  smartAccountAddress: string | null;
-  createdAt: string;
-}
-
-function AgentEoaWalletCard({ eoa }: { eoa: AgentEoaKey }) {
-  const { data: balance, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ['eoa-onchain-usdc', eoa.ethereumAddress, eoa.environment],
-    queryFn: () => fetchEoaUsdc(eoa.ethereumAddress, eoa.environment),
-    refetchInterval: 60_000,
-    staleTime: 30_000,
-  });
-
-  const chain = eoa.environment === 'live' ? 'Base mainnet' : 'Base Sepolia';
-  const scanBase = eoa.environment === 'live' ? 'https://basescan.org' : 'https://sepolia.basescan.org';
-
-  return (
-    <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 hover:shadow-lg transition-shadow">
-      <div className="flex items-start justify-between mb-4">
-        <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
-          <Bot className="h-6 w-6 text-white" />
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-50 dark:bg-gray-900 rounded-full border border-gray-100 dark:border-gray-800">
-            <span className={`w-2 h-2 rounded-full ${balance != null ? 'bg-emerald-500' : 'bg-gray-300'}`} />
-            <span className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">On-chain</span>
-          </div>
-          <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${
-            eoa.agentStatus === 'active'
-              ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400'
-              : 'bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400'
-          }`}>
-            {eoa.agentStatus}
-          </span>
-          <button
-            onClick={() => refetch()}
-            disabled={isFetching}
-            className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-            title="Refresh from chain"
-          >
-            <RefreshCw className={cn('h-4 w-4 text-gray-400', isFetching && 'animate-spin')} />
-          </button>
-        </div>
-      </div>
-
-      <Link href={`/dashboard/agents/${eoa.agentId}`} className="block">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
-          {eoa.agentName}
-        </h3>
-      </Link>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-        Agent EOA · External x402 signing · {chain}
-      </p>
-
-      <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg">
-        <div className="flex justify-between items-start mb-1">
-          <div className="text-sm text-gray-600 dark:text-gray-400">On-chain USDC</div>
-        </div>
-        <div className="text-2xl font-bold text-gray-900 dark:text-white">
-          {isLoading && balance == null
-            ? '…'
-            : balance == null
-              ? '—'
-              : `$${balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-        </div>
-        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">USDC · live from {chain} RPC</div>
-      </div>
-
-      <div className="mb-4 pt-3 border-t border-gray-100 dark:border-gray-800">
-        <div className="flex justify-between items-center mb-2">
-          <span className="text-xs font-medium text-gray-500 uppercase tracking-widest">Address</span>
-          <a
-            href={`${scanBase}/address/${eoa.ethereumAddress}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 flex items-center gap-1"
-          >
-            View <span className="text-[10px]">↗</span>
-          </a>
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <code className="font-mono text-xs text-gray-900 dark:text-white truncate">
-            {eoa.ethereumAddress.slice(0, 10)}…{eoa.ethereumAddress.slice(-8)}
-          </code>
-          <button
-            onClick={() => navigator.clipboard.writeText(eoa.ethereumAddress).then(() => toast.success('Address copied'))}
-            className="p-1 hover:bg-gray-200 dark:hover:bg-gray-800 rounded flex-shrink-0"
-            title="Copy full address"
-          >
-            <svg className="h-3.5 w-3.5 text-gray-500 dark:text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          </button>
-        </div>
-      </div>
-
-      <div className="flex gap-2">
-        <Link
-          href={`/dashboard/agents/${eoa.agentId}?tab=wallet`}
-          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          Manage
-        </Link>
-      </div>
-    </div>
-  );
-}
-
 export default function WalletsPage() {
   const api = useApiClient();
   const { isConfigured, isLoading: isAuthLoading, authToken, apiEnvironment, apiUrl } = useApiConfig();
@@ -861,24 +719,6 @@ export default function WalletsPage() {
     staleTime: 30 * 1000,
   });
 
-  // Fetch agent x402 EOAs (separate from Circle custodial wallets — different
-  // custody model, different data source). We surface them inline with the
-  // regular wallets so the grid shows every on-ledger funding surface the
-  // tenant owns.
-  const { data: eoaData } = useQuery({
-    queryKey: ['agent-evm-keys', apiEnvironment],
-    queryFn: async () => {
-      if (!authToken) return { data: [] as AgentEoaKey[] };
-      const res = await fetch(`${apiUrl || ''}/v1/agents/evm-keys`, {
-        headers: { Authorization: `Bearer ${authToken}`, 'X-Environment': apiEnvironment },
-      });
-      if (!res.ok) return { data: [] as AgentEoaKey[] };
-      return res.json() as Promise<{ data: AgentEoaKey[] }>;
-    },
-    enabled: !!authToken,
-    staleTime: 60_000,
-  });
-  const agentEoas: AgentEoaKey[] = eoaData?.data || [];
 
   const rawData = (walletsData as any)?.data;
   const wallets = Array.isArray(rawData)
@@ -1229,23 +1069,11 @@ export default function WalletsPage() {
           apiEnvironment={apiEnvironment}
         />
 
-        {/* Agent x402 EOAs — honor the environment filter (live vs test) and
-            the agent-search term, but ignore the status filter (EOAs inherit
-            agent status, not wallet status). Hidden when the user is
-            filtering status to anything other than "all" or "active". */}
-        {agentEoas
-          .filter((e) => e.environment === apiEnvironment)
-          .filter((e) => statusFilter === 'all' || statusFilter === 'active' || e.agentStatus === statusFilter)
-          .filter((e) => !search.trim() || e.agentName.toLowerCase().includes(search.toLowerCase()) || e.ethereumAddress.toLowerCase().includes(search.toLowerCase()))
-          .map((eoa) => (
-            <AgentEoaWalletCard key={`${eoa.agentId}-${eoa.ethereumAddress}`} eoa={eoa} />
-          ))}
-
         {loading ? (
           <div className="col-span-full">
             <CardListSkeleton count={6} />
           </div>
-        ) : filteredWallets.length === 0 && agentEoas.length === 0 ? (
+        ) : filteredWallets.length === 0 ? (
           <div className="col-span-full">
             {search ? (
               <div className="p-12 text-center bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800">

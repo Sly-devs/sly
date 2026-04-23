@@ -42,7 +42,8 @@ const CATEGORY_BASELINES: Record<string, { visits: number; aov: number; conversi
   other: { visits: 300, aov: 75, conversion: 0.03 },
 };
 
-const DEFAULT_TENANT_ID = process.env.SCANNER_TENANT_ID || 'dad4308f-f9b6-4529-a406-7c2bdf3c6071';
+// Writes tag the calling tenant (passed through runAgentShoppingTest);
+// reads span the shared corpus.
 
 // ============================================
 // HELPERS
@@ -734,6 +735,7 @@ function generateRecommendations(
 // ============================================
 
 export async function runAgentShoppingTest(
+  tenantId: string,
   domain: string,
   testType: 'browse' | 'search' | 'add_to_cart' | 'checkout' | 'full_flow' = 'full_flow',
 ): Promise<AgentShoppingTestResult> {
@@ -746,19 +748,20 @@ export async function runAgentShoppingTest(
   let scanId: string | null = null;
   let category: string | undefined;
 
-  // Look up existing scan for context
+  // Look up existing scan for context (shared corpus)
   try {
-    const scan = await queries.getMerchantScanByDomain(DEFAULT_TENANT_ID, normalizedDomain);
+    const scan = await queries.getMerchantScanByDomain(normalizedDomain);
     if (scan) {
       scanId = scan.id;
       category = scan.merchant_category || undefined;
     }
   } catch { /* no scan data available */ }
 
-  // If no scan exists, create a minimal one to link the test
+  // If no scan exists, create a minimal one under the caller's tenant so the
+  // test can link to something.
   if (!scanId) {
     try {
-      const scan = await queries.upsertMerchantScan(DEFAULT_TENANT_ID, {
+      const scan = await queries.upsertMerchantScan(tenantId, {
         domain: normalizedDomain,
         url: `https://${normalizedDomain}`,
         scan_status: 'pending',

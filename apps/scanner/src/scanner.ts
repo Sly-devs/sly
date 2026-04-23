@@ -37,7 +37,7 @@ export async function scanDomain(options: ScanOptions): Promise<MerchantScan> {
 
   // Check freshness — skip if recently scanned
   if (options.skipIfFresh) {
-    const existing = await queries.getMerchantScanByDomain(options.tenantId, domain);
+    const existing = await queries.getMerchantScanByDomain(domain);
     if (existing && existing.scan_status === 'completed' && existing.last_scanned_at) {
       const scannedAt = new Date(existing.last_scanned_at).getTime();
       const window = options.freshnessWindowMs || DEFAULT_FRESHNESS_WINDOW_MS;

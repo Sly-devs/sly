@@ -20,7 +20,17 @@ import {
 import * as queries from '../db/queries.js';
 import { getReadinessGrade } from '@sly/utils';
 
-const DEFAULT_TENANT_ID = process.env.SCANNER_TENANT_ID || 'dad4308f-f9b6-4529-a406-7c2bdf3c6071';
+// MCP (stdio) is single-tenant per process. The tenant is configured via
+// SCANNER_TENANT_ID at launch — required in production.
+const MCP_TENANT_ID = (() => {
+  const t = process.env.SCANNER_TENANT_ID;
+  if (t) return t;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SCANNER_TENANT_ID is required when running the MCP server in production');
+  }
+  return 'dad4308f-f9b6-4529-a406-7c2bdf3c6071';
+})();
+
 const batchProcessor = new BatchProcessor();
 
 export async function handleToolCall(request: CallToolRequest): Promise<{
@@ -86,7 +96,7 @@ async function handleScanMerchant(args: {
   region?: string;
 }) {
   const result = await scanDomain({
-    tenantId: DEFAULT_TENANT_ID,
+    tenantId: MCP_TENANT_ID,
     domain: args.domain,
     merchant_name: args.merchant_name,
     merchant_category: args.merchant_category,
@@ -142,13 +152,13 @@ async function handleBatchScan(args: {
   domains: Array<{ domain: string; merchant_name?: string; merchant_category?: string; country_code?: string; region?: string }>;
   name?: string;
 }) {
-  const batch = await queries.createBatch(DEFAULT_TENANT_ID, {
+  const batch = await queries.createBatch(MCP_TENANT_ID, {
     name: args.name || `MCP Batch ${new Date().toISOString()}`,
     target_domains: args.domains.map(d => d.domain),
   });
 
   // Start in background
-  batchProcessor.processBatch(batch.id, DEFAULT_TENANT_ID, args.domains);
+  batchProcessor.processBatch(batch.id, MCP_TENANT_ID, args.domains);
 
   return {
     content: [{
@@ -184,7 +194,7 @@ async function handleGetBatchProgress(args: { batch_id: string }) {
 
 async function handleGetScanResults(args: { domain: string }) {
   const domain = normalizeDomain(args.domain);
-  const scan = await queries.getMerchantScanByDomain(DEFAULT_TENANT_ID, domain);
+  const scan = await queries.getMerchantScanByDomain(domain);
 
   if (!scan) {
     return { content: [{ type: 'text' as const, text: `No scan found for domain: ${domain}. Use \`scan_merchant\` to scan it first.` }] };
@@ -203,7 +213,7 @@ async function handleSearchScans(args: {
   page?: number;
   limit?: number;
 }) {
-  const result = await queries.listMerchantScans(DEFAULT_TENANT_ID, {
+  const result = await queries.listMerchantScans({
     category: args.category,
     region: args.region,
     status: args.status,
@@ -232,7 +242,7 @@ async function handleCompareMerchants(args: { domains: string[] }) {
   const results = [];
   for (const domain of args.domains.slice(0, 10)) {
     const normalized = normalizeDomain(domain);
-    const scan = await queries.getMerchantScanByDomain(DEFAULT_TENANT_ID, normalized);
+    const scan = await queries.getMerchantScanByDomain(normalized);
     if (scan) {
       results.push(scan);
     } else {
@@ -260,7 +270,7 @@ async function handleCompareMerchants(args: { domains: string[] }) {
 }
 
 async function handleGetReadinessReport() {
-  const stats = await queries.getScanStats(DEFAULT_TENANT_ID);
+  const stats = await queries.getScanStats();
 
   const lines = [
     '## Readiness Report',
@@ -311,7 +321,7 @@ async function handleGetHeatMap() {
 }
 
 async function handleGetProtocolAdoption() {
-  const adoption = await queries.getProtocolAdoption(DEFAULT_TENANT_ID);
+  const adoption = await queries.getProtocolAdoption();
 
   const lines = [
     '## Protocol Adoption Rates',
@@ -345,6 +355,7 @@ async function handleGetDemandStats(args: {
 
 async function handleRunAgentTest(args: { domain: string; test_type?: string }) {
   const result = await runAgentShoppingTest(
+    MCP_TENANT_ID,
     args.domain,
     (args.test_type as 'browse' | 'search' | 'add_to_cart' | 'checkout' | 'full_flow') || undefined,
   );

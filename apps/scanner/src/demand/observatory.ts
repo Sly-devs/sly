@@ -16,7 +16,7 @@ import * as queries from '../db/queries.js';
 const USER_AGENT = 'SlyObservatory/1.0 (+https://sly.dev/scanner)';
 const REQUEST_TIMEOUT_MS = 8000;
 const PERPLEXITY_TIMEOUT_MS = 15000;
-const DEFAULT_TENANT_ID = process.env.SCANNER_TENANT_ID || 'dad4308f-f9b6-4529-a406-7c2bdf3c6071';
+// Observatory aggregates the shared corpus — no tenant filter on reads.
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY || '';
 const PERPLEXITY_API_URL = 'https://api.perplexity.ai/chat/completions';
 
@@ -134,8 +134,8 @@ export async function detectProtocolDrift(): Promise<Array<{
 }>> {
   const results: Array<{ domain: string; evidence: string; merchant_scan_id: string }> = [];
 
-  // Get all completed scans
-  const { data: scans } = await queries.listMerchantScans(DEFAULT_TENANT_ID, {
+  // Get all completed scans (shared corpus)
+  const { data: scans } = await queries.listMerchantScans({
     status: 'completed',
     limit: 100,
   });
@@ -578,10 +578,10 @@ export async function recordObservation(data: {
   metadata?: Record<string, unknown>;
   confidence?: 'high' | 'medium' | 'low';
 }): Promise<{ id: string }> {
-  // Try to link to existing scan
+  // Try to link to existing scan (shared corpus — freshest scan of the domain)
   let merchantScanId: string | undefined;
   try {
-    const scan = await queries.getMerchantScanByDomain(DEFAULT_TENANT_ID, data.domain);
+    const scan = await queries.getMerchantScanByDomain(data.domain);
     if (scan) merchantScanId = scan.id;
   } catch { /* no scan */ }
 
@@ -617,7 +617,7 @@ export async function getMerchantLeaderboard(
     let hasAgentProtocol = false;
 
     try {
-      const scan = await queries.getMerchantScanByDomain(DEFAULT_TENANT_ID, merchant.domain);
+      const scan = await queries.getMerchantScanByDomain(merchant.domain);
       if (scan) {
         readinessScore = scan.readiness_score;
         merchantName = scan.merchant_name || undefined;

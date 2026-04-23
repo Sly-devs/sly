@@ -1770,6 +1770,39 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: 'x402_probe',
+    description: 'Inspect an x402-protected endpoint WITHOUT paying. Sends `method url` with no X-PAYMENT, parses the 402 challenge (from body OR `payment-required` response header), and returns structured info: price, supported networks, vendor, body schema, auth requirements, and a protocol classification (standard-x402 / agentkit-gated / prepay / api-key-gated / free / broken). Use this before `x402_fetch` to decide whether a vendor is worth paying. Zero-cost, read-only — never signs or spends.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Target URL to inspect' },
+        method: { type: 'string', description: 'HTTP method (default GET)', default: 'GET' },
+        body: { type: 'string', description: 'Optional request body (some vendors require a body even for the unpaid probe)' },
+        headers: {
+          type: 'object',
+          description: 'Optional additional request headers',
+          additionalProperties: { type: 'string' },
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'x402_discover',
+    description: 'Query the Agentic.Market public catalog for x402-protected services. Returns a filtered, paginated list of endpoints matching your criteria. Use this to find cheap endpoints before probing them individually. Free — no payment needed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Free-text search across service name, description, category' },
+        category: { type: 'string', description: 'Filter by category (e.g. "Inference", "Data", "Search", "Media")' },
+        maxPriceUsdc: { type: 'number', description: 'Filter to endpoints whose per-call price is at most this many USDC (e.g. 0.01 = penny endpoints only)' },
+        method: { type: 'string', description: 'Filter by HTTP method (GET / POST / PATCH / …)' },
+        limit: { type: 'number', description: 'Max services to return (default 20, max 100)', default: 20 },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'x402_fetch',
     description: 'One-shot paid fetch. Sends `method url` with no payment, detects a 402 response, signs an EIP-3009 authorization using the agent\'s managed EVM key, then retries with the `X-PAYMENT` header set — returning the final response. Use this instead of wiring agent_x402_sign + x402_build_payment_header + two separate HTTP calls. Safe against silent overcharging via `maxPrice`.',
     inputSchema: {

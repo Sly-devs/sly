@@ -1468,6 +1468,230 @@ export function createMcpServer(
         return { content: [{ type: 'text', text: JSON.stringify({ header: 'X-PAYMENT', value }, null, 2) }] };
       }
 
+      case 'x402_probe': {
+        const {
+          url,
+          method = 'GET',
+          body: probeBody,
+          headers: probeHeaders = {},
+        } = args as { url: string; method?: string; body?: string; headers?: Record<string, string> };
+
+        const probeInit: RequestInit = {
+          method,
+          headers: { 'Accept': 'application/json', ...probeHeaders },
+        };
+        if (probeBody !== undefined) probeInit.body = probeBody;
+
+        const tStart = Date.now();
+        let probeRes: Response;
+        try {
+          probeRes = await fetch(url, probeInit);
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: JSON.stringify({
+            reachable: false,
+            error: e?.message || String(e),
+            classification: { code: 'UNKNOWN', explanation: `Network-level failure reaching ${url}` },
+          }, null, 2) }] };
+        }
+        const durationMs = Date.now() - tStart;
+        const text = await probeRes.text();
+        const parsedBody = safeParseJson(text);
+
+        // Non-402 responses — endpoint is either free, requires auth, or errored.
+        if (probeRes.status !== 402) {
+          let protocol: string;
+          if (probeRes.status >= 200 && probeRes.status < 300) protocol = 'free';
+          else if (probeRes.status === 401) protocol = 'api-key-gated';
+          else if (probeRes.status === 403) protocol = 'forbidden';
+          else if (probeRes.status === 404) protocol = 'endpoint-missing';
+          else if (probeRes.status >= 500) protocol = 'vendor-broken';
+          else protocol = 'other';
+          return { content: [{ type: 'text', text: JSON.stringify({
+            reachable: true,
+            paid: false,
+            requiresPayment: false,
+            status: probeRes.status,
+            statusText: probeRes.statusText,
+            durationMs,
+            protocol,
+            bodyPreview: text.slice(0, 1024),
+            note: protocol === 'free' ? 'Endpoint responded without requiring payment. Safe to call directly with standard fetch.'
+              : protocol === 'api-key-gated' ? 'Endpoint requires an API key, not x402 payment. Use Epic 78 credential vault once shipped.'
+              : `Endpoint returned ${probeRes.status} — inspect body before proceeding.`,
+          }, null, 2) }] };
+        }
+
+        // 402 — parse challenge from body OR payment-required header
+        let challenge: any = parsedBody;
+        if (!challenge || typeof challenge !== 'object' || !pickX402Accept(challenge)) {
+          const fromHeader = decodePaymentRequiredHeader(probeRes.headers.get('payment-required'));
+          if (fromHeader) challenge = fromHeader;
+        }
+        const accept = pickX402Accept(challenge);
+
+        // Classify what KIND of x402 this is before signing
+        let protocolCode: string = 'standard-x402';
+        let protocolNotes: string[] = [];
+        if (challenge?.extensions?.agentkit || challenge?.agentkit) {
+          protocolCode = 'agentkit-gated';
+          protocolNotes.push('Requires AgentKit proof-of-humanity signature (Epic 80). Not supported yet.');
+        }
+        if (challenge?.authOptions?.x402Wallet?.topUp) {
+          protocolCode = 'prepay';
+          protocolNotes.push('Uses pre-pay balance model (Venice-style). Not standard X-PAYMENT per-call.');
+        }
+        if (challenge?.authOptions?.apiKey) {
+          protocolNotes.push('Also accepts API key auth as alternative.');
+        }
+        if (!accept) {
+          protocolCode = 'unparseable';
+          protocolNotes.push('402 returned but no usable accepts[] entry found in body or header.');
+        } else if (networkToChainId(accept.network) === null) {
+          protocolCode = 'unsupported-network';
+          protocolNotes.push(`Network "${accept.network}" is not an EVM chain we support today.`);
+        }
+
+        // Parse pricing + resource info
+        const amount = accept?.amount || accept?.maxAmountRequired || null;
+        const amountUsdc = amount ? Number(amount) / 1_000_000 : null;
+        const chainId = accept ? networkToChainId(accept.network) : null;
+        const resource = challenge?.resource || null;
+        const bodySchema = challenge?.extensions?.bazaar?.info?.input
+          || challenge?.extensions?.bazaar?.schema?.properties?.input
+          || null;
+
+        return { content: [{ type: 'text', text: JSON.stringify({
+          reachable: true,
+          paid: false,
+          requiresPayment: true,
+          protocol: protocolCode,
+          x402Version: challenge?.x402Version ?? null,
+          price: {
+            amountMicroUnits: amount,
+            amountUsdc,
+            asset: accept?.asset ?? null,
+          },
+          payTo: accept?.payTo ?? null,
+          network: accept?.network ?? null,
+          chainId,
+          maxTimeoutSeconds: accept?.maxTimeoutSeconds ?? null,
+          resource: resource ? {
+            url: resource.url,
+            description: resource.description,
+            method: resource.method || method,
+            mimeType: resource.mimeType,
+          } : null,
+          bodySchema,
+          allAccepts: Array.isArray(challenge?.accepts) ? challenge.accepts.map((a: any) => ({
+            scheme: a.scheme,
+            network: a.network,
+            amount: a.amount || a.maxAmountRequired,
+            payTo: a.payTo,
+            supported: networkToChainId(a.network) !== null,
+          })) : null,
+          notes: protocolNotes,
+          classification: protocolCode === 'standard-x402' ? null : {
+            code: protocolCode === 'agentkit-gated' ? 'AGENTKIT_REQUIRED'
+              : protocolCode === 'prepay' ? 'NON_STANDARD_AUTH_PREPAY'
+              : protocolCode === 'unsupported-network' ? 'UNSUPPORTED_NETWORK'
+              : 'UNKNOWN',
+            explanation: protocolNotes.join(' '),
+          },
+          recommendation: protocolCode === 'standard-x402'
+            ? `Safe to pay via x402_fetch with maxPrice cap. Estimated cost per call: $${amountUsdc?.toFixed(4) ?? '?'} USDC.`
+            : protocolNotes.join(' '),
+        }, null, 2) }] };
+      }
+
+      case 'x402_discover': {
+        const {
+          query,
+          category,
+          maxPriceUsdc,
+          method: methodFilter,
+          limit = 20,
+        } = args as {
+          query?: string;
+          category?: string;
+          maxPriceUsdc?: number;
+          method?: string;
+          limit?: number;
+        };
+        const cap = Math.min(Math.max(1, Number(limit) || 20), 100);
+
+        // Agentic.Market's public catalog. Free, no auth.
+        const catalogUrl = query
+          ? `https://api.agentic.market/v1/services/search?q=${encodeURIComponent(query)}`
+          : `https://api.agentic.market/v1/services?limit=${cap}`;
+
+        let catalogData: any;
+        try {
+          const res = await fetch(catalogUrl);
+          if (!res.ok) {
+            return { content: [{ type: 'text', text: JSON.stringify({ error: `Catalog returned HTTP ${res.status}`, url: catalogUrl }) }] };
+          }
+          catalogData = await res.json();
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: e?.message || String(e), url: catalogUrl }) }] };
+        }
+
+        const services: any[] = Array.isArray(catalogData?.services) ? catalogData.services : [];
+        const matches: any[] = [];
+        const q = query?.toLowerCase();
+        for (const svc of services) {
+          if (category && String(svc.category || '').toLowerCase() !== category.toLowerCase()) continue;
+          // Flatten endpoints — one match per (service × endpoint) pair so
+          // price filtering works correctly.
+          const endpoints: any[] = Array.isArray(svc.endpoints) ? svc.endpoints : [];
+          for (const ep of endpoints) {
+            if (methodFilter && String(ep.method || '').toUpperCase() !== methodFilter.toUpperCase()) continue;
+            const priceRaw = ep.pricing?.amount;
+            const priceUsdc = priceRaw && priceRaw !== '' ? Number(priceRaw) : null;
+            if (maxPriceUsdc != null && priceUsdc != null && priceUsdc > Number(maxPriceUsdc)) continue;
+            if (q) {
+              const hay = `${svc.name} ${svc.description} ${svc.category} ${ep.description} ${ep.url} ${ep.providerName || ''}`.toLowerCase();
+              if (!hay.includes(q)) continue;
+            }
+            matches.push({
+              service: svc.name,
+              serviceId: svc.id,
+              provider: ep.providerName || svc.provider,
+              category: svc.category,
+              url: ep.url,
+              method: ep.method || 'GET',
+              description: ep.description,
+              priceUsdc,
+              priceDisplay: priceUsdc != null
+                ? `$${priceUsdc.toFixed(Math.max(3, priceUsdc < 0.01 ? 4 : 3))}`
+                : (priceRaw === '' ? 'free / unknown' : '?'),
+              network: ep.pricing?.network,
+              quality: svc.quality || null,
+              serviceUrl: svc.domain ? `https://${svc.domain}` : null,
+            });
+            if (matches.length >= cap) break;
+          }
+          if (matches.length >= cap) break;
+        }
+
+        // Sort: known price ascending, then unknown/free last
+        matches.sort((a, b) => {
+          if (a.priceUsdc != null && b.priceUsdc == null) return -1;
+          if (a.priceUsdc == null && b.priceUsdc != null) return 1;
+          if (a.priceUsdc != null && b.priceUsdc != null) return a.priceUsdc - b.priceUsdc;
+          return 0;
+        });
+
+        return { content: [{ type: 'text', text: JSON.stringify({
+          count: matches.length,
+          totalServicesScanned: services.length,
+          filters: { query: query || null, category: category || null, maxPriceUsdc: maxPriceUsdc ?? null, method: methodFilter || null, limit: cap },
+          matches: matches.slice(0, cap),
+          note: matches.length === 0
+            ? 'No endpoints matched the filters. Try broader criteria or remove maxPriceUsdc.'
+            : `Use x402_probe on a specific URL to inspect before paying, or x402_fetch(agentId, url, ...) to pay and call in one shot.`,
+        }, null, 2) }] };
+      }
+
       case 'x402_fetch': {
         const {
           agentId,

@@ -651,13 +651,15 @@ agents.get('/stats/skills-count', async (c) => {
 });
 
 // ============================================
-// GET /v1/agents/evm-keys — tenant-scoped listing of agent x402 EOAs.
-// Must be registered BEFORE /:id so Hono doesn't treat "evm-keys" as an
-// agent ID. Used by /dashboard/wallets to render each agent's on-chain
-// address as a wallet card alongside Circle custodial wallets. Balance
-// is fetched client-side via Base RPC — no round-trip through the API.
+// GET /v1/agents/evm-keys/list — tenant-scoped listing of agent x402 EOAs.
+// Uses a two-segment path so it cannot collide with /:id regardless of
+// Hono router implementation (single-segment /evm-keys was getting swept
+// into /:id by SmartRouter even when registered earlier). Used by
+// /dashboard/wallets to render each agent's on-chain address as a wallet
+// card alongside Circle custodial wallets. Balance is fetched
+// client-side via Base RPC — no round-trip through the API.
 // ============================================
-agents.get('/evm-keys', async (c) => {
+agents.get('/evm-keys/list', async (c) => {
   const ctx = c.get('ctx');
   const supabase = createClient();
 

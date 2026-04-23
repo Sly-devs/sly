@@ -3,6 +3,7 @@ import { serve } from '@hono/node-server';
 import app from './app.js';
 import { getScheduledTransferWorker } from './workers/scheduled-transfers.js';
 import { startIdempotencyCleanupWorker } from './workers/idempotency-cleanup.js';
+import { startX402ExpiredCleanupWorker } from './workers/x402-expired-cleanup.js';
 import { webhookCleanupWorker } from './workers/webhook-cleanup.js';
 import { SettlementWindowProcessor } from './workers/settlement-window-processor.js';
 import { TreasuryWorker } from './workers/treasury-worker.js';
@@ -87,6 +88,11 @@ if (enableScheduledTransfers) {
 // Start idempotency cleanup worker (runs every hour)
 const stopIdempotencyCleanup = startIdempotencyCleanupWorker(60 * 60 * 1000);
 
+// Start x402 expired-auth cleanup (runs every 2 min — cancels pending
+// external x402 rows whose valid_before window has passed so they don't
+// pile up as "pending forever" in the dashboard).
+const stopX402ExpiredCleanup = startX402ExpiredCleanupWorker(2 * 60 * 1000);
+
 // Start smart wallet balance sync worker (syncs on-chain balances every 5 min)
 startSmartWalletSyncWorker();
 
@@ -158,6 +164,7 @@ const shutdown = async (signal: string) => {
     worker.stop();
   }
   stopIdempotencyCleanup();
+  stopX402ExpiredCleanup();
   if (enableWebhookCleanup) {
     webhookCleanupWorker.stop();
   }

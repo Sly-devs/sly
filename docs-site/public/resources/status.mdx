@@ -1,26 +1,22 @@
 ---
 title: "Status"
-description: "System status, uptime, and incident history."
+description: "System status, uptime commitments, and incident communication."
 ---
 
-Real-time platform status is at [status.getsly.ai](https://status.getsly.ai). Bookmark it — if your integration is failing, check here first before assuming a bug on your side.
+A public status page is [coming soon](/resources/coming-soon). Until then, this page covers how Sly communicates incidents and where to check for disruption.
 
-## What the status page shows
+## Where to check during an issue
 
-- **Component status** — API, dashboard, webhooks, settlement rails, KYC providers, sandbox
-- **Ongoing incidents** — with live updates and estimated time to resolution
-- **Scheduled maintenance** — planned with 7+ day notice
-- **Historical uptime** — 90-day rolling per component
+1. **Dashboard** — [app.getsly.ai](https://app.getsly.ai) — in-product incident banner, and Settings → Status shows current component health for your tenant.
+2. **Email** — we notify all tenant admins for Sev 1 and Sev 2 incidents via the address on your account.
+3. **Enterprise plans** — named CSM + optional dedicated Slack Connect channel for real-time updates.
 
-## Subscribe to updates
-
-Three channels:
-
-- **Email** — any resolution or new-incident notification
-- **Webhook** — POST to your URL on status changes (useful for routing to your PagerDuty)
-- **Slack** — our public Slack app posts to your channel
-
-Configure at [status.getsly.ai/subscribe](https://status.getsly.ai/subscribe).
+When the public status page ships (planned alongside v1.0 GA), it'll live at `status.getsly.ai` with:
+- Component-level status (API, dashboard, webhooks, settlement rails, KYC providers, sandbox)
+- Live incident updates + estimated time to resolution
+- Scheduled maintenance with 7+ day notice
+- Historical uptime per component
+- Subscribe for email / webhook / Slack notifications
 
 ## Uptime targets
 
@@ -28,35 +24,33 @@ Configure at [status.getsly.ai/subscribe](https://status.getsly.ai/subscribe).
 |---|---|
 | Core API (`/v1/*`) | 99.95% |
 | Dashboard | 99.9% |
-| Webhooks | 99.9% for delivery attempts; 99.99% for queue retention |
-| Sandbox | 99.0% (no SLA, best-effort) |
+| Webhooks | 99.9% delivery attempts; 99.99% queue retention |
+| Sandbox | 99.0% (best-effort, no SLA) |
 | Settlement rails | Inherits upstream provider SLAs |
 
-Enterprise contracts can negotiate higher per-component SLAs.
+Enterprise contracts can negotiate per-component SLAs above these defaults.
 
 ## When your integration fails
 
 Quick checklist before escalating:
 
-1. **Check [status.getsly.ai](https://status.getsly.ai)** — platform incident?
-2. **Inspect response `request_id`** — include it in support tickets
-3. **Read the `code` field** — is this a known error category? See [error codes](/resources/error-codes)
-4. **Try in sandbox** — same request in test environment; reproduces? Integration bug. Doesn't reproduce? Environment-specific.
-5. **Open a ticket** — see [support](/resources/support)
+1. **Check the dashboard** for a tenant-level incident banner
+2. **Inspect response `request_id`** — include it in support emails
+3. **Read the `code` field** — is this a known category? See [error codes](/resources/error-codes)
+4. **Try in sandbox** — same request in test environment. Reproduces? Integration bug. Doesn't reproduce? Environment-specific.
+5. **Email support** with the `request_id` — see [support](/resources/support)
 
 ## Post-incident reports
 
-Every Severity 1 and Severity 2 incident gets a public postmortem within 7 business days. You can read past ones at [status.getsly.ai/history](https://status.getsly.ai/history).
+Every Sev 1 and Sev 2 incident gets a public postmortem within 7 business days, emailed to all tenant admins and posted to the [changelog](/resources/changelog). Once the public status page is live, it'll also appear there.
 
 ## Degraded modes
 
-Sly's architecture gracefully degrades on certain failures rather than returning `500`. Examples:
+Sly's architecture gracefully degrades rather than returning `500` where possible:
 
 - **Settlement rail outage** → transfers held in `processing` state, retried when rail recovers. Webhook `transfer.delayed` fires.
 - **Quote provider outage** → existing quotes honored; new quotes return `503`.
 - **KYC provider outage** → account creation succeeds; verification deferred with `pending` status.
 - **Dashboard outage** → API unaffected. Dashboard is independent.
 
-## Rail-specific status
-
-Individual settlement rails (USDC on Base, ACH, Pix, SPEI, cards) have separate status indicators. An incident on "ACH" doesn't imply an incident on "USDC."
+Rail-specific status (USDC on Base, ACH, Pix, SPEI, cards) is tracked separately inside the dashboard. An incident on "ACH" doesn't imply an incident on "USDC."

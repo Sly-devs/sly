@@ -89,13 +89,13 @@ Agents receive only the tools their credentials allow them to invoke.
 
 ## Scanner MCP (separate server)
 
-Sly also ships an MCP server for the [Scanner service](/api-reference/openapi) — a demand-intelligence tool for merchants and agents.
+Sly also ships an MCP server for the [Scanner service](/api-reference) — a demand-intelligence tool for merchants and agents.
 
 ```bash
 npx @sly_ai/scanner-mcp install
 ```
 
-Exposes 19 tools for scanning merchants, analyzing protocol adoption, generating readiness reports, and running agent shopping tests. See the [scanner docs](/api-reference/openapi) for detail.
+Exposes 19 tools for scanning merchants, analyzing protocol adoption, generating readiness reports, and running agent shopping tests. See the [scanner docs](/api-reference) for detail.
 
 ## When to use MCP
 
@@ -104,7 +104,7 @@ Exposes 19 tools for scanning merchants, analyzing protocol adoption, generating
 - Your runtime already speaks MCP (Claude Desktop, Cursor, Windsurf, custom agent frameworks)
 - You want **automatic permission filtering** — MCP server only exposes tools the agent can actually call
 
-For non-LLM integrations (backend services, CI, operational scripts), use the [REST API](/api-reference/openapi) directly.
+For non-LLM integrations (backend services, CI, operational scripts), use the [REST API](/api-reference) directly.
 
 ## MCP tool catalog
 

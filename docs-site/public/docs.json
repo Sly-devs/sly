@@ -17,12 +17,12 @@
   "navbar": {
     "links": [
       { "label": "Dashboard", "href": "https://app.getsly.ai" },
-      { "label": "Status", "href": "https://status.getsly.ai" }
+      { "label": "Status", "href": "/resources/status" }
     ],
     "primary": {
       "type": "button",
       "label": "Get API Keys",
-      "href": "https://app.getsly.ai/signup"
+      "href": "https://app.getsly.ai/auth/signup"
     }
   },
   "footer": {
@@ -190,7 +190,8 @@
               "resources/analytics-and-usage",
               "resources/changelog",
               "resources/status",
-              "resources/support"
+              "resources/support",
+              "resources/coming-soon"
             ]
           }
         ]

@@ -1,4 +1,4 @@
-# Epic 79: AgentKit Proof-of-Humanity for x402
+# Epic 80: AgentKit Proof-of-Humanity for x402
 
 ## Summary
 
@@ -13,8 +13,8 @@ A new class of x402 services (Exa is first, more coming) require **two** signatu
 | x402_fetch auto-detection of agentkit challenges | ✅ Yes | `sly.vault` (MCP) | P1 | Already detects + classifies in this epic |
 
 **SDK Stories Required:**
-- [ ] Story 79.X: Add `agentkit_sign` capability to `sly.agents` SDK surface
-- [ ] Story 79.Y: Update MCP `agent_call_service` dispatcher to auto-retry with AgentKit when challenge declares it
+- [ ] Story 80.X: Add `agentkit_sign` capability to `sly.agents` SDK surface
+- [ ] Story 80.Y: Update MCP `agent_call_service` dispatcher to auto-retry with AgentKit when challenge declares it
 
 ## Motivation
 
@@ -115,13 +115,13 @@ Useful for future protocol variants we don't yet auto-dispatch.
 
 | # | Story | Points |
 |---|---|---|
-| 79.1 | Migration: `custody_type`, `identity_chain`, `identity_address`, `identity_verification` columns on `vault_credentials` | 1 |
-| 79.2 | `services/vault/providers/agentkit.ts` — SIWE builder + EIP-191 signer using credential-vault | 3 |
-| 79.3 | `POST /v1/agents/:id/agentkit-sign` route — parallel to `/x402-sign`, accepts `{ challenge, grantId }`, returns `{ signature, message }` | 3 |
-| 79.4 | `x402_fetch` dispatcher integration — auto-retry with AgentKit sig when classification is `AGENTKIT_REQUIRED` and a `human_attested` grant exists | 3 |
-| 79.5 | Dashboard credential wizard: "Attested Identity (World ID)" card with live verification flow | 3 |
-| 79.6 | MCP tool `agent_agentkit_sign` + `vault_issue_grant` extension for `custody_type='human_attested'` | 2 |
-| 79.7 | World ID nullifier verification — call Worldcoin's on-chain registry contract to confirm the identity address maps to a valid, non-revoked World ID | 3 |
+| 80.1 | Migration: `custody_type`, `identity_chain`, `identity_address`, `identity_verification` columns on `vault_credentials` | 1 |
+| 80.2 | `services/vault/providers/agentkit.ts` — SIWE builder + EIP-191 signer using credential-vault | 3 |
+| 80.3 | `POST /v1/agents/:id/agentkit-sign` route — parallel to `/x402-sign`, accepts `{ challenge, grantId }`, returns `{ signature, message }` | 3 |
+| 80.4 | `x402_fetch` dispatcher integration — auto-retry with AgentKit sig when classification is `AGENTKIT_REQUIRED` and a `human_attested` grant exists | 3 |
+| 80.5 | Dashboard credential wizard: "Attested Identity (World ID)" card with live verification flow | 3 |
+| 80.6 | MCP tool `agent_agentkit_sign` + `vault_issue_grant` extension for `custody_type='human_attested'` | 2 |
+| 80.7 | World ID nullifier verification — call Worldcoin's on-chain registry contract to confirm the identity address maps to a valid, non-revoked World ID | 3 |
 
 ### Phase 2 backlog (not in MVP)
 

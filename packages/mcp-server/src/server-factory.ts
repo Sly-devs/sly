@@ -2124,7 +2124,7 @@ function decodeX402PaymentResponse(header: string | null): {
 // actionable than raw HTTP status. Ordered from most-specific to most-general;
 // first match wins.
 //
-// Classification codes are stable contract — see epic-79 for the full taxonomy.
+// Classification codes are stable contract — see epic-80 for the full taxonomy.
 export type X402FailureCode =
   | 'AGENTKIT_REQUIRED'             // Exa-style: dual-auth, need human-proof signature
   | 'NON_STANDARD_AUTH_PREPAY'      // Venice-style: pre-pay balance + custom header
@@ -2171,7 +2171,7 @@ function classifyX402Failure(args: {
     return {
       code: 'AGENTKIT_REQUIRED',
       explanation: 'Vendor requires an AgentKit proof-of-humanity signature (e.g. World ID on Worldcoin Chain) in addition to x402 payment. Sly does not provision human-attested keys yet.',
-      recommendation: 'Track as coverage gap (Epic 79). Skip this vendor until we add human-attested custody.',
+      recommendation: 'Track as coverage gap (Epic 80). Skip this vendor until we add human-attested custody.',
     };
   }
 

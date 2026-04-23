@@ -357,10 +357,17 @@ export default function WalletDetailPage() {
                             </div>
                         </Card>
 
-                        {(wallet.walletType || wallet.wallet_type) === 'agent_eoa'
-                          ? <EoaAutoRefillCard wallet={wallet} />
-                          : <SpendingPolicyEditor wallet={wallet} />
-                        }
+                        {/* Spending policy is universal — every wallet
+                            type now shows daily/monthly caps + live
+                            usage from the transfers ledger. For
+                            agent_eoa we ALSO stack the auto-refill card
+                            below it (chain-native funding policy). */}
+                        <div className="space-y-6">
+                            <SpendingPolicyEditor wallet={wallet} />
+                            {(wallet.walletType || wallet.wallet_type) === 'agent_eoa' && (
+                                <EoaAutoRefillCard wallet={wallet} />
+                            )}
+                        </div>
                     </div>
 
                     {/* Transactions List */}

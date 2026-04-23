@@ -184,14 +184,25 @@ export function SpendingPolicyEditor({ wallet, className }: SpendingPolicyEditor
                 ) : null}
             </div>
 
-            {/* Current Usage Section (Read-only) */}
+            {/* Current Usage Section (Read-only).
+                Prefer the live computed totals from the transfers ledger
+                (served by GET /v1/wallets/:id as dailyActualSpent /
+                monthlyActualSpent). This works for every wallet type,
+                including ones that never update the spending_policy JSON
+                counters (agent_eoa, external, smart_wallet). Falls back
+                to the JSON counters for legacy wallets that only ship
+                those. */}
             <div className="space-y-4 mb-6">
                 <div className="text-sm font-medium text-muted-foreground mb-3">
                     Current Usage
                 </div>
                 <SpendingProgress
                     label="Daily Limit"
-                    spent={policy.dailySpent || 0}
+                    spent={
+                        (wallet as any).dailyActualSpent != null
+                            ? (wallet as any).dailyActualSpent
+                            : (policy.dailySpent || 0)
+                    }
                     limit={policy.dailySpendLimit}
                     currency={wallet.currency || 'USD'}
                     resetAt={policy.dailyResetAt}
@@ -199,7 +210,11 @@ export function SpendingPolicyEditor({ wallet, className }: SpendingPolicyEditor
                 />
                 <SpendingProgress
                     label="Monthly Limit"
-                    spent={policy.monthlySpent || 0}
+                    spent={
+                        (wallet as any).monthlyActualSpent != null
+                            ? (wallet as any).monthlyActualSpent
+                            : (policy.monthlySpent || 0)
+                    }
                     limit={policy.monthlySpendLimit}
                     currency={wallet.currency || 'USD'}
                     resetAt={policy.monthlyResetAt}

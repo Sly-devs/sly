@@ -874,27 +874,57 @@ app.get('/:id', async (c) => {
     //    external to_address matches this EOA (e.g. auto-refill
     //    deposits from the Circle master).
     //  - everything else: legacy wildcard on protocol_metadata.wallet_id.
-    let txQuery = supabase
-      .from('transfers')
-      .select('id, from_account_id, to_account_id, amount, currency, status, type, created_at, protocol_metadata')
-      .eq('tenant_id', ctx.tenantId)
-      .eq('environment', getEnv(ctx));
-    if (walletRow.wallet_type === 'agent_eoa' && walletRow.managed_by_agent_id) {
-      // Match by managing agent OR by on-chain destination address.
-      const addrLower = (walletRow.wallet_address || '').toLowerCase();
-      txQuery = txQuery.or(
-        `initiated_by_id.eq.${walletRow.managed_by_agent_id},protocol_metadata->>to_address.eq.${addrLower}`
-      );
-    } else {
-      txQuery = txQuery.or(`protocol_metadata->>wallet_id.eq.${id}`);
-    }
-    const { data: recentTxs } = await txQuery
+    const buildTxQuery = () => {
+      let q = supabase
+        .from('transfers')
+        .select('id, from_account_id, to_account_id, amount, currency, status, type, created_at, protocol_metadata')
+        .eq('tenant_id', ctx.tenantId)
+        .eq('environment', getEnv(ctx));
+      if (walletRow.wallet_type === 'agent_eoa' && walletRow.managed_by_agent_id) {
+        const addrLower = (walletRow.wallet_address || '').toLowerCase();
+        q = q.or(`initiated_by_id.eq.${walletRow.managed_by_agent_id},protocol_metadata->>to_address.eq.${addrLower}`);
+      } else {
+        q = q.or(`protocol_metadata->>wallet_id.eq.${id}`);
+      }
+      return q;
+    };
+    const { data: recentTxs } = await buildTxQuery()
       .order('created_at', { ascending: false })
       .limit(20);
+
+    // Live spending totals computed from the transfers ledger. These are
+    // authoritative for wallet types that don't persist counters in the
+    // spending_policy JSON (agent_eoa, external, smart_wallet) and give
+    // the dashboard a live "used today / this month" number regardless
+    // of wallet type. Only counts outbound, completed spend — cancelled
+    // attempts where no money moved are excluded.
+    const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
+    const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
+    const [{ data: dailyRows }, { data: monthlyRows }] = await Promise.all([
+      buildTxQuery()
+        .in('status', ['completed', 'pending', 'processing'])
+        .in('type', ['x402', 'internal', 'mpp', 'ucp_settlement', 'acp_settlement'])
+        .gte('created_at', dayStart.toISOString()),
+      buildTxQuery()
+        .in('status', ['completed', 'pending', 'processing'])
+        .in('type', ['x402', 'internal', 'mpp', 'ucp_settlement', 'acp_settlement'])
+        .gte('created_at', monthStart.toISOString()),
+    ]);
+    const sumSpend = (rows: any[] | null) => (rows || []).reduce(
+      (acc, r) => acc + (Number(r.amount) || 0),
+      0,
+    );
+    const dailyActualSpent = sumSpend(dailyRows);
+    const monthlyActualSpent = sumSpend(monthlyRows);
 
     // Format response
     const response = {
       ...mapWalletFromDb(walletRow),
+      // Live spending totals from the transfers ledger (UTC day / UTC month).
+      // The dashboard reads these to render progress bars for any wallet
+      // type, including ones that don't persist counters in spending_policy.
+      dailyActualSpent,
+      monthlyActualSpent,
       recentTransactions: recentTxs?.map(tx => ({
         id: tx.id,
         fromAccountId: tx.from_account_id,

@@ -346,10 +346,12 @@ function WalletBalanceCard({ wallet, authToken, apiEnvironment, apiUrl, onDelete
                 </div>
               )}
 
-              {/* Daily progress */}
+              {/* Daily progress — prefer live computed spend from the
+                  transfers ledger (any wallet type) over the stale
+                  spending_policy JSON counters (only Circle maintains). */}
               {policy?.dailySpendLimit && (
                 <SpendingProgressCompact
-                  spent={policy.dailySpent || 0}
+                  spent={(wallet as any).dailyActualSpent ?? policy.dailySpent ?? 0}
                   limit={policy.dailySpendLimit}
                   currency={wallet.currency}
                 />
@@ -358,7 +360,7 @@ function WalletBalanceCard({ wallet, authToken, apiEnvironment, apiUrl, onDelete
               {/* Monthly progress */}
               {policy?.monthlySpendLimit && (
                 <SpendingProgressCompact
-                  spent={policy.monthlySpent || 0}
+                  spent={(wallet as any).monthlyActualSpent ?? policy.monthlySpent ?? 0}
                   limit={policy.monthlySpendLimit}
                   currency={wallet.currency}
                 />

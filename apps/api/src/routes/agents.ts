@@ -4879,6 +4879,41 @@ agents.delete('/:id/avatar', async (c) => {
 // Mounted here for proximity to the fund-eoa route; logically it's an
 // org-level resource — in Phase 2 move to /v1/organization/circle/*.
 // ============================================
+// ============================================
+// GET /v1/agents/evm-keys
+// Tenant-scoped listing of all agent x402 signing EOAs. Used by the
+// Wallets page to render each agent's on-chain address as a wallet card
+// alongside Circle custodial wallets. Balance is fetched client-side via
+// Base RPC — we don't bother round-tripping through the API for it.
+// ============================================
+agents.get('/evm-keys', async (c) => {
+  const ctx = c.get('ctx');
+  const supabase = createClient();
+
+  const { data, error } = await (supabase.from('agent_signing_keys') as any)
+    .select('agent_id, ethereum_address, smart_account_address, status, created_at, agents!inner(id, name, status, environment)')
+    .eq('tenant_id', ctx.tenantId)
+    .eq('algorithm', 'secp256k1')
+    .eq('status', 'active');
+
+  if (error) {
+    console.error('[agents:evm-keys] fetch failed', error);
+    throw new Error('Failed to list agent EVM keys');
+  }
+
+  const rows = (data || []).map((r: any) => ({
+    agentId: r.agent_id,
+    agentName: r.agents?.name || 'Unknown',
+    agentStatus: r.agents?.status,
+    environment: r.agents?.environment === 'live' ? 'live' : 'test',
+    ethereumAddress: r.ethereum_address,
+    smartAccountAddress: r.smart_account_address || null,
+    createdAt: r.created_at,
+  }));
+
+  return c.json({ data: rows });
+});
+
 agents.get('/circle/master-balance', async (c) => {
   try {
     const { getCirclePayoutsClient } = await import('../services/circle/payouts.js');

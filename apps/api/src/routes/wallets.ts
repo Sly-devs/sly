@@ -160,6 +160,7 @@ function mapWalletFromDb(row: any) {
   return {
     id: row.id,
     tenantId: row.tenant_id,
+    environment: row.environment || 'test',
     ownerAccountId: row.owner_account_id,
     managedByAgentId: row.managed_by_agent_id,
     balance: parseFloat(row.balance),

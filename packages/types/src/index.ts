@@ -97,6 +97,7 @@ export type VerificationPath = 'standard' | 'partner_reliance' | 'enterprise';
 export interface Account {
   id: string;
   tenantId: string;
+  environment: 'test' | 'live';
   type: AccountType;
   name: string;
   email?: string;
@@ -236,6 +237,7 @@ export interface AgentTrustProfile {
 export interface Transfer {
   id: string;
   tenantId: string;
+  environment: 'test' | 'live';
   type: TransferType;
   status: TransferStatus;
 

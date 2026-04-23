@@ -1331,7 +1331,7 @@ agents.get('/:id/transactions', async (c) => {
   // Exclude ACP-type transfers to avoid duplicating data already fetched above.
   let transferQuery = supabase
     .from('transfers')
-    .select('id, type, status, currency, amount, description, created_at, from_account_id, to_account_id, from_account_name, to_account_name, fee_amount, protocol_metadata, settlement_network, tx_hash', { count: 'exact' })
+    .select('id, type, status, currency, amount, description, created_at, from_account_id, to_account_id, from_account_name, to_account_name, fee_amount, protocol_metadata, settlement_network, tx_hash, environment', { count: 'exact' })
     .eq('tenant_id', ctx.tenantId)
     .eq('environment', getEnv(ctx))
     .eq('initiated_by_id', id)
@@ -1362,7 +1362,7 @@ agents.get('/:id/transactions', async (c) => {
   if (agentWalletIds.length > 0) {
     let walletTxQuery = supabase
       .from('transfers')
-      .select('id, type, status, currency, amount, description, created_at, from_account_id, to_account_id, from_account_name, to_account_name, fee_amount, protocol_metadata, settlement_network, tx_hash', { count: 'exact' })
+      .select('id, type, status, currency, amount, description, created_at, from_account_id, to_account_id, from_account_name, to_account_name, fee_amount, protocol_metadata, settlement_network, tx_hash, environment', { count: 'exact' })
       .eq('tenant_id', ctx.tenantId)
       .eq('environment', getEnv(ctx))
       .eq('type', 'x402')
@@ -1454,6 +1454,7 @@ agents.get('/:id/transactions', async (c) => {
       const isExternal = pm.direction === 'external';
       return {
         id: t.id,
+        environment: t.environment || 'test',
         type: t.type as string,
         status: t.status,
         currency: t.currency,

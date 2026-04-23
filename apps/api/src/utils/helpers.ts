@@ -7,10 +7,11 @@ import type { Account, Agent, Transfer, Stream } from '@sly/types';
 
 export function mapAccountFromDb(row: any): Account {
   const currency = row.currency || 'USDC';
-  
+
   return {
     id: row.id,
     tenantId: row.tenant_id,
+    environment: row.environment || 'test',
     type: row.type,
     subtype: row.subtype || null,
     name: row.name,
@@ -166,6 +167,7 @@ export function mapTransferFromDb(row: any): Transfer {
   return {
     id: row.id,
     tenantId: row.tenant_id,
+    environment: row.environment || 'test',
     type: row.type,
     status: row.status,
     from: {

@@ -218,9 +218,22 @@ export async function runConcierge(
         merchantOutcome = `paid $${price.toFixed(2)} for "${ep.name}"`;
         merchantTarget = { id: 'merch:x402:' + String(ep.id), name: ep.name || 'x402 endpoint' };
       } else if (config.protocol === 'acp') {
-        const merchant = pick(merchants);
-        const catalog = merchant?.catalog?.products || merchant?.catalog || [];
+        // Find a merchant with a non-empty catalog — some seeded merchants
+        // (e.g. x402-only operators) don't expose one. Try a few picks, then
+        // skip the cycle so the outer crash handler doesn't fire on a
+        // `pick([])` → undefined.id.
+        let merchant: any = null;
+        let catalog: any[] = [];
+        for (let attempt = 0; attempt < 5 && catalog.length === 0; attempt++) {
+          merchant = pick(merchants);
+          catalog = merchant?.catalog?.products || merchant?.catalog || [];
+        }
+        if (!merchant || catalog.length === 0) {
+          await adminClient.comment(`concierge: ${concierge.name} couldn't find a merchant with a catalog (acp) — skipping cycle`, 'alert');
+          continue;
+        }
         const item = pick(catalog) as { id: string; name: string; unit_price_cents?: number; currency?: string };
+        if (!item) continue;
         merchantCost = (item?.unit_price_cents ?? 0) / 100;
         const checkoutId = `sim_concierge_${cycle}_${randomUUID().slice(0, 8)}`;
         const created: any = await clients[concierge.agentId].createAcpCheckout({
@@ -241,9 +254,21 @@ export async function runConcierge(
         merchantOutcome = `bought "${item.name}" at ${merchant.name} ($${merchantCost.toFixed(2)})`;
         merchantTarget = { id: 'merch:' + String(merchant.id), name: merchant.name };
       } else {
-        const merchant = pick(merchants);
-        const catalog = merchant?.catalog?.products || merchant?.catalog || [];
+        // Same catalog-presence guard as the ACP branch — UCP merchants may
+        // expose a pos_provider without a structured catalog and pick([])
+        // returns undefined, which then blows up on item.id.
+        let merchant: any = null;
+        let catalog: any[] = [];
+        for (let attempt = 0; attempt < 5 && catalog.length === 0; attempt++) {
+          merchant = pick(merchants);
+          catalog = merchant?.catalog?.products || merchant?.catalog || [];
+        }
+        if (!merchant || catalog.length === 0) {
+          await adminClient.comment(`concierge: ${concierge.name} couldn't find a merchant with a catalog (ucp) — skipping cycle`, 'alert');
+          continue;
+        }
         const item = pick(catalog) as { id?: string; name: string; unit_price_cents?: number };
+        if (!item) continue;
         const priceCents = item?.unit_price_cents ?? 0;
         merchantCost = priceCents / 100;
         const checkout: any = await clients[concierge.agentId].createUcpCheckout({

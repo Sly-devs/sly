@@ -2471,6 +2471,34 @@ interface FailureClassification {
   recommendation?: string;       // next-step hint (e.g. "skip this vendor", "wait and retry")
 }
 
+// Some vendors return a 402 body that includes a free/demo fallback URL
+// pointing to a rate-limited endpoint the caller can use without paying.
+// Shape varies; scan the body for common conventions so we can surface
+// the URL in the failure recommendation. Returns the first match or null.
+function findDemoUrl(body: any): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const seen = new Set<any>();
+  const queue: any[] = [body];
+  while (queue.length) {
+    const node = queue.shift();
+    if (!node || typeof node !== 'object' || seen.has(node)) continue;
+    seen.add(node);
+    for (const [key, val] of Object.entries(node)) {
+      // Direct hit: a "demo" / "free" / "fallback" block with a url.
+      if (/^(demo|free|fallback|unpaid|anonymous)$/i.test(key) && val && typeof val === 'object') {
+        const url = (val as any).url || (val as any).href || (val as any).endpoint;
+        if (typeof url === 'string' && /^https?:\/\//.test(url)) return url;
+      }
+      // Or a flat string field named demoUrl / freeUrl / fallbackUrl.
+      if (/^(demo|free|fallback|unpaid|anonymous)_?url$/i.test(key) && typeof val === 'string' && /^https?:\/\//.test(val)) {
+        return val;
+      }
+      if (val && typeof val === 'object') queue.push(val);
+    }
+  }
+  return null;
+}
+
 function classifyX402Failure(args: {
   challenge: any;
   responseStatus: number;
@@ -2522,11 +2550,23 @@ function classifyX402Failure(args: {
     };
   }
 
-  // Facilitator silently rejects — 402 returned with the same challenge again
+  // Facilitator silently rejects — 402 returned with the same challenge again.
+  // Some vendors attach a demo / free fallback URL in the 402 body (e.g.
+  // TrustLayer's {"x-trustlayer":{"demo":{"url":"..."}}}). Surface it in the
+  // recommendation so the caller can fall back without guessing.
   if (responseStatus === 402) {
+    const demoUrl = bodyIsObj ? findDemoUrl(responseBody) : null;
+    const base = 'Facilitator returned 402 again after receiving X-PAYMENT, with no error detail. Likely their paid path is not operational or requires a non-standard scheme.';
+    if (demoUrl) {
+      return {
+        code: 'FACILITATOR_REJECTED_SILENT',
+        explanation: base,
+        recommendation: `Vendor advertised a free fallback at ${demoUrl} — use it for this call. File a bug with the vendor if you need the paid endpoint.`,
+      };
+    }
     return {
       code: 'FACILITATOR_REJECTED_SILENT',
-      explanation: 'Facilitator returned 402 again after receiving X-PAYMENT, with no error detail. Likely their facilitator is not operational or not on our allowlist.',
+      explanation: base,
       recommendation: 'Skip this vendor; worth a bug report with their support.',
     };
   }

@@ -101,3 +101,4 @@ apps/api/scripts/census-skills-mcp.html
 apps/api/scripts/mcp-data.js
 apps/api/scripts/skills-data.js
 apps/api/scripts/catalog-data.json
+.vercel

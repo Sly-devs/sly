@@ -19,32 +19,79 @@ import {
 } from '../demand/snapshots.js';
 import * as queries from '../db/queries.js';
 import { getReadinessGrade } from '@sly/utils';
+import { MCP_CREDIT_COSTS, computeBatchCost } from '../billing/credit-costs.js';
+import { debit, getBalance } from '../billing/ledger.js';
 
-// MCP (stdio) is single-tenant per process. The tenant is configured via
-// SCANNER_TENANT_ID at launch — required in production.
-const MCP_TENANT_ID = (() => {
+// MCP over stdio is single-tenant per process — tenant set from env at launch.
+// MCP over HTTP (remote partners) is multi-tenant; each request carries its
+// own tenant via McpCallContext. When no context is passed we fall back to
+// the stdio-style env-configured tenant.
+const DEFAULT_MCP_TENANT_ID = (() => {
   const t = process.env.SCANNER_TENANT_ID;
   if (t) return t;
   if (process.env.NODE_ENV === 'production') {
-    throw new Error('SCANNER_TENANT_ID is required when running the MCP server in production');
+    // Not fatal for HTTP callers (they provide their own tenant); only fatal
+    // if stdio starts in prod without an env tenant. Handled in server.ts.
+    return null;
   }
   return 'dad4308f-f9b6-4529-a406-7c2bdf3c6071';
 })();
 
+export interface McpCallContext {
+  /** Tenant that writes (scan/batch/test) land under. */
+  tenantId: string;
+  /** Optional — included in audit trails when present. */
+  scannerKeyId?: string;
+}
+
 const batchProcessor = new BatchProcessor();
 
-export async function handleToolCall(request: CallToolRequest): Promise<{
+export async function handleToolCall(
+  request: CallToolRequest,
+  ctx?: McpCallContext,
+): Promise<{
   content: Array<{ type: 'text'; text: string }>;
   isError?: boolean;
 }> {
   const { name, arguments: args } = request.params;
+  const tenantId = ctx?.tenantId ?? DEFAULT_MCP_TENANT_ID;
+  if (!tenantId) {
+    return {
+      content: [{ type: 'text', text: 'Error: MCP tenant not configured (set SCANNER_TENANT_ID for stdio, or pass ctx for HTTP)' }],
+      isError: true,
+    };
+  }
+
+  // Charge credits for write tools when called over HTTP (ctx present).
+  // stdio callers have no ctx — they're internal and don't charge.
+  if (ctx) {
+    const cost = computeMcpCost(name, args);
+    if (cost > 0) {
+      const balance = await getBalance(tenantId);
+      if (balance < cost) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error: insufficient_credits — required ${cost}, balance ${balance}. Top up at partners@getsly.ai`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      await debit(tenantId, cost, `mcp:${name}`, {
+        tool: name,
+        key_id: ctx.scannerKeyId ?? null,
+      });
+    }
+  }
 
   try {
     switch (name) {
       case 'scan_merchant':
-        return await handleScanMerchant(args as any);
+        return await handleScanMerchant(args as any, tenantId);
       case 'batch_scan':
-        return await handleBatchScan(args as any);
+        return await handleBatchScan(args as any, tenantId);
       case 'get_batch_progress':
         return await handleGetBatchProgress(args as any);
       case 'get_scan_results':
@@ -64,7 +111,7 @@ export async function handleToolCall(request: CallToolRequest): Promise<{
       case 'get_demand_stats':
         return await handleGetDemandStats(args as any);
       case 'run_agent_shopping_test':
-        return await handleRunAgentTest(args as any);
+        return await handleRunAgentTest(args as any, tenantId);
       case 'get_test_results':
         return await handleGetTestResults(args as any);
       case 'get_checkout_demand':
@@ -94,9 +141,9 @@ async function handleScanMerchant(args: {
   merchant_category?: string;
   country_code?: string;
   region?: string;
-}) {
+}, tenantId: string) {
   const result = await scanDomain({
-    tenantId: MCP_TENANT_ID,
+    tenantId,
     domain: args.domain,
     merchant_name: args.merchant_name,
     merchant_category: args.merchant_category,
@@ -151,14 +198,14 @@ async function handleScanMerchant(args: {
 async function handleBatchScan(args: {
   domains: Array<{ domain: string; merchant_name?: string; merchant_category?: string; country_code?: string; region?: string }>;
   name?: string;
-}) {
-  const batch = await queries.createBatch(MCP_TENANT_ID, {
+}, tenantId: string) {
+  const batch = await queries.createBatch(tenantId, {
     name: args.name || `MCP Batch ${new Date().toISOString()}`,
     target_domains: args.domains.map(d => d.domain),
   });
 
   // Start in background
-  batchProcessor.processBatch(batch.id, MCP_TENANT_ID, args.domains);
+  batchProcessor.processBatch(batch.id, tenantId, args.domains);
 
   return {
     content: [{
@@ -353,9 +400,9 @@ async function handleGetDemandStats(args: {
   return { content: [{ type: 'text' as const, text: JSON.stringify(stats, null, 2) }] };
 }
 
-async function handleRunAgentTest(args: { domain: string; test_type?: string }) {
+async function handleRunAgentTest(args: { domain: string; test_type?: string }, tenantId: string) {
   const result = await runAgentShoppingTest(
-    MCP_TENANT_ID,
+    tenantId,
     args.domain,
     (args.test_type as 'browse' | 'search' | 'add_to_cart' | 'checkout' | 'full_flow') || undefined,
   );
@@ -557,4 +604,16 @@ function formatDetectionStatus(p: {
     default:
       return 'Not detected';
   }
+}
+
+/**
+ * Per-tool credit cost. batch_scan scales with domain count; others use the
+ * static table in credit-costs.ts. Read-only tools cost 0.
+ */
+function computeMcpCost(toolName: string, args: unknown): number {
+  if (toolName === 'batch_scan') {
+    const domains = (args as { domains?: unknown[] })?.domains;
+    return Array.isArray(domains) ? computeBatchCost(domains.length) : 0;
+  }
+  return MCP_CREDIT_COSTS[toolName] ?? 0;
 }

@@ -13,6 +13,8 @@ import { trafficMonitorRouter } from './routes/traffic-monitor.js';
 import { reportsRouter } from './routes/reports.js';
 import { creditsRouter } from './routes/credits.js';
 import { keysRouter } from './routes/keys.js';
+import { adminRouter } from './routes/admin.js';
+import { mcpRouter } from './routes/mcp.js';
 import { authMiddleware } from './middleware/auth.js';
 import { rateLimitMiddleware } from './middleware/rate-limit.js';
 import { usageCounterMiddleware } from './middleware/usage-counter.js';
@@ -67,6 +69,10 @@ function isPublicV1(path: string): boolean {
   return PUBLIC_V1_SUFFIXES.some((s) => path.endsWith(s));
 }
 
+// Admin routes gate themselves via CRON_SECRET — mounted before the v1 auth
+// group so user JWTs and partner keys can't reach them.
+app.route('/v1', adminRouter);
+
 // Gate middleware — only apply auth/rate-limit/credits/usage to non-public v1.
 const v1 = new Hono();
 v1.use('*', async (c, next) => {
@@ -96,6 +102,7 @@ v1.route('/scanner', trafficMonitorRouter);
 v1.route('/scanner', reportsRouter);
 v1.route('/scanner', creditsRouter);
 v1.route('/scanner', keysRouter);
+v1.route('/scanner', mcpRouter);
 
 app.route('/v1', v1);
 

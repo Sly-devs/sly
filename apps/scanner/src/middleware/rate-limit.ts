@@ -37,6 +37,9 @@ export async function rateLimitMiddleware(c: Context, next: Next) {
   c.header('X-RateLimit-Reset', String(resetSeconds));
 
   if (bucket.count > bucket.limit) {
+    // Retry-After is the RFC-standard header; standard HTTP clients back off
+    // correctly when they see it. We keep X-RateLimit-* for observability.
+    c.header('Retry-After', String(resetSeconds));
     return c.json(
       {
         error: 'rate_limit_exceeded',

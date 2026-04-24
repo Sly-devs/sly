@@ -102,6 +102,7 @@ if (existsSync(reportsSourceDir)) {
 
 // Root config.json: static files take precedence; API catches the rest.
 // /reports/* is served from static/reports/; / serves static/index.html.
+// Crons: monthly partition top-up + weekly scheduled re-scan.
 writeFileSync(
   resolve(outputDir, 'config.json'),
   JSON.stringify(
@@ -113,6 +114,14 @@ writeFileSync(
         { src: '/reports/', dest: '/reports/index.html' },
         { handle: 'filesystem' },
         { src: '/(.*)', dest: '/index' },
+      ],
+      crons: [
+        // 1st of each month at 00:00 UTC — create next 3 months of usage
+        // event partitions so writes don't start failing.
+        { path: '/v1/admin/ensure-partitions', schedule: '0 0 1 * *' },
+        // Monday 06:00 UTC — re-scan stale prospects for all active tenants
+        // whose last scan is > 7d old.
+        { path: '/v1/admin/scheduled-rescan', schedule: '0 6 * * 1' },
       ],
     },
     null,

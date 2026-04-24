@@ -1753,6 +1753,9 @@ export function createMcpServer(
           body,
           headers = {},
           maxPrice,
+          agentReason,
+          expectedFields,
+          linkedProbeTransferId,
         } = args as {
           agentId: string;
           url: string;
@@ -1760,6 +1763,9 @@ export function createMcpServer(
           body?: string;
           headers?: Record<string, string>;
           maxPrice?: string;
+          agentReason?: string;
+          expectedFields?: string[];
+          linkedProbeTransferId?: string;
         };
 
         const baseHeaders: Record<string, string> = { 'Accept': 'application/json', ...headers };
@@ -1840,9 +1846,31 @@ export function createMcpServer(
           marketplace: derivedHost ? marketplaceForHost(derivedHost) : null,
         };
 
+        // Agent intent captured at sign time — the yardstick the quality
+        // rating is measured against later. Only included when the caller
+        // actually set at least one intent field, so the ledger stays
+        // clean for callers who don't care.
+        let intentPayload: any = undefined;
+        if (agentReason || (Array.isArray(expectedFields) && expectedFields.length) || linkedProbeTransferId || body !== undefined) {
+          intentPayload = {};
+          if (agentReason) intentPayload.reason = agentReason;
+          if (Array.isArray(expectedFields) && expectedFields.length) {
+            intentPayload.expectedFields = expectedFields;
+          }
+          if (linkedProbeTransferId) intentPayload.linkedProbeTransferId = linkedProbeTransferId;
+          if (body !== undefined) {
+            try {
+              const { createHash } = await import('node:crypto');
+              intentPayload.requestBodyHash = createHash('sha256').update(String(body)).digest('hex');
+            } catch {
+              // Hashing is best-effort — don't block the sign on it.
+            }
+          }
+        }
+
         const signed = await ctx.sly.request(`/v1/agents/${agentId}/x402-sign`, {
           method: 'POST',
-          body: JSON.stringify({ to: payTo, value: amount, chainId, validBefore, resource: resourcePayload }),
+          body: JSON.stringify({ to: payTo, value: amount, chainId, validBefore, resource: resourcePayload, ...(intentPayload ? { intent: intentPayload } : {}) }),
         }) as any;
 
         // Defensive fallback: once sign succeeds a ledger row exists. If
@@ -2082,6 +2110,25 @@ export function createMcpServer(
         const result = await ctx.sly.request(`/v1/analytics/x402-vendors/${encodeURIComponent(host.toLowerCase().trim())}/rate`, {
           method: 'POST',
           body: JSON.stringify({ thumb, note }),
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'x402_rate_call': {
+        const { transferId, deliveredWhatAsked, satisfaction, score, flags, note } = args as {
+          transferId: string;
+          deliveredWhatAsked: boolean;
+          satisfaction: 'excellent' | 'acceptable' | 'partial' | 'unacceptable';
+          score: number;
+          flags?: string[];
+          note?: string;
+        };
+        if (!transferId || typeof deliveredWhatAsked !== 'boolean' || !satisfaction || typeof score !== 'number') {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'transferId, deliveredWhatAsked, satisfaction, and score are required' }, null, 2) }] };
+        }
+        const result = await ctx.sly.request(`/v1/transfers/${encodeURIComponent(transferId)}/rate-result`, {
+          method: 'POST',
+          body: JSON.stringify({ deliveredWhatAsked, satisfaction, score, flags, note }),
         });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }

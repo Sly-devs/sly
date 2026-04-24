@@ -40,6 +40,12 @@ export interface VendorReputation {
   // totalUsdcPaidUnreturned. Older dashboards read `.totalUsdcWasted`
   // expecting this combined figure; keep it but prefer the split.
   totalUsdcWasted: number;
+  // Per-call quality signal (from x402_call_quality joins). `null` when
+  // nothing has been rated yet — distinct from "rated badly."
+  ratedCallCount: number;
+  deliveredCorrectness: number | null; // 0–1, share of rated calls that delivered what was asked
+  avgResultScore: number | null;       // 0–100, mean score across rated calls
+  topQualityFlags: Record<string, number>;
   recommendation: Recommendation;
   reasoning: string;
 }
@@ -49,6 +55,11 @@ export interface VendorReputation {
 const MIN_CALLS_FOR_RATING = 3;
 const TRUSTED_SUCCESS = 0.9;
 const AVOID_SUCCESS = 0.4;
+// Quality gate — a vendor with HTTP ≥90% but correctness below this
+// gets downgraded to caution. The HTTP-success bar alone can't catch
+// vendors that return valid-looking-but-useless JSON. See Epic 81 plan.
+const CORRECTNESS_CAUTION = 0.6;
+const MIN_RATED_FOR_QUALITY_GATE = 3;
 
 function classify(row: any): { recommendation: Recommendation; reasoning: string } {
   const total = Number(row.total_calls) || 0;
@@ -56,6 +67,8 @@ function classify(row: any): { recommendation: Recommendation; reasoning: string
   const cancelled = Number(row.cancelled_count) || 0;
   const rate = Number(row.success_rate) || 0;
   const hist = (row.classification_histogram || {}) as Record<string, number>;
+  const ratedCount = Number(row.rated_call_count) || 0;
+  const correctness = row.delivered_correctness != null ? Number(row.delivered_correctness) : null;
 
   if (total < MIN_CALLS_FOR_RATING) {
     return {
@@ -65,9 +78,22 @@ function classify(row: any): { recommendation: Recommendation; reasoning: string
   }
 
   if (rate >= TRUSTED_SUCCESS) {
+    // HTTP looks fine — but if enough callers have rated the results
+    // and correctness is poor, downgrade. This is the "deceptive
+    // reliability" case the quality layer exists to catch.
+    if (correctness != null && ratedCount >= MIN_RATED_FOR_QUALITY_GATE && correctness < CORRECTNESS_CAUTION) {
+      const wrongShare = ((1 - correctness) * 100).toFixed(0);
+      return {
+        recommendation: 'caution',
+        reasoning: `${completed}/${total} HTTP-completed (${(rate * 100).toFixed(0)}%), but ${wrongShare}% of ${ratedCount} rated calls didn't deliver what was asked. Response looked valid but contents were poor.`,
+      };
+    }
+    const qualNote = correctness != null && ratedCount >= MIN_RATED_FOR_QUALITY_GATE
+      ? ` Correctness: ${(correctness * 100).toFixed(0)}% (${ratedCount} rated).`
+      : '';
     return {
       recommendation: 'trusted',
-      reasoning: `${completed}/${total} calls completed (${(rate * 100).toFixed(0)}%). Safe to use.`,
+      reasoning: `${completed}/${total} calls completed (${(rate * 100).toFixed(0)}%).${qualNote} Safe to use.`,
     };
   }
 
@@ -118,6 +144,10 @@ function mapRow(row: any): VendorReputation {
     totalUsdcAuthorizedUnredeemed: authorizedUnredeemed,
     totalUsdcPaidUnreturned: paidUnreturned,
     totalUsdcWasted: authorizedUnredeemed + paidUnreturned,
+    ratedCallCount: Number(row.rated_call_count) || 0,
+    deliveredCorrectness: row.delivered_correctness != null ? Number(row.delivered_correctness) : null,
+    avgResultScore: row.avg_result_score != null ? Number(row.avg_result_score) : null,
+    topQualityFlags: (row.top_quality_flags || {}) as Record<string, number>,
     recommendation,
     reasoning,
   };
@@ -177,6 +207,10 @@ export async function getVendorReputation(
     totalUsdcAuthorizedUnredeemed: 0,
     totalUsdcPaidUnreturned: 0,
     totalUsdcWasted: 0,
+    ratedCallCount: 0,
+    deliveredCorrectness: null,
+    avgResultScore: null,
+    topQualityFlags: {},
     recommendation: 'unknown',
     reasoning: 'No calls to this host from this tenant in the window.',
   };

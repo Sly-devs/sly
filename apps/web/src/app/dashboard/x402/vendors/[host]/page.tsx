@@ -37,6 +37,10 @@ interface VendorRow {
   totalUsdcAuthorizedUnredeemed: number;
   totalUsdcPaidUnreturned: number;
   totalUsdcWasted: number; // compat
+  ratedCallCount: number;
+  deliveredCorrectness: number | null;
+  avgResultScore: number | null;
+  topQualityFlags: Record<string, number>;
   recommendation: Recommendation;
   reasoning: string;
 }
@@ -160,7 +164,7 @@ export default function VendorDetailPage() {
         <div className="h-40 bg-gray-100 dark:bg-gray-900 rounded-2xl animate-pulse" />
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
             <Stat label="Calls" value={String(v.totalCalls)} sub={`${v.completedCount}✓ ${v.cancelledCount}✗${v.pendingCount > 0 ? ` ${v.pendingCount}○` : ''}`} />
             <Stat label="Success rate" value={`${(v.successRate * 100).toFixed(0)}%`} tone={v.successRate >= 0.9 ? 'emerald' : v.successRate >= 0.4 ? 'amber' : 'red'} />
             <Stat
@@ -176,6 +180,64 @@ export default function VendorDetailPage() {
             />
             <Stat label="Avg response" value={v.avgDurationMs ? `${Math.round(v.avgDurationMs)}ms` : '—'} sub={v.avgResponseSize ? `${Math.round(v.avgResponseSize)} bytes` : undefined} />
           </div>
+
+          {/* Quality row — fed by x402_call_quality (per-transfer ratings).
+              Appears only when someone's rated something; an "unrated"
+              vendor renders the empty state so the UI doesn't pretend. */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+            <Stat
+              label="Delivered what asked"
+              value={v.deliveredCorrectness != null ? `${(v.deliveredCorrectness * 100).toFixed(0)}%` : '—'}
+              sub={v.ratedCallCount > 0 ? `${v.ratedCallCount} rated call${v.ratedCallCount === 1 ? '' : 's'}` : 'no ratings yet'}
+              tone={
+                v.deliveredCorrectness == null
+                  ? undefined
+                  : v.deliveredCorrectness >= 0.9
+                    ? 'emerald'
+                    : v.deliveredCorrectness >= 0.6
+                      ? 'amber'
+                      : 'red'
+              }
+            />
+            <Stat
+              label="Avg quality score"
+              value={v.avgResultScore != null ? `${v.avgResultScore.toFixed(0)}/100` : '—'}
+              sub={v.ratedCallCount > 0 ? `${v.ratedCallCount} rated call${v.ratedCallCount === 1 ? '' : 's'}` : 'no ratings yet'}
+              tone={
+                v.avgResultScore == null
+                  ? undefined
+                  : v.avgResultScore >= 80
+                    ? 'emerald'
+                    : v.avgResultScore >= 50
+                      ? 'amber'
+                      : 'red'
+              }
+            />
+            <Stat
+              label="Rated call coverage"
+              value={`${v.ratedCallCount}/${v.totalCalls}`}
+              sub={v.totalCalls > 0 && v.ratedCallCount > 0 ? `${((v.ratedCallCount / v.totalCalls) * 100).toFixed(0)}% rated` : 'rate more calls for signal'}
+            />
+          </div>
+
+          {/* Deceptive reliability banner — the reason this quality layer
+              exists. When HTTP success looks great but callers say the data
+              is wrong, warn explicitly. Threshold: HTTP ≥90%, correctness <70%,
+              at least 3 ratings (mirrors MIN_RATED_FOR_QUALITY_GATE in reputation.ts). */}
+          {v.deliveredCorrectness != null && v.ratedCallCount >= 3 && v.successRate >= 0.9 && v.deliveredCorrectness < 0.7 && (
+            <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-2xl p-4 mb-6 flex gap-3">
+              <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-amber-900 dark:text-amber-200 mb-1">
+                  Deceptive reliability
+                </div>
+                <p className="text-sm text-amber-800 dark:text-amber-300">
+                  HTTP says this vendor is healthy ({(v.successRate * 100).toFixed(0)}% success), but {((1 - v.deliveredCorrectness) * 100).toFixed(0)}% of rated calls didn't deliver what was asked.
+                  The responses look valid on the wire but contain the wrong data. Treat as <strong>caution</strong> regardless of the HTTP number.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Reasoning */}
           <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 mb-6">
@@ -206,6 +268,35 @@ export default function VendorDetailPage() {
                         </div>
                         <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
                           <div className="h-full bg-red-400 rounded-full" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* Top quality flags — most-common failure-mode tags raters added
+              (stale_data, hallucinated, schema_mismatch, etc). Complements
+              the classification histogram, which is wire-level; these are
+              semantic. */}
+          {Object.keys(v.topQualityFlags || {}).length > 0 && (
+            <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 mb-6">
+              <div className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Top quality flags</div>
+              <div className="space-y-2">
+                {Object.entries(v.topQualityFlags)
+                  .sort(([, a], [, b]) => b - a)
+                  .map(([flag, count]) => {
+                    const max = Math.max(...Object.values(v.topQualityFlags));
+                    const pct = (count / max) * 100;
+                    return (
+                      <div key={flag}>
+                        <div className="flex items-center justify-between text-xs mb-1">
+                          <code className="text-gray-700 dark:text-gray-300">{flag}</code>
+                          <span className="text-gray-500">{count}</span>
+                        </div>
+                        <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-amber-400 rounded-full" style={{ width: `${pct}%` }} />
                         </div>
                       </div>
                     );

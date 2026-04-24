@@ -24,6 +24,7 @@ import {
 import type { Transfer } from '@sly/api-client';
 import { RefundModal } from '@/components/transfers/refund-modal';
 import { SettlementTimeline } from '@/components/transfers/settlement-timeline';
+import { CallQualityPanel } from '@/components/transfers/call-quality-panel';
 
 export default function TransferDetailPage() {
   const params = useParams();
@@ -590,6 +591,27 @@ export default function TransferDetailPage() {
                   );
                 })()}
 
+                {/* Intent — what the agent said it was trying to accomplish at sign time.
+                    Surfaced side-by-side with the response so the rater has the yardstick. */}
+                {m.intent && (m.intent.reason || (Array.isArray(m.intent.expected_fields) && m.intent.expected_fields.length > 0)) && (
+                  <div className="mt-6 p-4 bg-white/70 dark:bg-gray-800/70 rounded-xl border border-indigo-200 dark:border-indigo-900">
+                    <h4 className="text-sm font-medium text-indigo-700 dark:text-indigo-300 mb-2">Agent intent</h4>
+                    {m.intent.reason && (
+                      <p className="text-sm text-gray-800 dark:text-gray-200 mb-2">{m.intent.reason}</p>
+                    )}
+                    {Array.isArray(m.intent.expected_fields) && m.intent.expected_fields.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        <span className="text-xs text-gray-500 dark:text-gray-400 mr-1">Expected fields:</span>
+                        {m.intent.expected_fields.map((f: string) => (
+                          <span key={f} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300">
+                            {f}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Response capture — lets the owner distinguish "paid and got real data"
                     from "paid but the upstream returned garbage / 500 / error envelope." */}
                 {m.response && (() => {
@@ -645,6 +667,16 @@ export default function TransferDetailPage() {
               </div>
             );
           })()}
+
+          {/* Per-call quality rating panel — applies to any x402 transfer where the
+              agent paid an external vendor (direction === 'external'). The rating
+              feeds the vendor leaderboard's correctness column. */}
+          {isX402 && safeTransfer.x402Metadata?.direction === 'external' && (
+            <CallQualityPanel
+              transferId={transferId}
+              intent={safeTransfer.x402Metadata?.intent || null}
+            />
+          )}
 
           {/* Internal x402 Metadata Section (marketplace endpoint payments) */}
           {isX402 && safeTransfer.x402Metadata && safeTransfer.x402Metadata.direction !== 'external' && (

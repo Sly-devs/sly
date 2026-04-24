@@ -1821,6 +1821,19 @@ export const tools: Tool[] = [
           type: 'string',
           description: 'Hard cap on the challenge amount, in token micro-units as a decimal string (e.g. "50000" = 0.05 USDC). Reject if the 402 asks for more. Omit to disable the cap.',
         },
+        agentReason: {
+          type: 'string',
+          description: 'Short human-readable reason for this call — "what am I trying to accomplish?" (e.g. "Look up trust score for agent 53 before referring the buyer"). Persisted on the transfer so the quality rating later has a yardstick. Max 500 chars.',
+        },
+        expectedFields: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Field names the response is expected to contain (e.g. ["trustScore", "sybilRisk"]). If the vendor returns valid JSON missing these fields, a quality rating can flag it. Derived from the x402_probe bazaar.schema when present.',
+        },
+        linkedProbeTransferId: {
+          type: 'string',
+          description: 'Optional transfer id from a prior x402_probe that surfaced this endpoint — lets the dashboard chain "probed → paid → rated."',
+        },
       },
       required: ['agentId', 'url'],
     },
@@ -1872,6 +1885,36 @@ export const tools: Tool[] = [
         note: { type: 'string', description: 'Optional free-text rationale (max 1000 chars)' },
       },
       required: ['host', 'thumb'],
+    },
+  },
+  {
+    name: 'x402_rate_call',
+    description: 'Rate the quality of ONE specific x402 call (per-transfer), not the vendor overall. Use after receiving a paid response to flag whether the vendor actually delivered what was asked. Upserts — one rating per (transfer, rater) so a second call from the same rater updates the first. Feeds the `deliveredCorrectness` and `avgResultScore` columns on the vendor leaderboard: a vendor with 100% HTTP success but 30% correctness reads as WORSE than a 70% success / 95% correctness vendor. Catches vendors that return valid-looking-but-useless JSON (`{"result":"no data"}` with HTTP 200).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        transferId: { type: 'string', description: 'UUID of the x402 transfer to rate (returned from x402_fetch as transferId).' },
+        deliveredWhatAsked: { type: 'boolean', description: 'Hard gate — did the response actually contain the information the agent was looking for?' },
+        satisfaction: {
+          type: 'string',
+          enum: ['excellent', 'acceptable', 'partial', 'unacceptable'],
+          description: 'Qualitative tier. `excellent` = exactly what was asked; `acceptable` = usable; `partial` = some fields missing or stale; `unacceptable` = wrong data, hallucinated, empty.',
+        },
+        score: {
+          type: 'number',
+          description: '0–100 quality score. Feeds `avgResultScore` on the vendor leaderboard. 90+ excellent, 60–89 acceptable, 30–59 partial, <30 unacceptable.',
+        },
+        flags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Zero or more tags pinpointing the failure mode. Common flags: `stale_data`, `partial_response`, `hallucinated`, `rate_limited`, `schema_mismatch`, `empty_payload`, `wrong_entity`.',
+        },
+        note: {
+          type: 'string',
+          description: 'Optional free-text comment — what was asked vs. what came back. Max 2000 chars.',
+        },
+      },
+      required: ['transferId', 'deliveredWhatAsked', 'satisfaction', 'score'],
     },
   },
   {

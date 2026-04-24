@@ -2745,6 +2745,11 @@ agents.post('/:id/x402-sign', async (c) => {
     // challenge (challenge.resource) so the dashboard can render vendor +
     // endpoint instead of just a recipient address.
     resource,
+    // Optional agent intent — captured at sign time so the per-call
+    // quality rating later has a yardstick: "the agent asked for X, did
+    // the response deliver X?". Mirrors A2A's expectedOutcome pattern.
+    // No schema change needed — stored at protocol_metadata.intent.
+    intent,
   } = body;
 
   if (!to || !value || !validBefore) {
@@ -3025,6 +3030,23 @@ agents.post('/:id/x402-sign', async (c) => {
           description: resource.description || null,
           mime_type: resource.mimeType || resource.mime_type || null,
           marketplace: resource.marketplace || null,
+        } : null,
+        // Agent intent: why was this call made, and what does the
+        // agent expect to find? The quality rating is measured
+        // against this, so the dashboard can show the intent alongside
+        // the response side-by-side.
+        intent: intent && typeof intent === 'object' ? {
+          reason: typeof intent.reason === 'string' ? intent.reason.slice(0, 500) : null,
+          expected_fields: Array.isArray(intent.expectedFields)
+            ? intent.expectedFields.slice(0, 32).map((f: any) => String(f).slice(0, 80))
+            : null,
+          linked_probe_transfer_id: typeof intent.linkedProbeTransferId === 'string'
+            ? intent.linkedProbeTransferId
+            : null,
+          request_body_hash: typeof intent.requestBodyHash === 'string'
+            ? intent.requestBodyHash.slice(0, 128)
+            : null,
+          captured_at: new Date().toISOString(),
         } : null,
       },
     }).select('id').single();

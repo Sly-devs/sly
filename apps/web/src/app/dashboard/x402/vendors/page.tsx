@@ -33,18 +33,45 @@ interface VendorRow {
   totalUsdcAuthorizedUnredeemed: number;
   totalUsdcPaidUnreturned: number;
   totalUsdcWasted: number; // compat alias
+  ratedCallCount: number;
+  deliveredCorrectness: number | null;
+  avgResultScore: number | null;
+  topQualityFlags: Record<string, number>;
   recommendation: Recommendation;
   reasoning: string;
 }
 
-type SortKey = 'volume' | 'success' | 'spent' | 'wasted' | 'recent';
+type SortKey = 'volume' | 'success' | 'spent' | 'wasted' | 'recent' | 'correctness';
 
-function recBadge(rec: Recommendation) {
+// Infers whether a 'caution' recommendation was driven by the quality
+// gate (HTTP OK but contents bad) vs. ordinary HTTP flakiness. The
+// server doesn't ship a `cautionReason` field, so mirror the
+// server-side classify() gate threshold instead.
+function isQualityCaution(r: VendorRow): boolean {
+  return (
+    r.recommendation === 'caution' &&
+    r.successRate >= 0.9 &&
+    r.deliveredCorrectness != null &&
+    r.ratedCallCount >= 3 &&
+    r.deliveredCorrectness < 0.6
+  );
+}
+
+function recBadge(rec: Recommendation, qualityCaution = false) {
   switch (rec) {
     case 'trusted':
       return <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400"><CheckCircle2 className="h-3 w-3" /> trusted</span>;
     case 'caution':
-      return <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> caution</span>;
+      return qualityCaution ? (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700"
+          title="HTTP looks healthy but rated calls didn't deliver what was asked"
+        >
+          <AlertTriangle className="h-3 w-3" /> quality caution
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> caution</span>
+      );
     case 'avoid':
       return <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400"><XCircle className="h-3 w-3" /> avoid</span>;
     default:
@@ -107,6 +134,12 @@ export default function X402VendorsPage() {
     const sorted = [...out].sort((a, b) => {
       if (sortBy === 'volume') return b.totalCalls - a.totalCalls;
       if (sortBy === 'success') return b.successRate - a.successRate;
+      if (sortBy === 'correctness') {
+        // Vendors with no ratings sort last regardless of order.
+        const aVal = a.deliveredCorrectness == null ? -1 : a.deliveredCorrectness;
+        const bVal = b.deliveredCorrectness == null ? -1 : b.deliveredCorrectness;
+        return bVal - aVal;
+      }
       if (sortBy === 'spent') return b.totalUsdcSpent - a.totalUsdcSpent;
       if (sortBy === 'wasted') return (b.totalUsdcPaidUnreturned + b.totalUsdcAuthorizedUnredeemed) - (a.totalUsdcPaidUnreturned + a.totalUsdcAuthorizedUnredeemed);
       if (sortBy === 'recent') {
@@ -187,6 +220,7 @@ export default function X402VendorsPage() {
         >
           <option value="volume">Sort: Call volume</option>
           <option value="success">Sort: Success rate</option>
+          <option value="correctness">Sort: Correctness</option>
           <option value="spent">Sort: USDC spent</option>
           <option value="wasted">Sort: Unredeemed</option>
           <option value="recent">Sort: Most recent</option>
@@ -202,6 +236,7 @@ export default function X402VendorsPage() {
               <th className="px-6 py-3 text-left">Recommendation</th>
               <th className="px-6 py-3 text-right">Calls</th>
               <th className="px-6 py-3 text-right">Success</th>
+              <th className="px-6 py-3 text-right" title="Share of rated calls that delivered what was asked. HTTP ≥ 200 is not the same as useful data.">Correctness</th>
               <th className="px-6 py-3 text-right">Avg time</th>
               <th className="px-6 py-3 text-right">USDC spent</th>
               <th className="px-6 py-3 text-right" title="Authorizations signed but never redeemed on-chain, plus any actually-lost funds">Unredeemed</th>
@@ -210,9 +245,9 @@ export default function X402VendorsPage() {
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-900">
             {isLoading ? (
-              <tr><td colSpan={8} className="px-6 py-10 text-center text-gray-500">Loading…</td></tr>
+              <tr><td colSpan={9} className="px-6 py-10 text-center text-gray-500">Loading…</td></tr>
             ) : filteredSorted.length === 0 ? (
-              <tr><td colSpan={8} className="px-6 py-10 text-center text-gray-500">No vendors match the filter.</td></tr>
+              <tr><td colSpan={9} className="px-6 py-10 text-center text-gray-500">No vendors match the filter.</td></tr>
             ) : filteredSorted.map((r) => {
               const lastIso = [r.lastSuccessAt, r.lastFailureAt].filter(Boolean).sort().reverse()[0] || null;
               return (
@@ -224,7 +259,7 @@ export default function X402VendorsPage() {
                     {r.marketplace && <div className="text-xs text-gray-500">{r.marketplace}</div>}
                   </td>
                   <td className="px-6 py-3">
-                    {recBadge(r.recommendation)}
+                    {recBadge(r.recommendation, isQualityCaution(r))}
                     <div className="text-xs text-gray-500 mt-0.5 max-w-[280px] truncate" title={r.reasoning}>{r.reasoning}</div>
                   </td>
                   <td className="px-6 py-3 text-right tabular-nums text-gray-900 dark:text-white">
@@ -235,6 +270,25 @@ export default function X402VendorsPage() {
                     <span className={r.successRate >= 0.9 ? 'text-emerald-600 dark:text-emerald-400' : r.successRate >= 0.4 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}>
                       {(r.successRate * 100).toFixed(0)}%
                     </span>
+                  </td>
+                  <td className="px-6 py-3 text-right tabular-nums">
+                    {r.deliveredCorrectness == null ? (
+                      <span className="text-gray-400" title="No ratings yet — use x402_rate_call or rate from the transfer page">—</span>
+                    ) : (
+                      <span
+                        className={
+                          r.deliveredCorrectness >= 0.9
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : r.deliveredCorrectness >= 0.6
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-red-600 dark:text-red-400'
+                        }
+                        title={`${r.ratedCallCount} rated call${r.ratedCallCount === 1 ? '' : 's'}${r.avgResultScore != null ? ` · avg score ${r.avgResultScore.toFixed(0)}/100` : ''}`}
+                      >
+                        {(r.deliveredCorrectness * 100).toFixed(0)}%
+                      </span>
+                    )}
+                    <div className="text-xs text-gray-400">{r.ratedCallCount > 0 ? `${r.ratedCallCount} rated` : 'unrated'}</div>
                   </td>
                   <td className="px-6 py-3 text-right tabular-nums text-gray-600 dark:text-gray-400">{r.avgDurationMs ? `${Math.round(r.avgDurationMs)}ms` : '—'}</td>
                   <td className="px-6 py-3 text-right tabular-nums text-gray-900 dark:text-white">{money(r.totalUsdcSpent)}</td>

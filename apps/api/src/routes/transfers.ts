@@ -752,6 +752,19 @@ const classificationSchema = z.object({
   recommendation: z.string().max(500).nullable().optional(),
 }).optional();
 
+// Per-call result quality — Epic 81 quality layer. Callers (agent or
+// user) rate whether this specific call actually delivered what was
+// asked. Used by the vendor leaderboard to catch vendors that return
+// valid-looking-but-useless JSON (100% HTTP success, 30% correctness).
+const resultQualitySchema = z.object({
+  deliveredWhatAsked: z.boolean(),
+  satisfaction: z.enum(['excellent', 'acceptable', 'partial', 'unacceptable']),
+  score: z.number().int().min(0).max(100),
+  flags: z.array(z.string().max(64)).max(16).optional(),
+  note: z.string().max(2000).optional(),
+  evidence: z.any().optional(),
+}).optional();
+
 const recordSettlementSchema = z.object({
   // Success path: on-chain tx hash from the facilitator receipt.
   txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/, 'tx_hash must be 0x + 64 hex chars').optional(),
@@ -765,10 +778,60 @@ const recordSettlementSchema = z.object({
   // Failure classification — tells the dashboard WHY the call failed
   // (agentkit required / facilitator rejected / vendor backend / etc).
   classification: classificationSchema,
+  // Optional quality rating from the caller — one network trip instead
+  // of a follow-up POST /rate-result. Safe to omit.
+  resultQuality: resultQualitySchema,
 }).refine(
-  (d) => !!(d.txHash || d.failureReason || d.responseMetadata),
-  { message: 'Provide at least one of txHash, failureReason, or responseMetadata' },
+  (d) => !!(d.txHash || d.failureReason || d.responseMetadata || d.resultQuality),
+  { message: 'Provide at least one of txHash, failureReason, responseMetadata, or resultQuality' },
 );
+
+// Shapes an x402_call_quality row from a parsed resultQuality payload
+// and the auth context. Used by both the inline path (record-settlement)
+// and the standalone path (/:id/rate-result) so the two stay in sync.
+function buildCallQualityRow(
+  ctx: any,
+  transferId: string,
+  host: string,
+  q: z.infer<typeof resultQualitySchema> extends infer T ? (T extends undefined ? never : NonNullable<T>) : never,
+): any {
+  // Map the auth context to a stable (rated_by_type, rated_by_id) pair.
+  // agents (including sess_* Ed25519 sessions) → 'agent' + agent id
+  // user JWT → 'user' + user id
+  // api key → 'api_key' + api key id
+  let ratedByType: 'agent' | 'user' | 'api_key' | 'auto' = 'api_key';
+  let ratedById: string | null = null;
+  let ratedByName: string | null = null;
+  if (ctx.actorType === 'agent') {
+    ratedByType = 'agent';
+    ratedById = ctx.actorId ?? null;
+    ratedByName = ctx.actorName ?? null;
+  } else if (ctx.actorType === 'user') {
+    ratedByType = 'user';
+    ratedById = ctx.userId ?? null;
+    ratedByName = ctx.userName ?? null;
+  } else {
+    ratedByType = 'api_key';
+    ratedById = ctx.apiKeyId ?? null;
+    ratedByName = null;
+  }
+  return {
+    tenant_id: ctx.tenantId,
+    transfer_id: transferId,
+    host,
+    agent_id: ctx.actorType === 'agent' ? (ctx.actorId ?? null) : null,
+    delivered_what_asked: q.deliveredWhatAsked,
+    satisfaction: q.satisfaction,
+    score: q.score,
+    flags: q.flags ?? null,
+    note: q.note ?? null,
+    evidence: q.evidence ?? null,
+    rated_by_type: ratedByType,
+    rated_by_id: ratedById,
+    rated_by_name: ratedByName,
+    updated_at: new Date().toISOString(),
+  };
+}
 
 transfers.post('/:id/record-settlement', async (c) => {
   const ctx = c.get('ctx');
@@ -781,7 +844,7 @@ transfers.post('/:id/record-settlement', async (c) => {
   if (!parsed.success) {
     throw new ValidationError('Invalid body', parsed.error.issues);
   }
-  const { txHash, network, payer, settledAt, failureReason, responseMetadata, classification } = parsed.data;
+  const { txHash, network, payer, settledAt, failureReason, responseMetadata, classification, resultQuality } = parsed.data;
 
   const supabase = createClient();
 
@@ -876,6 +939,19 @@ transfers.post('/:id/record-settlement', async (c) => {
     throw new Error('Failed to record settlement');
   }
 
+  // Inline quality rating — if the caller sent one, upsert an
+  // x402_call_quality row keyed to (transfer, rater). Non-fatal if it
+  // fails; the settlement write is the source of truth.
+  if (resultQuality) {
+    const host = String(pm?.resource?.host || '').trim().toLowerCase();
+    const qualityRow = buildCallQualityRow(ctx, id, host, resultQuality);
+    const { error: qErr } = await (supabase.from('x402_call_quality') as any)
+      .upsert(qualityRow, { onConflict: 'transfer_id,rated_by_type,rated_by_id' });
+    if (qErr) {
+      console.warn('[record-settlement] quality rating upsert failed', qErr);
+    }
+  }
+
   await logAudit(supabase, {
     tenantId: ctx.tenantId,
     entityType: 'transfer',
@@ -900,6 +976,114 @@ transfers.post('/:id/record-settlement', async (c) => {
       self: `/v1/transfers/${id}`,
     },
   });
+});
+
+// ============================================
+// POST /v1/transfers/:id/rate-result
+// Post-hoc quality rating for an x402 transfer — used when the agent
+// realizes the data was bad an hour later, or when a user rates from
+// the dashboard. Inline rating on record-settlement is one trip; this
+// is the two-trip path.
+// ============================================
+const rateResultSchema = z.object({
+  deliveredWhatAsked: z.boolean(),
+  satisfaction: z.enum(['excellent', 'acceptable', 'partial', 'unacceptable']),
+  score: z.number().int().min(0).max(100),
+  flags: z.array(z.string().max(64)).max(16).optional(),
+  note: z.string().max(2000).optional(),
+  evidence: z.any().optional(),
+});
+
+transfers.post('/:id/rate-result', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid transfer ID format');
+
+  let body: any = {};
+  try { body = await c.req.json(); } catch { throw new ValidationError('Invalid JSON body'); }
+  const parsed = rateResultSchema.safeParse(body);
+  if (!parsed.success) throw new ValidationError('Invalid body', parsed.error.issues);
+
+  const supabase = createClient();
+
+  const { data: row, error: fetchErr } = await supabase
+    .from('transfers')
+    .select('id, type, tenant_id, protocol_metadata, environment')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .single();
+  if (fetchErr || !row) throw new NotFoundError('Transfer', id);
+  if ((row as any).type !== 'x402') {
+    throw new ValidationError('rate-result only applies to x402 transfers');
+  }
+
+  const pm: any = (row as any).protocol_metadata || {};
+  const host = String(pm?.resource?.host || '').trim().toLowerCase();
+  if (!host) {
+    throw new ValidationError('Transfer has no resource.host — cannot attribute rating to a vendor');
+  }
+
+  const qualityRow = buildCallQualityRow(ctx, id, host, parsed.data);
+  const { data: upserted, error: upErr } = await (supabase.from('x402_call_quality') as any)
+    .upsert(qualityRow, { onConflict: 'transfer_id,rated_by_type,rated_by_id' })
+    .select()
+    .single();
+  if (upErr) {
+    console.error('[rate-result] upsert failed', upErr);
+    throw new Error('Failed to record rating');
+  }
+
+  await logAudit(supabase, {
+    tenantId: ctx.tenantId,
+    entityType: 'transfer',
+    entityId: id,
+    action: 'quality_rated',
+    actorType: ctx.actorType,
+    actorId: ctx.actorId,
+    actorName: ctx.actorName,
+    metadata: {
+      host,
+      delivered_what_asked: parsed.data.deliveredWhatAsked,
+      satisfaction: parsed.data.satisfaction,
+      score: parsed.data.score,
+    },
+  });
+
+  return c.json({ data: upserted, links: { transfer: `/v1/transfers/${id}`, ratings: `/v1/transfers/${id}/ratings` } });
+});
+
+// ============================================
+// GET /v1/transfers/:id/ratings
+// All quality ratings for a call — may include an agent rating, a user
+// rating, etc. The UI surfaces both so agent/user disagreement is
+// visible instead of getting averaged out.
+// ============================================
+transfers.get('/:id/ratings', async (c) => {
+  const ctx = c.get('ctx');
+  const id = c.req.param('id');
+  if (!isValidUUID(id)) throw new ValidationError('Invalid transfer ID format');
+
+  const supabase = createClient();
+
+  const { data: row, error: fetchErr } = await supabase
+    .from('transfers')
+    .select('id')
+    .eq('id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('environment', getEnv(ctx))
+    .single();
+  if (fetchErr || !row) throw new NotFoundError('Transfer', id);
+
+  const { data, error } = await supabase
+    .from('x402_call_quality')
+    .select('*')
+    .eq('transfer_id', id)
+    .eq('tenant_id', ctx.tenantId)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(`Failed to fetch ratings: ${error.message}`);
+
+  return c.json({ data: data || [] });
 });
 
 export default transfers;

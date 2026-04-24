@@ -91,6 +91,7 @@ const agenticPaymentsChildren = [
     icon: Zap,
     children: [
       { href: '/dashboard/agentic-payments/x402/endpoints', label: 'Endpoints', icon: Globe },
+      { href: '/dashboard/x402/vendors', label: 'Vendor Reliability', icon: Shield },
       { href: '/dashboard/agentic-payments/x402/integration', label: 'Integration', icon: Code },
     ],
   },

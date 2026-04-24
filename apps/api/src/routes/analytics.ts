@@ -211,6 +211,77 @@ app.get('/x402-vendors', async (c) => {
   }
 });
 
+// Ratings — tenants + agents can thumb up/down a vendor with an
+// optional note. One rating per (agent, host); rows upsert.
+app.post('/x402-vendors/:host/rate', async (c) => {
+  const ctx = c.get('ctx');
+  if (!ctx?.tenantId) return c.json({ error: 'Unauthorized' }, 401);
+  const host = (c.req.param('host') || '').toLowerCase().trim();
+  if (!host) return c.json({ error: 'Missing host' }, 400);
+
+  let body: any = {};
+  try { body = await c.req.json(); } catch {}
+  const thumb = body?.thumb;
+  const note = typeof body?.note === 'string' ? body.note.slice(0, 1000) : null;
+  if (thumb !== 'up' && thumb !== 'down') {
+    return c.json({ error: "thumb must be 'up' or 'down'" }, 400);
+  }
+  const agentIdScope = ctx.actorType === 'agent' ? ctx.actorId : (body?.agentId ?? null);
+
+  const supabase = createClient();
+  // Upsert by the appropriate unique index: agent-scoped or tenant-scoped.
+  const existingQuery = agentIdScope
+    ? supabase.from('x402_vendor_ratings').select('id')
+        .eq('tenant_id', ctx.tenantId).eq('host', host).eq('agent_id', agentIdScope).maybeSingle()
+    : supabase.from('x402_vendor_ratings').select('id')
+        .eq('tenant_id', ctx.tenantId).eq('host', host).is('agent_id', null).maybeSingle();
+  const { data: existing } = await existingQuery as any;
+
+  const rowData: any = {
+    tenant_id: ctx.tenantId,
+    agent_id: agentIdScope,
+    host,
+    thumb,
+    note,
+    rated_by_type: ctx.actorType,
+    rated_by_id: ctx.actorId ?? ctx.userId ?? ctx.apiKeyId ?? null,
+    rated_by_name: ctx.actorName ?? ctx.userName ?? null,
+  };
+
+  let result;
+  if (existing?.id) {
+    const { data, error } = await (supabase.from('x402_vendor_ratings') as any)
+      .update({ thumb, note, rated_by_type: rowData.rated_by_type, rated_by_id: rowData.rated_by_id, rated_by_name: rowData.rated_by_name })
+      .eq('id', existing.id)
+      .select('*').single();
+    if (error) return c.json({ error: error.message }, 500);
+    result = data;
+  } else {
+    const { data, error } = await (supabase.from('x402_vendor_ratings') as any)
+      .insert(rowData)
+      .select('*').single();
+    if (error) return c.json({ error: error.message }, 500);
+    result = data;
+  }
+  return c.json({ data: result });
+});
+
+app.get('/x402-vendors/:host/ratings', async (c) => {
+  const ctx = c.get('ctx');
+  if (!ctx?.tenantId) return c.json({ error: 'Unauthorized' }, 401);
+  const host = (c.req.param('host') || '').toLowerCase().trim();
+  if (!host) return c.json({ error: 'Missing host' }, 400);
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('x402_vendor_ratings')
+    .select('*')
+    .eq('tenant_id', ctx.tenantId)
+    .eq('host', host)
+    .order('updated_at', { ascending: false });
+  if (error) return c.json({ error: error.message }, 500);
+  return c.json({ data: data || [] });
+});
+
 app.get('/x402-vendors/:host', async (c) => {
   const ctx = c.get('ctx');
   if (!ctx?.tenantId) return c.json({ error: 'Unauthorized' }, 401);

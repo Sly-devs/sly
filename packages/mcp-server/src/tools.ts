@@ -1862,6 +1862,19 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: 'x402_rate_vendor',
+    description: 'Leave a thumbs-up or thumbs-down rating on an x402 vendor, with an optional note. Upserts — one rating per (calling agent, host). Lets agents capture signal beyond raw success rate: "data was wrong even though HTTP 200", "great docs and fast", "broken during US business hours", etc. Visible to tenant owners on the vendor dashboard. Use after a few calls to a vendor to contribute to the tenant\'s reputation corpus.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        host: { type: 'string', description: 'Hostname to rate (e.g. "api.slamai.dev")' },
+        thumb: { type: 'string', enum: ['up', 'down'], description: 'up for good, down for bad' },
+        note: { type: 'string', description: 'Optional free-text rationale (max 1000 chars)' },
+      },
+      required: ['host', 'thumb'],
+    },
+  },
+  {
     name: 'x402_list_vendors',
     description: 'List every x402 vendor this tenant has tried, sorted by volume, with per-vendor reliability scores. Returns the same shape as x402_endpoint_reputation but for every host. Useful for "which vendors have I wasted money on?" audits or picking alternatives in a category. Default window 30d.',
     inputSchema: {

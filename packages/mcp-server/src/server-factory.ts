@@ -2074,6 +2074,18 @@ export function createMcpServer(
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
+      case 'x402_rate_vendor': {
+        const { host, thumb, note } = args as { host: string; thumb: 'up' | 'down'; note?: string };
+        if (!host || (thumb !== 'up' && thumb !== 'down')) {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'host and thumb (up|down) are required' }, null, 2) }] };
+        }
+        const result = await ctx.sly.request(`/v1/analytics/x402-vendors/${encodeURIComponent(host.toLowerCase().trim())}/rate`, {
+          method: 'POST',
+          body: JSON.stringify({ thumb, note }),
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
       case 'x402_list_vendors': {
         const { window, env } = args as { window?: string; env?: 'live' | 'test' };
         const qs = new URLSearchParams();

@@ -220,9 +220,9 @@ export function Sidebar() {
   const DEV_EXPANDED_KEY = 'sly:sidebar-dev-expanded';
   const opsPathMatch = ['/dashboard/settlements', '/dashboard/schedules', '/dashboard/refunds', '/dashboard/funding',
     '/dashboard/treasury', '/dashboard/reports', '/dashboard/compliance', '/dashboard/workflows',
-    '/dashboard/fx', '/dashboard/operations',
+    '/dashboard/fx',
   ].some((p) => pathname.startsWith(p));
-  const devPathMatch = ['/dashboard/developers', '/dashboard/api-keys', '/dashboard/webhooks', '/dashboard/logs',
+  const devPathMatch = ['/dashboard/developers', '/dashboard/operations', '/dashboard/api-keys', '/dashboard/webhooks', '/dashboard/logs',
   ].some((p) => pathname.startsWith(p));
   const [opsExpanded, setOpsExpanded] = useState(opsPathMatch);
   const [devExpanded, setDevExpanded] = useState(devPathMatch);
@@ -288,14 +288,19 @@ export function Sidebar() {
     { href: '/dashboard/disputes', label: 'Disputes', icon: Shield },
     { href: '/dashboard/workflows', label: 'Workflows', icon: GitBranch },
     { href: '/dashboard/fx', label: 'FX Rates', icon: TrendingUp },
-    { href: '/dashboard/operations', label: 'Operations', icon: Activity },
   ];
 
+  // Operations dashboard is a debugging surface for tenants (per-request
+  // event ledger, protocol/category/subject breakdown). Lives in the
+  // Developers group so anyone authenticated can reach it alongside
+  // Logs and the API portal — not gated behind the admin-only
+  // Operations section.
   const developersNav: NavItemDef[] = [
     { href: '/dashboard/developers', label: 'Portal', icon: Terminal },
+    { href: '/dashboard/operations', label: 'Operations', icon: Activity },
+    { href: '/dashboard/logs', label: 'Logs', icon: ScrollText },
     { href: '/dashboard/api-keys', label: 'API Keys', icon: Key },
     { href: '/dashboard/webhooks', label: 'Webhooks', icon: Webhook },
-    { href: '/dashboard/logs', label: 'Logs', icon: ScrollText },
   ];
 
   const settingsNav: NavItemDef[] = [

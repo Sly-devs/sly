@@ -1,4 +1,4 @@
-import { fetch } from 'undici';
+
 import * as cheerio from 'cheerio';
 import type { ScanConfig } from '../probes/types.js';
 import { buildUrl } from '../probes/types.js';

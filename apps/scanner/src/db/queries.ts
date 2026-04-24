@@ -276,10 +276,15 @@ export async function upsertStructuredData(
 }
 
 export async function getStructuredData(merchantScanId: string) {
+  // Tolerate duplicate rows: concurrent upsertStructuredData calls (same
+  // merchant_scan_id, racing DELETE-then-INSERT) can leave multiple rows.
+  // Pick the most recent and let the next upsert clean up.
   const { data, error } = await db()
     .from('scan_structured_data')
     .select('*')
     .eq('merchant_scan_id', merchantScanId)
+    .order('id', { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   if (error) throw new Error(`Failed to get structured data: ${error.message}`);
@@ -328,10 +333,13 @@ export async function upsertAccessibility(
 }
 
 export async function getAccessibility(merchantScanId: string) {
+  // Tolerate duplicate rows (same reason as getStructuredData).
   const { data, error } = await db()
     .from('scan_accessibility')
     .select('*')
     .eq('merchant_scan_id', merchantScanId)
+    .order('id', { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   if (error) throw new Error(`Failed to get accessibility: ${error.message}`);

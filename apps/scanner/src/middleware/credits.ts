@@ -39,10 +39,11 @@ export async function creditsMiddleware(c: Context, next: Next) {
     );
   }
 
+  const requestId = c.get('requestId') ?? c.req.header('x-request-id') ?? 'unknown';
   const newBalance = await debit(
     ctx.tenantId,
     cost,
-    `request:${c.req.header('x-request-id') ?? 'unknown'}`,
+    `request:${requestId}`,
     { endpoint: `${method} ${pathTemplate}`, key_id: ctx.scannerKeyId ?? null },
   );
 

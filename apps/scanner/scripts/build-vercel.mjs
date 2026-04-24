@@ -52,7 +52,11 @@ writeFileSync(
       runtime: 'nodejs20.x',
       handler: 'index.js',
       launcherType: 'Nodejs',
-      shouldAddHelpers: true,
+      // MUST be false — Hono's getRequestListener reads the raw Node request
+      // stream itself. With helpers on, Vercel pre-consumes the body into
+      // req.body, and Hono's c.req.json() then hangs forever waiting on a
+      // drained stream. Affects ALL POST/PUT/PATCH requests.
+      shouldAddHelpers: false,
     },
     null,
     2,

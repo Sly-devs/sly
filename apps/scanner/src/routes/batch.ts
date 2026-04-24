@@ -5,6 +5,7 @@ import * as queries from '../db/queries.js';
 import { chargeCredits } from '../middleware/credits.js';
 import { computeBatchCost } from '../billing/credit-costs.js';
 import { refund } from '../billing/ledger.js';
+import { waitUntil } from '../utils/wait-until.js';
 
 export const batchRouter = new Hono();
 
@@ -64,7 +65,12 @@ batchRouter.post('/scan/batch', async (c) => {
       target_domains: domains.map(d => d.domain),
     });
 
-    batchProcessor.processBatch(batch.id, tenantId, domains);
+    // Hand the batch off to Vercel's background runtime so the HTTP response
+    // can return immediately. Without waitUntil, Node holds the response open
+    // until the fire-and-forget promise resolves.
+    waitUntil(
+      Promise.resolve(batchProcessor.processBatch(batch.id, tenantId, domains)),
+    );
 
     return c.json({
       batch_id: batch.id,
@@ -101,11 +107,15 @@ batchRouter.post('/scan/batch', async (c) => {
     target_domains: parsed.data.domains.map(d => d.domain),
   });
 
-  batchProcessor.processBatch(
-    batch.id,
-    tenantId,
-    parsed.data.domains,
-    { skipIfFresh: parsed.data.skip_if_fresh },
+  waitUntil(
+    Promise.resolve(
+      batchProcessor.processBatch(
+        batch.id,
+        tenantId,
+        parsed.data.domains,
+        { skipIfFresh: parsed.data.skip_if_fresh },
+      ),
+    ),
   );
 
   return c.json({

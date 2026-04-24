@@ -1,10 +1,14 @@
 import type { Context, Next } from 'hono';
-import { recordRequest } from '../services/usage.js';
+import { recordRequest, flushUsage } from '../services/usage.js';
 
 /**
  * Placed after authMiddleware so ctx is populated.
- * Reads credits_consumed from c.var.creditsCharged, which credit middleware sets
- * before downstream handlers run.
+ *
+ * Records the request into the in-memory buffer, then triggers a flush
+ * synchronously — serverless functions don't keep interval timers alive
+ * between invocations, so we flush per request. The flush is ~1 DB round-trip
+ * and upserts are idempotent per (tenant, minute_bucket, method, path,
+ * status, actor), so concurrent flushes are safe.
  */
 export async function usageCounterMiddleware(c: Context, next: Next) {
   const start = performance.now();
@@ -25,6 +29,13 @@ export async function usageCounterMiddleware(c: Context, next: Next) {
     actorType: ctx.actorType ?? 'unknown',
     durationMs,
     creditsConsumed,
+  });
+
+  // Fire-and-forget flush. In Fluid Compute the floating promise runs until
+  // either the function goes idle or the next invocation reuses the instance;
+  // upserts are idempotent so retries are safe.
+  flushUsage().catch((err) => {
+    console.error('[scanner-usage] flush failed:', err);
   });
 }
 

@@ -1,4 +1,4 @@
-import { fetch } from 'undici';
+
 import * as cheerio from 'cheerio';
 import type { ScanStructuredData, SampleProduct } from '@sly/types';
 import type { ScanConfig } from '../probes/types.js';

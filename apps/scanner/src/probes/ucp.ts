@@ -1,4 +1,4 @@
-import { fetch } from 'undici';
+
 import type { ProbeResult, ScanConfig } from './types.js';
 import { buildUrl } from './types.js';
 

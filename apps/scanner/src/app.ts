@@ -32,12 +32,21 @@ if (process.env.NODE_ENV === 'development') {
   app.use('*', prettyJSON());
 }
 
-// Request ID middleware
+// Request ID middleware — accepts inbound X-Request-ID, otherwise generates a
+// UUID. Stores on ctx vars so downstream middleware (credits, usage) can tag
+// debits with a consistent correlation ID.
 app.use('*', async (c, next) => {
   const requestId = c.req.header('x-request-id') || crypto.randomUUID();
+  c.set('requestId', requestId);
   c.header('X-Request-ID', requestId);
   await next();
 });
+
+declare module 'hono' {
+  interface ContextVariableMap {
+    requestId: string;
+  }
+}
 
 // Public routes — health, readiness
 app.route('/', healthRouter);

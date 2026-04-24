@@ -1,6 +1,6 @@
 {
   "name": "@sly_ai/mcp-server",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Model Context Protocol (MCP) server for Sly - enables Claude Desktop integration and remote HTTP access",
   "type": "module",
   "main": "./dist/index.js",

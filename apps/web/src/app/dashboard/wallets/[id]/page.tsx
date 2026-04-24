@@ -104,6 +104,10 @@ export default function WalletDetailPage() {
     const { data: balanceData, isLoading: balanceLoading, refetch: refetchBalance } = useWalletBalance(id, authToken, apiUrl, apiEnvironment);
     const onChain = balanceData?.data?.onChain;
     const syncStatus = balanceData?.data?.syncStatus || 'stale';
+    // Circle custodial drift diagnostic — surfaced when Circle's API
+    // number disagrees with the actual chain state by >1¢.
+    const mismatch = balanceData?.data?.mismatch;
+    const circleReported: number | null | undefined = balanceData?.data?.circleReported;
 
     // Rename mutation
     const renameMutation = useMutation({
@@ -369,6 +373,47 @@ export default function WalletDetailPage() {
                             )}
                         </div>
                     </div>
+
+                    {/* Circle ↔ chain mismatch banner. For circle_custodial
+                        wallets we query both and show a loud warning when
+                        Circle's reported balance disagrees with on-chain
+                        reality. Helps tenants catch drift / sweeps that
+                        would otherwise show as "synced" in the UI. */}
+                    {mismatch && (
+                        <Card className="p-4 border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30">
+                            <div className="flex items-start gap-3">
+                                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-semibold text-amber-900 dark:text-amber-200 mb-1">
+                                        Balance mismatch: Circle ledger vs. chain
+                                    </div>
+                                    <div className="text-sm text-amber-800 dark:text-amber-300">
+                                        {mismatch.note}
+                                    </div>
+                                    <div className="mt-2 grid grid-cols-3 gap-3 text-xs">
+                                        <div>
+                                            <div className="uppercase tracking-wide text-amber-700/70 dark:text-amber-400/70">Circle says</div>
+                                            <div className="font-mono font-semibold text-amber-900 dark:text-amber-100">
+                                                {circleReported != null ? formatCurrency(circleReported, wallet.currency || 'USDC') : '—'}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="uppercase tracking-wide text-amber-700/70 dark:text-amber-400/70">On chain</div>
+                                            <div className="font-mono font-semibold text-amber-900 dark:text-amber-100">
+                                                {onChain?.usdc ? formatCurrency(parseFloat(onChain.usdc), wallet.currency || 'USDC') : '—'}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="uppercase tracking-wide text-amber-700/70 dark:text-amber-400/70">Δ</div>
+                                            <div className="font-mono font-semibold text-amber-900 dark:text-amber-100">
+                                                {mismatch.delta > 0 ? '+' : ''}{mismatch.delta.toFixed(4)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </Card>
+                    )}
 
                     {/* Transactions List */}
                     <Card className="overflow-hidden">

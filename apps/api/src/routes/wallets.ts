@@ -1006,27 +1006,39 @@ app.get('/:id/balance', async (c) => {
       }
     }
 
-    // Phase 2: Live balance fetch for Circle/external wallets when stale.
-    // agent_eoa wallets ARE the on-chain number (no separate ledger), so we
-    // also mirror the on-chain result into wallets.balance so the "Balance"
-    // card on the detail page doesn't perpetually show $0.
+    // Live balance fetch. For every address-holding wallet we now query
+    // the blockchain directly via RPC — including circle_custodial —
+    // so `onChain.usdc` is always the real chain state, never what a
+    // provider API *claims* to hold. Circle's reported balance is
+    // exposed separately as `circleReported` so tenants can see any
+    // mismatch (e.g. if Circle's ledger drifts from the actual address).
     let onChainBalance: string | null = null;
+    let circleReported: string | null = null;
     const walletRecord = wallet as any;
     const isAgentEoa = walletRecord.wallet_type === 'agent_eoa';
-    if (!isInternalWallet && (syncStatus !== 'synced' || isAgentEoa)) {
-      try {
-        if (walletRecord.wallet_type === 'circle_custodial' && walletRecord.provider_wallet_id) {
-          // Circle wallet: use Circle API for balance
+    const isCircleCustodial = walletRecord.wallet_type === 'circle_custodial';
+    // Always refetch for agent_eoa + circle_custodial (these benefit from
+    // the mismatch check). For others, respect the sync-age gate.
+    const shouldRefetch = !isInternalWallet && (syncStatus !== 'synced' || isAgentEoa || isCircleCustodial);
+
+    if (shouldRefetch) {
+      // Circle-side read (for circle_custodial only — compare against chain).
+      if (isCircleCustodial && walletRecord.provider_wallet_id) {
+        try {
           const isLiveBalEnv = getEnv(ctx) === 'live';
           const { getCircleClient, getCircleLiveClient } = await import('../services/circle/client.js');
           const circle = isLiveBalEnv ? getCircleLiveClient() : getCircleClient();
           const balance = await circle.getUsdcBalance(walletRecord.provider_wallet_id);
-          onChainBalance = balance.formatted.toString();
-        } else if (wallet.wallet_address && !wallet.wallet_address.startsWith('internal://')) {
-          // EVM / Solana: use chain RPC. For EVM, pick RPC + USDC contract
-          // by the WALLET's environment column (not the process env), so a
-          // test-env EOA queried from production doesn't wrongly read mainnet.
-          const walletBlockchain = (wallet as any).blockchain || 'base';
+          circleReported = balance.formatted.toString();
+        } catch (e) {
+          console.warn(`[Wallets] Circle API read failed for ${walletId}:`, (e as Error)?.message);
+        }
+      }
+
+      // Chain-direct read — authoritative on-chain USDC balance.
+      try {
+        if (wallet.wallet_address && !wallet.wallet_address.startsWith('internal://')) {
+          const walletBlockchain = walletRecord.blockchain || 'base';
           if (walletBlockchain === 'sol') {
             const { getSolanaUsdcBalance } = await import('../config/solana.js');
             const { formatted } = await getSolanaUsdcBalance(wallet.wallet_address);
@@ -1034,55 +1046,82 @@ app.get('/:id/balance', async (c) => {
           } else {
             const walletEnv: 'live' | 'test' = walletRecord.environment === 'live' ? 'live' : 'test';
             const onchain = await readOnchainUsdc(wallet.wallet_address, walletEnv);
-            if (onchain !== null) {
-              onChainBalance = String(onchain);
-            }
+            if (onchain !== null) onChainBalance = String(onchain);
           }
         }
+      } catch (e) {
+        console.warn(`[Wallets] Chain RPC read failed for ${walletId}:`, (e as Error)?.message);
+      }
 
-        // Persist. For agent_eoa, mirror into balance too — chain IS the
-        // ledger, so the primary "Balance" card should reflect it.
-        if (onChainBalance !== null) {
-          const updatePatch: any = {
-            sync_data: {
-              ...(wallet.sync_data as Record<string, unknown> || {}),
-              on_chain_usdc: onChainBalance,
-              synced_at: new Date().toISOString(),
-            },
-            last_synced_at: new Date().toISOString(),
-          };
-          if (isAgentEoa) {
-            updatePatch.balance = parseFloat(onChainBalance);
-          }
-          supabase
-            .from('wallets')
-            .update(updatePatch)
-            .eq('id', walletId)
-            .eq('tenant_id', ctx.tenantId)
-            .then(() => {});
+      // Persist whichever value we got. For agent_eoa the chain IS the
+      // ledger so we also mirror into `balance`. For circle_custodial
+      // we store both in sync_data for transparency but DON'T overwrite
+      // `balance` (that's the Circle-accounted number used for
+      // spending-policy enforcement).
+      if (onChainBalance !== null || circleReported !== null) {
+        const updatePatch: any = {
+          sync_data: {
+            ...(wallet.sync_data as Record<string, unknown> || {}),
+            on_chain_usdc: onChainBalance ?? (wallet.sync_data as any)?.on_chain_usdc ?? null,
+            circle_reported_usdc: circleReported ?? (wallet.sync_data as any)?.circle_reported_usdc ?? null,
+            synced_at: new Date().toISOString(),
+          },
+          last_synced_at: new Date().toISOString(),
+        };
+        if (isAgentEoa && onChainBalance !== null) {
+          updatePatch.balance = parseFloat(onChainBalance);
         }
-      } catch (syncErr) {
-        console.warn(`[Wallets] Live balance sync failed for ${walletId}:`, syncErr);
+        supabase
+          .from('wallets')
+          .update(updatePatch)
+          .eq('id', walletId)
+          .eq('tenant_id', ctx.tenantId)
+          .then(() => {});
       }
     }
 
-    // Build on-chain data from sync_data or live fetch
+    // Build on-chain data + mismatch diagnostic.
     const syncData = wallet.sync_data as Record<string, unknown> | null;
+    const resolvedOnChain = onChainBalance
+      ?? (syncData?.on_chain_usdc as string | null | undefined)
+      ?? null;
+    const resolvedCircle = circleReported
+      ?? (syncData?.circle_reported_usdc as string | null | undefined)
+      ?? null;
+    let mismatch: null | { kind: 'circle_over_chain' | 'circle_under_chain'; delta: number; note: string } = null;
+    if (isCircleCustodial && resolvedOnChain !== null && resolvedCircle !== null) {
+      const chain = parseFloat(resolvedOnChain);
+      const circle = parseFloat(resolvedCircle);
+      const delta = circle - chain;
+      if (Math.abs(delta) > 0.01) {
+        mismatch = {
+          kind: delta > 0 ? 'circle_over_chain' : 'circle_under_chain',
+          delta: Number(delta.toFixed(6)),
+          note: delta > 0
+            ? `Circle claims $${circle.toFixed(4)} but only $${chain.toFixed(4)} is on-chain. Circle may have swept funds to a master wallet without updating your ledger view.`
+            : `On-chain balance ($${chain.toFixed(4)}) exceeds Circle's claim ($${circle.toFixed(4)}). Possibly an inbound deposit Circle hasn't indexed yet.`,
+        };
+      }
+    }
+
     const onChain = !isInternalWallet ? {
-      usdc: onChainBalance
-        || (syncData?.raw_balance
-          ? (parseFloat(syncData.raw_balance as string) / Math.pow(10, (syncData.decimals as number) || 6)).toString()
+      usdc: resolvedOnChain
+        ?? (syncData?.raw_balance
+          ? String(parseFloat(syncData.raw_balance as string) / Math.pow(10, (syncData.decimals as number) || 6))
           : wallet.balance.toString()),
       native: (syncData?.native_balance as string) || '0',
-      lastSyncedAt: onChainBalance ? new Date().toISOString() : wallet.last_synced_at,
+      lastSyncedAt: onChainBalance || circleReported ? new Date().toISOString() : wallet.last_synced_at,
+      source: 'chain_rpc',
     } : null;
 
     return c.json({
       data: {
         balance: parseFloat(wallet.balance),
         currency: wallet.currency,
-        syncStatus: onChainBalance ? 'synced' : syncStatus,
+        syncStatus: (onChainBalance !== null || circleReported !== null) ? 'synced' : syncStatus,
         onChain,
+        circleReported: isCircleCustodial ? (resolvedCircle !== null ? parseFloat(resolvedCircle) : null) : undefined,
+        mismatch,
       },
     });
   } catch (error) {
@@ -1575,7 +1614,12 @@ app.post('/:id/sync', async (c) => {
     let formattedBalance: number;
     let syncData: Record<string, unknown>;
 
-    // Circle custodial wallets: use Circle API (authoritative source of truth)
+    // Circle custodial wallets: query BOTH Circle API and the chain,
+    // so we can detect when Circle's ledger drifts from the actual
+    // balance at the wallet address. `balance` stays as Circle's number
+    // (it's what accounting + spending-policy checks key off), but
+    // sync_data exposes on_chain_usdc for transparency and the /balance
+    // endpoint surfaces the mismatch diagnostic.
     if (wallet.wallet_type === 'circle_custodial' && wallet.provider_wallet_id) {
       const isLiveSyncEnv = getEnv(ctx) === 'live';
       const { getCircleClient, getCircleLiveClient } = await import('../services/circle/client.js');
@@ -1584,17 +1628,20 @@ app.post('/:id/sync', async (c) => {
 
       const tokenSymbol = wallet.currency || 'USDC';
       const tokenBalance = balances.find(b => b.token.symbol === tokenSymbol);
-      // Circle API returns amount already in human-readable format (e.g. "1" = 1 USDC)
       formattedBalance = tokenBalance ? parseFloat(tokenBalance.amount) : 0;
-
-      // Also fetch native balance for gas info
       const nativeBalance = balances.find(b => b.token.isNative);
+
+      // Chain-direct read so the UI can show "circle says X, chain says Y".
+      const walletEnv: 'live' | 'test' = (wallet as any).environment === 'live' ? 'live' : 'test';
+      const onChainUsdc = await readOnchainUsdc(wallet.wallet_address, walletEnv);
 
       syncData = {
         source: 'circle_api',
         token_balances: balances,
         native_balance: nativeBalance ? nativeBalance.amount : '0',
         provider_wallet_id: wallet.provider_wallet_id,
+        circle_reported_usdc: String(formattedBalance),
+        on_chain_usdc: onChainUsdc !== null ? String(onChainUsdc) : null,
       };
     } else if (wallet.blockchain === 'sol') {
       // Solana wallets: use Solana RPC for USDC + SOL balance

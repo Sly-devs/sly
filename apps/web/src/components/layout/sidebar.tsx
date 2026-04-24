@@ -211,16 +211,44 @@ export function Sidebar() {
   // Collapsible state — auto-expand if pathname matches
   const [agentsExpanded, setAgentsExpanded] = useState(() => pathname.startsWith('/dashboard/agents'));
   const [agenticExpanded, setAgenticExpanded] = useState(() => pathname.startsWith('/dashboard/agentic-payments'));
-  const [opsExpanded, setOpsExpanded] = useState(() =>
-    ['/dashboard/settlements', '/dashboard/schedules', '/dashboard/refunds', '/dashboard/funding',
-     '/dashboard/treasury', '/dashboard/reports', '/dashboard/compliance', '/dashboard/workflows',
-     '/dashboard/fx', '/dashboard/operations',
-    ].some((p) => pathname.startsWith(p))
-  );
-  const [devExpanded, setDevExpanded] = useState(() =>
-    ['/dashboard/developers', '/dashboard/api-keys', '/dashboard/webhooks', '/dashboard/logs',
-    ].some((p) => pathname.startsWith(p))
-  );
+  // Ops + Dev subgroup state persists to localStorage so a tenant who
+  // expands "Developers" to reach the Logs page keeps it expanded on the
+  // next visit. Default: expanded for admins — the common user flow
+  // (finding Logs, API Keys, Operations dashboards) broke when these
+  // auto-collapsed off-path and users complained they couldn't find
+  // observability in the menu.
+  const OPS_EXPANDED_KEY = 'sly:sidebar-ops-expanded';
+  const DEV_EXPANDED_KEY = 'sly:sidebar-dev-expanded';
+  const [opsExpanded, setOpsExpanded] = useState(() => {
+    if (['/dashboard/settlements', '/dashboard/schedules', '/dashboard/refunds', '/dashboard/funding',
+         '/dashboard/treasury', '/dashboard/reports', '/dashboard/compliance', '/dashboard/workflows',
+         '/dashboard/fx', '/dashboard/operations',
+        ].some((p) => pathname.startsWith(p))) return true;
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem(OPS_EXPANDED_KEY);
+      if (stored === 'false') return false;
+    }
+    return true;
+  });
+  const [devExpanded, setDevExpanded] = useState(() => {
+    if (['/dashboard/developers', '/dashboard/api-keys', '/dashboard/webhooks', '/dashboard/logs',
+        ].some((p) => pathname.startsWith(p))) return true;
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem(DEV_EXPANDED_KEY);
+      if (stored === 'false') return false;
+    }
+    return true;
+  });
+  const toggleOps = () => setOpsExpanded((prev) => {
+    const next = !prev;
+    try { window.localStorage.setItem(OPS_EXPANDED_KEY, String(next)); } catch {}
+    return next;
+  });
+  const toggleDev = () => setDevExpanded((prev) => {
+    const next = !prev;
+    try { window.localStorage.setItem(DEV_EXPANDED_KEY, String(next)); } catch {}
+    return next;
+  });
 
   // Fetch real compliance count
   const { data: complianceCount } = useQuery({
@@ -456,20 +484,22 @@ export function Sidebar() {
             <SectionHeader
               label="Operations"
               expanded={opsExpanded}
-              onToggle={() => setOpsExpanded(!opsExpanded)}
+              onToggle={toggleOps}
             />
             {opsExpanded &&
               operationsNav.map((item) => <NavItem key={item.href} item={item} />)}
           </>
         )}
 
-        {/* 6. Developers — owner/admin only, collapsible */}
+        {/* 6. Developers — owner/admin only, collapsible. Expand state
+            persists to localStorage so Logs / API Keys / Webhooks stay
+            reachable without re-expanding every visit. */}
         {isAdmin && !collapsed && (
           <>
             <SectionHeader
               label="Developers"
               expanded={devExpanded}
-              onToggle={() => setDevExpanded(!devExpanded)}
+              onToggle={toggleDev}
             />
             {devExpanded &&
               developersNav.map((item) => <NavItem key={item.href} item={item} />)}

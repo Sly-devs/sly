@@ -61,7 +61,7 @@ CREATE POLICY "x402_call_quality_tenant_read"
   TO authenticated
   USING (
     tenant_id IN (
-      SELECT tenant_id FROM user_profiles WHERE user_id = auth.uid()
+      SELECT tenant_id FROM user_profiles WHERE id = auth.uid()
     )
   );
 

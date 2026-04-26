@@ -31,7 +31,7 @@ export async function sweepExpiredScopeGrants(): Promise<number> {
     .update({ status: 'expired' })
     .eq('status', 'active')
     .lt('expires_at', nowIso)
-    .select('id, tenant_id, agent_id, scope');
+    .select('id, tenant_id, agent_id, scope, environment');
 
   if (error) {
     console.error('[scope-expiration-sweeper] update failed:', error.message);
@@ -43,6 +43,7 @@ export async function sweepExpiredScopeGrants(): Promise<number> {
     tenant_id: string;
     agent_id: string;
     scope: string;
+    environment: string | null;
   }>;
 
   if (rows.length === 0) return 0;
@@ -58,6 +59,7 @@ export async function sweepExpiredScopeGrants(): Promise<number> {
     actor_type: 'system' as const,
     actor_id: null,
     request_summary: { reason: 'expires_at passed' },
+    environment: r.environment ?? null,
   }));
   const { error: auditErr } = await supabase
     .from('auth_scope_audit')

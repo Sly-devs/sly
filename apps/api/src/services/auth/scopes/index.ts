@@ -150,6 +150,7 @@ export async function requestScope(args: RequestScopeArgs): Promise<{ requestId:
       actor_type: 'agent',
       actor_id: ctx.actorId,
       request_summary: requestSummary,
+      environment: ctx.environment ?? null,
     })
     .select('id')
     .single();
@@ -233,6 +234,20 @@ export async function issueGrant(args: IssueGrantArgs): Promise<{ grantId: strin
   const expiresAt = new Date(Date.now() + durationMinutes * 60_000).toISOString();
   const granterUserId = await resolveGranterUserId(supabase, ctx);
 
+  // Pull the target agent's environment so the grant + audit rows
+  // are properly env-scoped. Necessary because the issuer (user JWT
+  // or tenant API key) might be acting against either env via the
+  // X-Environment header — the grant should follow the agent.
+  const { data: targetAgent } = await ((supabase as any).from('agents'))
+    .select('environment')
+    .eq('id', agentId)
+    .eq('tenant_id', ctx.tenantId)
+    .maybeSingle();
+  const targetEnv: 'test' | 'live' | null =
+    targetAgent?.environment === 'live' ? 'live'
+      : targetAgent?.environment === 'test' ? 'test'
+        : null;
+
   const { data: grant, error: grantErr } = await ((supabase as any).from('auth_scope_grants'))
     .insert({
       tenant_id: ctx.tenantId,
@@ -245,6 +260,7 @@ export async function issueGrant(args: IssueGrantArgs): Promise<{ grantId: strin
       intent_payload: intentPayload ?? null,
       granted_by_user_id: granterUserId,
       expires_at: expiresAt,
+      environment: targetEnv,
     })
     .select('id')
     .single();
@@ -267,6 +283,7 @@ export async function issueGrant(args: IssueGrantArgs): Promise<{ grantId: strin
       purpose,
       ...(ctx.actorType === 'api_key' ? { granted_via_api_key: true } : {}),
     },
+    environment: targetEnv,
   });
 
   return { grantId: grant.id };
@@ -294,12 +311,19 @@ export interface ScopeGrantSummary {
 export async function listActiveGrants(
   supabase: SupabaseClient,
   ctx: RequestContext,
+  options: { envScope?: 'current' | 'all' } = {},
 ): Promise<ScopeGrantSummary[]> {
-  const { data, error } = await ((supabase as any).from('auth_scope_grants'))
+  const envScope = options.envScope ?? 'current';
+  let query = ((supabase as any).from('auth_scope_grants'))
     .select('*, agent:agents!auth_scope_grants_agent_id_fkey(name)')
     .eq('tenant_id', ctx.tenantId)
     .eq('status', 'active')
     .order('granted_at', { ascending: false });
+  if (envScope === 'current') {
+    const env = ctx.environment ?? ctx.apiKeyEnvironment ?? 'live';
+    query = query.or(`environment.eq.${env},environment.is.null`);
+  }
+  const { data, error } = await query;
   if (error) throw new Error(`Failed to list scope grants: ${error.message}`);
   return ((data ?? []) as any[]).map((row) => ({
     id: row.id,
@@ -331,7 +355,7 @@ export async function revokeGrant(
     .eq('id', grantId)
     .eq('tenant_id', ctx.tenantId)
     .eq('status', 'active')
-    .select('id, agent_id, scope')
+    .select('id, agent_id, scope, environment')
     .single();
   if (error) throw new Error(`Failed to revoke grant: ${error.message}`);
   if (!data) return; // already inactive — idempotent
@@ -348,6 +372,7 @@ export async function revokeGrant(
       reason: 'manual_revoke',
       ...(ctx.actorType === 'api_key' ? { revoked_via_api_key: true } : {}),
     },
+    environment: (data as any).environment ?? null,
   });
 }
 
@@ -369,9 +394,9 @@ export async function cascadeRevokeForAgent(
     .eq('tenant_id', tenantId)
     .eq('agent_id', agentId)
     .eq('status', 'active')
-    .select('id, scope');
+    .select('id, scope, environment');
   if (error) throw new Error(`Kill-switch scope cascade failed: ${error.message}`);
-  const rows = (revoked ?? []) as Array<{ id: string; scope: Scope }>;
+  const rows = (revoked ?? []) as Array<{ id: string; scope: Scope; environment: string | null }>;
   if (rows.length === 0) return { revokedCount: 0 };
 
   await ((supabase as any).from('auth_scope_audit')).insert(
@@ -384,6 +409,7 @@ export async function cascadeRevokeForAgent(
       actor_type: 'user' as const,
       actor_id: killedByUserId,
       request_summary: { reason: 'kill_switch_cascade' },
+      environment: r.environment ?? null,
     })),
   );
   return { revokedCount: rows.length };
@@ -404,7 +430,7 @@ export async function recordScopeUse(
   // Fetch + flip in one shot. For one_shot grants the optimistic update
   // also blocks parallel reuse.
   const { data: grant } = await ((supabase as any).from('auth_scope_grants'))
-    .select('id, lifecycle, status, use_count')
+    .select('id, lifecycle, status, use_count, environment')
     .eq('id', grantId)
     .eq('tenant_id', tenantId)
     .single();
@@ -430,6 +456,7 @@ export async function recordScopeUse(
     scope: ctx.elevatedScope === 'agent' ? null : ctx.elevatedScope,
     action: 'scope_used',
     actor_type: ctx.actorType,
+    environment: grant.environment ?? ctx.environment ?? null,
     actor_id: ctx.actorId ?? null,
     request_summary: context,
   });

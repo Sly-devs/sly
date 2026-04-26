@@ -62,9 +62,12 @@ router.get('/', async (c) => {
   if (ctx.actorType !== 'user' && ctx.actorType !== 'api_key') {
     return c.json({ error: 'Unauthorized' }, 401);
   }
+  const envParam = c.req.query('env');
   const supabase = createClient();
   try {
-    const grants = await listActiveGrants(supabase, ctx);
+    const grants = await listActiveGrants(supabase, ctx, {
+      envScope: envParam === 'all' ? 'all' : 'current',
+    });
     return c.json({ grants });
   } catch (err: any) {
     return c.json({ error: err?.message ?? 'Failed to list scope grants' }, 500);
@@ -251,13 +254,22 @@ router.get('/audit', async (c) => {
   }
   const limitParam = c.req.query('limit');
   const limit = Math.min(Math.max(parseInt(limitParam ?? '50', 10) || 50, 1), 200);
+  const envParam = c.req.query('env'); // 'all' opts out of env scoping; default scopes to ctx env
 
   const supabase = createClient();
-  const { data, error } = await ((supabase as any).from('auth_scope_audit'))
-    .select('id, grant_id, agent_id, scope, action, actor_type, actor_id, request_summary, created_at')
+  let query = ((supabase as any).from('auth_scope_audit'))
+    .select('id, grant_id, agent_id, scope, action, actor_type, actor_id, request_summary, created_at, environment')
     .eq('tenant_id', ctx.tenantId)
     .order('created_at', { ascending: false })
     .limit(limit);
+  if (envParam !== 'all') {
+    // Default behavior: scope to caller's environment. Pre-denorm rows
+    // (environment IS NULL) are also surfaced so historical events
+    // don't disappear from the dashboard.
+    const env = ctx.environment ?? ctx.apiKeyEnvironment ?? 'live';
+    query = query.or(`environment.eq.${env},environment.is.null`);
+  }
+  const { data, error } = await query;
   if (error) return c.json({ error: error.message }, 500);
   return c.json({ events: data ?? [] });
 });

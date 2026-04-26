@@ -1,0 +1,66 @@
+name: Mintlify Lint
+
+# When Mintlify deploys from `main` directly (Mintlify project setting:
+# Deployment branch = main), a malformed mdx file or broken nav entry
+# breaks the live docs site instantly. This lint runs on every PR
+# touching docs-site/** to catch common breakage before merge:
+#
+#   - mintlify broken-links: walks the site graph from each docs.json,
+#     checks every internal link (cross-page hrefs, /api-reference,
+#     /authentication, etc) and frontmatter slugs resolve.
+#   - structure validation: errors out if docs.json references a page
+#     file that doesn't exist on disk.
+#
+# Two portals are validated independently because each has its own
+# docs.json — public and internal.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs-site/**'
+      - '.github/workflows/mintlify-lint.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs-site/**'
+      - '.github/workflows/mintlify-lint.yml'
+
+jobs:
+  lint-public:
+    name: Mintlify lint (public portal)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Mintlify CLI
+        run: npm install -g mintlify@latest
+
+      - name: Validate broken links (public portal)
+        working-directory: docs-site/public
+        run: mintlify broken-links
+
+  lint-internal:
+    name: Mintlify lint (internal portal)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Mintlify CLI
+        run: npm install -g mintlify@latest
+
+      - name: Validate broken links (internal portal)
+        working-directory: docs-site/internal
+        run: mintlify broken-links

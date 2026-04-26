@@ -33,7 +33,8 @@ import {
   ThumbsDown,
   ExternalLink,
 } from 'lucide-react';
-import { useQuery as useTanstackQuery } from '@tanstack/react-query';
+import { useQuery as useTanstackQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import type { Agent, Stream, AgentLimits } from '@sly/api-client';
 import { AgentAvatar } from '@/components/agents/agent-avatar';
 import { AvatarUpload } from '@/components/agents/avatar-upload';
@@ -55,7 +56,7 @@ import type { AgentAction } from '@/lib/mock-data/agent-activity';
 import { formatCurrency } from '@/lib/utils';
 import { format } from 'date-fns';
 
-type TabType = 'overview' | 'streams' | 'mandates' | 'checkouts' | 'a2a' | 'wallet' | 'ratings' | 'permissions' | 'kya' | 'activity';
+type TabType = 'overview' | 'streams' | 'mandates' | 'checkouts' | 'a2a' | 'wallet' | 'ratings' | 'permissions' | 'kya' | 'scopes' | 'activity';
 
 function getAgentIcon(agentName: string) {
   if (agentName.includes('Inference API Consumer')) {
@@ -232,6 +233,7 @@ export default function AgentDetailPage() {
     { id: 'ratings' as TabType, label: 'Ratings', icon: Star },
     { id: 'permissions' as TabType, label: 'Permissions', icon: Key },
     { id: 'kya' as TabType, label: 'KYA', icon: Shield },
+    { id: 'scopes' as TabType, label: 'Scopes', icon: Shield },
     { id: 'activity' as TabType, label: 'Activity', icon: History },
   ];
 
@@ -531,6 +533,9 @@ export default function AgentDetailPage() {
       )}
       {activeTab === 'kya' && (
         <KYATab agent={agent} limits={limits} />
+      )}
+      {activeTab === 'scopes' && (
+        <ScopesTab agentId={agentId} />
       )}
       {activeTab === 'activity' && (
         <ActivityTab agentId={agentId} />
@@ -2369,6 +2374,252 @@ function A2ATab({ agentId }: { agentId: string }) {
               ))}
             </TableBody>
           </Table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Epic 82 Story 82.7 — per-agent scopes tab. Shows just this agent's
+// active grants + recent scope-lifecycle audit events. Read-only here;
+// for issuing/approving requests use /dashboard/security/scopes (or
+// the deep-link button at the top of this tab pre-filters to this id).
+
+interface ScopeGrantMini {
+  id: string;
+  scope: 'tenant_read' | 'tenant_write' | 'treasury';
+  lifecycle: 'one_shot' | 'standing';
+  status: 'active' | 'consumed' | 'revoked' | 'expired';
+  purpose: string;
+  granted_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+  use_count: number;
+  environment?: 'test' | 'live' | null;
+}
+
+interface ScopeAuditMini {
+  id: string;
+  action:
+    | 'scope_requested'
+    | 'scope_granted'
+    | 'scope_denied'
+    | 'scope_used'
+    | 'scope_expired'
+    | 'scope_revoked'
+    | 'scope_heartbeat';
+  scope: string | null;
+  actor_type: string;
+  request_summary: Record<string, unknown> | null;
+  created_at: string;
+}
+
+const SCOPE_TAB_COLORS: Record<string, string> = {
+  tenant_read: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200',
+  tenant_write: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200',
+  treasury: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200',
+};
+
+const SCOPE_TAB_ACTION_COLORS: Record<string, string> = {
+  scope_requested: 'text-slate-600 dark:text-slate-300',
+  scope_granted: 'text-green-600 dark:text-green-400',
+  scope_denied: 'text-red-600 dark:text-red-400',
+  scope_used: 'text-blue-600 dark:text-blue-400',
+  scope_expired: 'text-slate-500 dark:text-slate-400',
+  scope_revoked: 'text-orange-600 dark:text-orange-400',
+  scope_heartbeat: 'text-slate-400',
+};
+
+function fmtRelative(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s ago`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
+  return `${Math.round(ms / 86_400_000)}d ago`;
+}
+
+function fmtRemaining(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return 'expired';
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s left`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m left`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h left`;
+  return `${Math.round(ms / 86_400_000)}d left`;
+}
+
+function ScopesTab({ agentId }: { agentId: string }) {
+  const apiFetch = useApiFetch();
+  const { apiUrl } = useApiConfig();
+  const queryClient = useQueryClient();
+
+  async function unwrap<T>(res: Response): Promise<T> {
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+    const json = await res.json();
+    return (json?.data ?? json) as T;
+  }
+
+  const grantsQuery = useTanstackQuery({
+    queryKey: ['agent-scopes', 'grants', agentId],
+    queryFn: async () => {
+      const res = await apiFetch(`${apiUrl}/v1/organization/scopes?agent_id=${agentId}`);
+      return unwrap<{ grants: ScopeGrantMini[] }>(res);
+    },
+    refetchInterval: 30_000,
+  });
+
+  const auditQuery = useTanstackQuery({
+    queryKey: ['agent-scopes', 'audit', agentId],
+    queryFn: async () => {
+      const res = await apiFetch(
+        `${apiUrl}/v1/organization/scopes/audit?agent_id=${agentId}&limit=100`,
+      );
+      return unwrap<{ events: ScopeAuditMini[] }>(res);
+    },
+    refetchInterval: 30_000,
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: async (grantId: string) => {
+      const res = await apiFetch(`${apiUrl}/v1/organization/scopes/${grantId}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast.success('Grant revoked');
+      queryClient.invalidateQueries({ queryKey: ['agent-scopes'] });
+    },
+    onError: (err: any) => toast.error(err.message ?? 'Revoke failed'),
+  });
+
+  const grants = grantsQuery.data?.grants ?? [];
+  const events = auditQuery.data?.events ?? [];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Capability grants this agent currently holds, plus a complete history of every
+          request, decision, use, and revocation. Issuing new grants happens on the global
+          scopes dashboard.
+        </p>
+        <Link
+          href={`/dashboard/security/scopes`}
+          className="shrink-0 inline-flex items-center gap-1 rounded-md border border-gray-300 dark:border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
+        >
+          Issue / approve →
+        </Link>
+      </div>
+
+      {/* Active grants */}
+      <div className="rounded-lg border border-gray-200 dark:border-gray-800">
+        <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-800 p-4">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+            Active grants ({grants.length})
+          </h3>
+        </div>
+        {grants.length === 0 ? (
+          <div className="p-6 text-center text-sm text-gray-500 dark:text-gray-400">
+            No active grants. This agent is operating at default <code className="rounded bg-gray-100 dark:bg-gray-800 px-1 py-0.5">agent</code> scope.
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 dark:bg-gray-900 text-left text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              <tr>
+                <th className="p-3">Scope</th>
+                <th className="p-3">Lifecycle</th>
+                <th className="p-3">Purpose</th>
+                <th className="p-3">Used</th>
+                <th className="p-3">Expires</th>
+                <th className="p-3"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
+              {grants.map((g) => (
+                <tr key={g.id} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+                  <td className="p-3">
+                    <span className={`inline-flex rounded px-1.5 py-0.5 text-xs font-medium ${SCOPE_TAB_COLORS[g.scope]}`}>
+                      {g.scope}
+                    </span>
+                  </td>
+                  <td className="p-3 text-xs text-gray-600 dark:text-gray-300">{g.lifecycle}</td>
+                  <td className="p-3 text-gray-700 dark:text-gray-200">{g.purpose}</td>
+                  <td className="p-3 text-xs text-gray-500">
+                    {g.use_count}× {g.last_used_at ? `· last ${fmtRelative(g.last_used_at)}` : ''}
+                  </td>
+                  <td className="p-3 text-xs text-gray-500">{fmtRemaining(g.expires_at)}</td>
+                  <td className="p-3 text-right">
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Revoke ${g.scope} grant?`)) {
+                          revokeMutation.mutate(g.id);
+                        }
+                      }}
+                      disabled={revokeMutation.isPending}
+                      className="inline-flex items-center gap-1 rounded-md border border-gray-300 dark:border-gray-700 px-2 py-1 text-xs text-gray-700 dark:text-gray-300 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      Revoke
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Audit feed */}
+      <div className="rounded-lg border border-gray-200 dark:border-gray-800">
+        <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-800 p-4">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+            Recent activity ({events.length})
+          </h3>
+        </div>
+        {events.length === 0 ? (
+          <div className="p-6 text-center text-sm text-gray-500 dark:text-gray-400">
+            No scope events yet.
+          </div>
+        ) : (
+          <ul className="max-h-[480px] divide-y divide-gray-200 dark:divide-gray-800 overflow-y-auto">
+            {events.map((e) => {
+              const summary = e.request_summary as any;
+              return (
+                <li key={e.id} className="flex flex-wrap items-center gap-3 p-3 text-xs">
+                  <span className="w-16 shrink-0 text-gray-400">{fmtRelative(e.created_at)}</span>
+                  <span className={`w-24 shrink-0 font-medium ${SCOPE_TAB_ACTION_COLORS[e.action] ?? ''}`}>
+                    {e.action.replace('scope_', '')}
+                  </span>
+                  {e.scope && (
+                    <span className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium ${SCOPE_TAB_COLORS[e.scope]}`}>
+                      {e.scope}
+                    </span>
+                  )}
+                  <span className="text-[10px] text-gray-400">via {e.actor_type}</span>
+                  {summary?.purpose ? (
+                    <span className="truncate text-gray-700 dark:text-gray-300">
+                      {String(summary.purpose)}
+                    </span>
+                  ) : null}
+                  {summary?.reason ? (
+                    <span className="truncate text-red-600 dark:text-red-400">
+                      reason: {String(summary.reason)}
+                    </span>
+                  ) : null}
+                  {summary?.route ? (
+                    <span className="font-mono text-[10px] text-gray-500">{String(summary.route)}</span>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
     </div>

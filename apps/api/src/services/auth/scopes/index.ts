@@ -312,7 +312,7 @@ export interface ScopeGrantSummary {
 export async function listActiveGrants(
   supabase: SupabaseClient,
   ctx: RequestContext,
-  options: { envScope?: 'current' | 'all' } = {},
+  options: { envScope?: 'current' | 'all'; agentId?: string } = {},
 ): Promise<ScopeGrantSummary[]> {
   const envScope = options.envScope ?? 'current';
   let query = ((supabase as any).from('auth_scope_grants'))
@@ -323,6 +323,9 @@ export async function listActiveGrants(
   if (envScope === 'current') {
     const env = ctx.environment ?? ctx.apiKeyEnvironment ?? 'live';
     query = query.or(`environment.eq.${env},environment.is.null`);
+  }
+  if (options.agentId) {
+    query = query.eq('agent_id', options.agentId);
   }
   const { data, error } = await query;
   if (error) throw new Error(`Failed to list scope grants: ${error.message}`);

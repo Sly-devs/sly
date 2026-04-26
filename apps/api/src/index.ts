@@ -5,6 +5,7 @@ import { getScheduledTransferWorker } from './workers/scheduled-transfers.js';
 import { startIdempotencyCleanupWorker } from './workers/idempotency-cleanup.js';
 import { startX402ExpiredCleanupWorker } from './workers/x402-expired-cleanup.js';
 import { startScopeExpirationSweeper } from './workers/scope-expiration-sweeper.js';
+import { startScopeHeartbeatWorker } from './workers/scope-heartbeat.js';
 import { startAutoRefillWorker } from './workers/agent-auto-refill.js';
 import { startAgentEoaSyncWorker, stopAgentEoaSyncWorker } from './workers/agent-eoa-sync.js';
 import { webhookCleanupWorker } from './workers/webhook-cleanup.js';
@@ -104,6 +105,12 @@ const stopX402ExpiredCleanup = startX402ExpiredCleanupWorker(2 * 60 * 1000);
 // audit completeness (each expiration writes a scope_expired row).
 const stopScopeExpirationSweeper = startScopeExpirationSweeper(5 * 60 * 1000);
 
+// Epic 82 Story 82.8 — emit a daily heartbeat per active standing
+// grant so long-lived elevations stay visible in the audit feed.
+// Hourly tick: fresh grants get their first heartbeat within ~1h,
+// subsequent ones every ~24h.
+const stopScopeHeartbeatWorker = startScopeHeartbeatWorker(60 * 60 * 1000);
+
 // Start smart wallet balance sync worker (syncs on-chain balances every 5 min)
 startSmartWalletSyncWorker();
 
@@ -188,6 +195,7 @@ const shutdown = async (signal: string) => {
   stopIdempotencyCleanup();
   stopX402ExpiredCleanup();
   stopScopeExpirationSweeper();
+  stopScopeHeartbeatWorker();
   if (enableWebhookCleanup) {
     webhookCleanupWorker.stop();
   }

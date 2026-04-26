@@ -63,10 +63,12 @@ router.get('/', async (c) => {
     return c.json({ error: 'Unauthorized' }, 401);
   }
   const envParam = c.req.query('env');
+  const agentIdParam = c.req.query('agent_id');
   const supabase = createClient();
   try {
     const grants = await listActiveGrants(supabase, ctx, {
       envScope: envParam === 'all' ? 'all' : 'current',
+      agentId: agentIdParam || undefined,
     });
     return c.json({ grants });
   } catch (err: any) {
@@ -255,6 +257,7 @@ router.get('/audit', async (c) => {
   const limitParam = c.req.query('limit');
   const limit = Math.min(Math.max(parseInt(limitParam ?? '50', 10) || 50, 1), 200);
   const envParam = c.req.query('env'); // 'all' opts out of env scoping; default scopes to ctx env
+  const agentIdParam = c.req.query('agent_id'); // optional — scope to a single agent
 
   const supabase = createClient();
   let query = ((supabase as any).from('auth_scope_audit'))
@@ -268,6 +271,9 @@ router.get('/audit', async (c) => {
     // don't disappear from the dashboard.
     const env = ctx.environment ?? ctx.apiKeyEnvironment ?? 'live';
     query = query.or(`environment.eq.${env},environment.is.null`);
+  }
+  if (agentIdParam) {
+    query = query.eq('agent_id', agentIdParam);
   }
   const { data, error } = await query;
   if (error) return c.json({ error: error.message }, 500);

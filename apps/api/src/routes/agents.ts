@@ -109,12 +109,18 @@ const permissionsSchema = z.object({
   }).optional(),
 }).optional();
 
-// Story 51.1: Accept both accountId (new) and parentAccountId (deprecated)
+// Story 51.1: Accept both accountId (new) and parentAccountId (deprecated).
+// Also accept parent_account_id (snake_case) as an additional deprecated
+// alias — the rest of the agents payload uses snake_case (wallet_id,
+// auto_create_wallet, etc.), so callers naturally reach for snake_case
+// here too. Without the alias the API silently dropped the value and
+// created a parent-less agent.
 // Story 51.6: Add auto_create_wallet option
 // Story 59.15: accountId is optional — standalone agents have no parent
 const createAgentSchema = z.object({
   accountId: z.string().uuid().optional(),
   parentAccountId: z.string().uuid().optional(), // Deprecated, use accountId
+  parent_account_id: z.string().uuid().optional(), // Deprecated, use accountId
   name: z.string().min(1).max(255),
   description: z.string().max(1000).optional(),
   permissions: permissionsSchema,
@@ -293,9 +299,13 @@ agents.post('/', async (c) => {
     throw new ValidationError('Invalid JSON body');
   }
 
-  // Story 51.1: Normalize deprecated field names
+  // Story 51.1: Normalize deprecated field names. Accept both
+  // camelCase (parentAccountId) and snake_case (parent_account_id) as
+  // aliases for accountId — the rest of this payload is snake_case
+  // (wallet_id, auto_create_wallet) so callers naturally try both.
   const { data: normalizedBody, deprecatedFieldsUsed } = normalizeFields(body, {
     parentAccountId: 'accountId',
+    parent_account_id: 'accountId',
   });
 
   const parsed = createAgentSchema.safeParse(normalizedBody);
@@ -311,8 +321,10 @@ agents.post('/', async (c) => {
   }
 
   const { name, description, permissions, wallet_id, auto_create_wallet, processing_mode, processing_config } = parsed.data;
-  // Get the account ID (prefer new name, fall back to old)
-  const accountId = parsed.data.accountId || parsed.data.parentAccountId;
+  // Prefer new name; fall back to either deprecated alias.
+  const accountId = parsed.data.accountId
+    || parsed.data.parentAccountId
+    || (parsed.data as any).parent_account_id;
 
   // Validate processing_mode + processing_config pairing
   if (processing_mode && !processing_config) {

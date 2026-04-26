@@ -37,8 +37,13 @@ const LIFECYCLES = ['one_shot', 'standing'] as const;
 // ============================================
 
 function requireOwnerOrAdmin(ctx: any): { ok: true } | { ok: false; reason: string; status: 401 | 403 } {
+  // Tenant API keys carry full owner-equivalent privilege in Sly's
+  // auth model (they're issued by tenant owners and bypass row-level
+  // role checks elsewhere). Accept them here so server-to-server
+  // automation can issue/decide/revoke without a JWT round-trip.
+  if (ctx.actorType === 'api_key') return { ok: true };
   if (ctx.actorType !== 'user') {
-    return { ok: false, reason: 'Tenant-owner endpoint — JWT auth required.', status: 403 };
+    return { ok: false, reason: 'Tenant-owner endpoint — JWT or tenant API key required.', status: 403 };
   }
   if (ctx.userRole !== 'owner' && ctx.userRole !== 'admin') {
     return { ok: false, reason: 'Owner or admin role required.', status: 403 };
@@ -171,9 +176,12 @@ router.post('/:requestId/decide', async (c) => {
       agent_id: requested.agent_id,
       scope: requested.scope,
       action: 'scope_denied',
-      actor_type: 'user',
-      actor_id: ctx.userId!,
-      request_summary: { reason: parsed.data.reason ?? null, decision_channel: 'dashboard' },
+      actor_type: ctx.actorType,
+      actor_id: ctx.actorType === 'user' ? ctx.userId : ctx.actorId,
+      request_summary: {
+        reason: parsed.data.reason ?? null,
+        decision_channel: ctx.actorType === 'api_key' ? 'api_key' : 'dashboard',
+      },
     });
     return c.json({ request_id: requestId, status: 'denied' });
   }

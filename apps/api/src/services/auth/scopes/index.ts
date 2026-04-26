@@ -177,6 +177,37 @@ export interface IssueGrantArgs {
 }
 
 /**
+ * Resolve which user_id to record as `granted_by_user_id`. For user
+ * (JWT) auth this is just ctx.userId. For tenant API key auth we look
+ * up the tenant's primary owner so the column stays populated; the
+ * audit row separately records actor_type='api_key' for traceability.
+ */
+async function resolveGranterUserId(
+  supabase: SupabaseClient,
+  ctx: RequestContext,
+): Promise<string> {
+  if (ctx.actorType === 'user' && ctx.userId) return ctx.userId;
+  if (ctx.actorType === 'api_key') {
+    const { data: owner } = await ((supabase as any).from('user_profiles'))
+      .select('id')
+      .eq('tenant_id', ctx.tenantId)
+      .eq('role', 'owner')
+      .limit(1)
+      .maybeSingle();
+    if (owner?.id) return owner.id;
+    const { data: anyAdmin } = await ((supabase as any).from('user_profiles'))
+      .select('id')
+      .eq('tenant_id', ctx.tenantId)
+      .in('role', ['owner', 'admin'])
+      .limit(1)
+      .maybeSingle();
+    if (anyAdmin?.id) return anyAdmin.id;
+    throw new Error('Cannot issue grant via API key — tenant has no owner/admin user to attribute the grant to.');
+  }
+  throw new Error('Only tenant users (JWT) or tenant API keys can issue scope grants.');
+}
+
+/**
  * Tenant-owner side of the decision flow — issues a grant row directly.
  * Used by the dashboard "approve" button and by direct issuance of
  * standing grants. Audits both 'scope_granted' and (separately) the
@@ -189,8 +220,8 @@ export async function issueGrant(args: IssueGrantArgs): Promise<{ grantId: strin
     durationMinutes, parentSessionId, intentPayload, decisionChannel,
   } = args;
 
-  if (ctx.actorType !== 'user' || !ctx.userId) {
-    throw new Error('Only authenticated tenant users can issue scope grants.');
+  if (ctx.actorType !== 'user' && ctx.actorType !== 'api_key') {
+    throw new Error('Only tenant users (JWT) or tenant API keys can issue scope grants.');
   }
   if (lifecycle === 'standing' && scope === 'treasury') {
     throw new Error("scope='treasury' must be one_shot.");
@@ -200,6 +231,7 @@ export async function issueGrant(args: IssueGrantArgs): Promise<{ grantId: strin
   }
 
   const expiresAt = new Date(Date.now() + durationMinutes * 60_000).toISOString();
+  const granterUserId = await resolveGranterUserId(supabase, ctx);
 
   const { data: grant, error: grantErr } = await ((supabase as any).from('auth_scope_grants'))
     .insert({
@@ -211,7 +243,7 @@ export async function issueGrant(args: IssueGrantArgs): Promise<{ grantId: strin
       status: 'active',
       purpose,
       intent_payload: intentPayload ?? null,
-      granted_by_user_id: ctx.userId,
+      granted_by_user_id: granterUserId,
       expires_at: expiresAt,
     })
     .select('id')
@@ -226,13 +258,14 @@ export async function issueGrant(args: IssueGrantArgs): Promise<{ grantId: strin
     agent_id: agentId,
     scope,
     action: 'scope_granted',
-    actor_type: 'user',
-    actor_id: ctx.userId,
+    actor_type: ctx.actorType,
+    actor_id: ctx.actorType === 'user' ? ctx.userId : ctx.actorId,
     request_summary: {
       lifecycle,
       duration_minutes: durationMinutes,
       decision_channel: decisionChannel ?? 'dashboard',
       purpose,
+      ...(ctx.actorType === 'api_key' ? { granted_via_api_key: true } : {}),
     },
   });
 
@@ -289,8 +322,8 @@ export async function revokeGrant(
   ctx: RequestContext,
   grantId: string,
 ): Promise<void> {
-  if (ctx.actorType !== 'user' || !ctx.userId) {
-    throw new Error('Only authenticated tenant users can revoke grants.');
+  if (ctx.actorType !== 'user' && ctx.actorType !== 'api_key') {
+    throw new Error('Only tenant users (JWT) or tenant API keys can revoke grants.');
   }
   // Optimistic update — only flip if currently active.
   const { data, error } = await ((supabase as any).from('auth_scope_grants'))
@@ -309,9 +342,12 @@ export async function revokeGrant(
     agent_id: (data as any).agent_id,
     scope: (data as any).scope,
     action: 'scope_revoked',
-    actor_type: 'user',
-    actor_id: ctx.userId,
-    request_summary: { reason: 'manual_revoke' },
+    actor_type: ctx.actorType,
+    actor_id: ctx.actorType === 'user' ? ctx.userId : ctx.actorId,
+    request_summary: {
+      reason: 'manual_revoke',
+      ...(ctx.actorType === 'api_key' ? { revoked_via_api_key: true } : {}),
+    },
   });
 }
 

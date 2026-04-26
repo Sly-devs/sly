@@ -95,12 +95,22 @@ export default function ScopesPage() {
 
   const ready = isConfigured && !authLoading;
 
+  // The API wraps responses in { success, data, meta }; unwrap once
+  // here so the rest of the page can ignore the envelope.
+  async function unwrap<T>(res: Response): Promise<T> {
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+    const json = await res.json();
+    return (json?.data ?? json) as T;
+  }
+
   const grantsQuery = useQuery({
     queryKey: ['org', 'scopes', 'active'],
     queryFn: async () => {
       const res = await apiFetch(`${apiUrl}/v1/organization/scopes`);
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      return res.json() as Promise<{ grants: ActiveGrant[] }>;
+      return unwrap<{ grants: ActiveGrant[] }>(res);
     },
     enabled: ready,
     refetchInterval: 30_000,
@@ -110,8 +120,7 @@ export default function ScopesPage() {
     queryKey: ['org', 'scopes', 'audit'],
     queryFn: async () => {
       const res = await apiFetch(`${apiUrl}/v1/organization/scopes/audit?limit=100`);
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      return res.json() as Promise<{ events: AuditEvent[] }>;
+      return unwrap<{ events: AuditEvent[] }>(res);
     },
     enabled: ready,
     refetchInterval: 30_000,

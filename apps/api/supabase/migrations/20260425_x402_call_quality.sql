@@ -32,8 +32,16 @@ CREATE TABLE IF NOT EXISTS x402_call_quality (
 
 -- One rating per (transfer, rater) — agent and user can each rate the
 -- same call, stored separately so we can surface disagreement.
-CREATE UNIQUE INDEX IF NOT EXISTS x402_call_quality_one_per_rater
-  ON x402_call_quality (transfer_id, rated_by_type, COALESCE(rated_by_id, ''));
+--
+-- Uses NULLS NOT DISTINCT (Postgres 15+) so the constraint covers
+-- raters with a null rated_by_id (system / api_key fallback paths).
+-- Modeled as a constraint, not a functional index, because supabase-js
+-- `.upsert(..., { onConflict: 'transfer_id,rated_by_type,rated_by_id' })`
+-- needs the conflict target to match a real constraint on bare column
+-- names — a `COALESCE(rated_by_id, '')` expression index won't resolve.
+ALTER TABLE x402_call_quality
+  ADD CONSTRAINT x402_call_quality_one_per_rater
+  UNIQUE NULLS NOT DISTINCT (transfer_id, rated_by_type, rated_by_id);
 
 CREATE INDEX IF NOT EXISTS x402_call_quality_tenant_host
   ON x402_call_quality (tenant_id, host);

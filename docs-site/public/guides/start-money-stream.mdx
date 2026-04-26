@@ -63,8 +63,8 @@ Withdrawals create `stream_withdraw` transfer records.
 
 Runway = remaining wrapped balance / flow rate. When it crosses thresholds, Sly fires:
 
-- `stream.alert` webhook with `severity: warning` (<24h)
-- `severity: critical` (<1h)
+- `stream.alert` webhook with `severity: warning` (\<24h)
+- `severity: critical` (\<1h)
 - `severity: exhausted` (runway = 0, stream auto-pauses)
 
 ```ts

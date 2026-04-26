@@ -110,7 +110,7 @@ Sly retries on non-2xx responses. Your handler decides whether a given failure i
 
 Pick one based on scale:
 
-**Small volume (<1k events/day):** in-memory LRU cache, 48h TTL. Simple, fast, no DB roundtrip.
+**Small volume (\<1k events/day):** in-memory LRU cache, 48h TTL. Simple, fast, no DB roundtrip.
 
 **Medium volume:** Postgres table with unique constraint on `event_id`. The `INSERT ... ON CONFLICT DO NOTHING` pattern shown above works.
 

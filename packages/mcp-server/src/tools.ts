@@ -530,6 +530,69 @@ export const tools: Tool[] = [
   },
 
   // ==========================================================================
+  // B2C Checkout — single high-level tool (Epic 88)
+  // ==========================================================================
+  {
+    name: 'sly_buy',
+    description:
+      'Single B2C checkout entry point — ALWAYS prefer this for buying on behalf of a Sly user. ' +
+      'Wraps merchant resolution, cart pricing, policy enforcement, magic-link approval, ' +
+      'and charging the user\'s vaulted payment method (Stripe). ' +
+      'Use this INSTEAD OF acp_create_checkout / acp_complete_checkout / ucp_create_checkout / ucp_complete_checkout. ' +
+      'Returns one of: ' +
+      '(1) { status: "approval_required", approval_id, approve_url, total, items, card_on_file } — the user MUST tap approve_url to authorize. ' +
+      'IMPORTANT: When you get this response, surface the approve_url to the user AND IMMEDIATELY call sly_buy_status({ approval_id, wait: 60 }) ' +
+      'so you wait server-side for the tap. Do NOT re-call sly_buy on the same cart — that creates a duplicate checkout. ' +
+      '(2) { status: "completed", charge: { brand, last4, id }, transfer_id, total } — charge cleared, no approval was needed (under per-tx threshold). ' +
+      'You do NOT need to know the buyer\'s email, payment-instrument id, or merchant id beyond a name — Sly resolves all of that server-side.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        merchant: {
+          type: 'string',
+          description:
+            'Merchant identifier. Accepts a human name ("El Trapiche"), an invu_merchant_id ("invu_eltrapiche"), or an account UUID. Case-insensitive substring match on names.',
+        },
+        items: {
+          type: 'array',
+          minItems: 1,
+          description:
+            'Cart lines. Each item\'s `name` is matched (case-insensitive) against the merchant\'s catalog — you don\'t need exact item ids. Quantities default to 1.',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Product name or substring (matched against catalog).' },
+              quantity: { type: 'integer', minimum: 1, default: 1 },
+            },
+            required: ['name'],
+          },
+        },
+      },
+      required: ['merchant', 'items'],
+    },
+  },
+
+  {
+    name: 'sly_buy_status',
+    description:
+      'Long-poll a Sly checkout approval until the user has tapped the approve link, the charge clears, or the approval is denied/expired. ' +
+      'Call this IMMEDIATELY after sly_buy returns status: "approval_required" — pass the approval_id from that response and wait: 60. ' +
+      'The server holds the connection open up to `wait` seconds, returning as soon as the state is terminal: ' +
+      '{ status: "completed", charge, transfer_id, receipt_message } when the user approved and the card was charged, ' +
+      '{ status: "denied" } if the user denied, ' +
+      '{ status: "expired" } if the approval timed out, ' +
+      'or { status: "approval_required" } / { status: "approved_pending_charge" } if the wait elapsed without resolution (call again to keep waiting).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        approval_id: { type: 'string', description: 'The approval_id returned by sly_buy.' },
+        wait: { type: 'integer', minimum: 0, maximum: 60, default: 60, description: 'Seconds to long-poll. Max 60.' },
+      },
+      required: ['approval_id'],
+    },
+  },
+
+  // ==========================================================================
   // Merchant Catalog Tools
   // ==========================================================================
   {

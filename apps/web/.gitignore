@@ -1,0 +1,3 @@
+
+# Local TLS certs from `next dev --experimental-https` (mkcert)
+certificates/

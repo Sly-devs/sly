@@ -76,6 +76,9 @@ import ucpWebhooksRouter from './routes/webhooks/ucp.js';
 import ucpIdentityRouter from './routes/ucp-identity.js';
 import ucpMerchantsRouter from './routes/ucp-merchants.js';
 import approvalsRouter from './routes/approvals.js';
+import walletRouter from './routes/wallet.js';
+import buyRouter from './routes/buy.js';
+import buyApprovePublicRouter from './routes/buy-approve-public.js';
 import protocolsRouter from './routes/protocols.js';
 import organizationProtocolsRouter from './routes/organization/protocols.js';
 import settlementRulesRouter from './routes/settlement-rules.js';
@@ -301,6 +304,10 @@ app.route('/agents', agentCardRouter);
 // Epic 72: Ed25519 challenge-response handshake
 app.route('/v1/agents', agentConnectPublicRouter);
 
+// Inline-UI checkout approval (public — token IS the auth, single-use).
+// Epic 88: rendered inside Claude via mcp-app, posted back to this endpoint.
+app.route('/v1/buy-approve', buyApprovePublicRouter);
+
 // Protocol Discovery API (public - for discovering available protocols)
 // Epic 49: Protocol Discovery & Management
 app.route('/v1/protocols', protocolsRouter);
@@ -393,6 +400,8 @@ v1.route('/ucp/orders', ucpOrdersRouter); // UCP order capability (Phase 3)
 v1.route('/ucp/identity', ucpIdentityRouter); // UCP identity linking (Phase 4)
 v1.route('/ucp/merchants', ucpMerchantsRouter); // UCP merchant catalog (Invu demo)
 v1.route('/approvals', approvalsRouter); // Agent payment approvals (Story 18.R2)
+v1.route('/wallet', walletRouter); // Buyer-side Stripe wallet (Epic 88, Phase 1)
+v1.route('/buy', buyRouter); // Single B2C checkout entry point (Epic 88)
 v1.route('/accounts', relationshipsRouter); // For /accounts/:accountId/relationships routes
 v1.route('/organization', organizationProtocolsRouter); // Protocol enablement (Epic 49)
 v1.route('/settlement-rules', settlementRulesRouter); // Settlement rules (Epic 50)

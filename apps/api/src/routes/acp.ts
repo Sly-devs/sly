@@ -75,6 +75,10 @@ const completeCheckoutSchema = z.object({
   shared_payment_token: z.string().min(1),
   payment_method: z.string().optional(),
   idempotency_key: z.string().optional(),
+  // Epic 88, Phase 1: when set, the ACP route charges the user's vaulted
+  // Stripe PaymentMethod via a server-side off-session PaymentIntent.
+  // Mutually exclusive with the agent's USDC wallet path.
+  wallet_payment_method_id: z.string().uuid().optional(),
 });
 
 // ============================================
@@ -666,17 +670,21 @@ app.post('/checkouts/:id/complete', async (c) => {
     // ============================================
     // If this checkout is from an agent wallet, check spending policy
     
-    // Try to find agent wallet for the agent
+    // Try to find agent wallet for the agent. The stored `agent_id` may be
+    // either the agent's UUID (typical when MCP/SDK callers pass it through)
+    // or the agent's display name (legacy callers). Try both.
     let walletId: string | null = null;
     if (checkout.agent_id) {
-      // Look for agent in agents table
-      const { data: agent } = await supabase
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let agentLookup = (supabase as any)
         .from('agents')
         .select('id')
-        .eq('name', checkout.agent_id)
         .eq('tenant_id', ctx.tenantId)
-        .eq('environment', getEnv(ctx))
-        .single();
+        .eq('environment', getEnv(ctx));
+      agentLookup = UUID_RE.test(checkout.agent_id)
+        ? agentLookup.eq('id', checkout.agent_id)
+        : agentLookup.eq('name', checkout.agent_id);
+      const { data: agent } = await agentLookup.maybeSingle();
 
       if (agent) {
         // Look for wallet managed by this agent
@@ -695,11 +703,29 @@ app.post('/checkouts/:id/complete', async (c) => {
       }
     }
 
-    // Check spending policy if we have a wallet
+    // Idempotency for retries after human approval: if an approved approval
+    // already exists for this checkout, the policy already fired and a human
+    // granted consent. Skip the policy re-check on the retry; mark the
+    // approval as executed once the transfer settles.
+    let preApprovedApprovalId: string | null = null;
     if (walletId) {
+      const { data: approvedApproval } = await (supabase as any)
+        .from('agent_payment_approvals')
+        .select('id')
+        .eq('tenant_id', ctx.tenantId)
+        .eq('wallet_id', walletId)
+        .eq('protocol', 'acp')
+        .eq('status', 'approved')
+        .filter('payment_context->>checkout_uuid', 'eq', id)
+        .maybeSingle();
+      if (approvedApproval?.id) preApprovedApprovalId = approvedApproval.id;
+    }
+
+    // Check spending policy if we have a wallet (and no prior approval)
+    if (walletId && !preApprovedApprovalId) {
       const spendingPolicyService = createSpendingPolicyService(supabase);
       const approvalWorkflowService = createApprovalWorkflowService(supabase);
-      
+
       const checkoutAmount = parseFloat(checkout.total_amount as any);
       const policyContext: PolicyContext = {
         protocol: 'acp',
@@ -747,11 +773,16 @@ app.post('/checkouts/:id/complete', async (c) => {
             correlationId: (c as any).get('requestId') as string | undefined,
           });
 
+          const approveUrlBase =
+            c.req.header('x-public-app-url') ||
+            process.env.PUBLIC_APP_URL ||
+            'https://localhost:3000';
           return c.json({
             status: 'pending_approval',
             message: 'Checkout requires approval',
             reason: policyCheck.reason,
             code: 'APPROVAL_REQUIRED',
+            approve_url: `${approveUrlBase}/approve/${approval.id}`,
             approval: {
               id: approval.id,
               expiresAt: approval.expiresAt,
@@ -840,6 +871,205 @@ app.post('/checkouts/:id/complete', async (c) => {
     let stripePaymentIntent: any = null;
     let paymentStatus = 'completed';
     let walletPaymentUsed = false;
+
+    // ── Epic 88, Phase 1 — buyer-side Stripe wallet path ────────────────
+    // If the caller passes a saved wallet payment method id, charge that
+    // card directly via a server-side off-session PaymentIntent. This is
+    // the production-shape path; demo uses Stripe test mode with 4242.
+    if (validated.wallet_payment_method_id) {
+      const { data: pmRow } = await (supabase as any)
+        .from('wallet_payment_methods')
+        .select('id, user_id, stripe_customer_id, stripe_payment_method_id, brand, last4, detached_at')
+        .eq('id', validated.wallet_payment_method_id)
+        .eq('tenant_id', ctx.tenantId)
+        .maybeSingle();
+
+      if (!pmRow || pmRow.detached_at) {
+        return c.json({
+          error: 'Payment method not found or detached',
+          code: 'PAYMENT_METHOD_NOT_FOUND',
+        }, 400);
+      }
+
+      if (!isStripeConfigured()) {
+        return c.json({ error: 'Stripe not configured' }, 503);
+      }
+
+      try {
+        const stripe = getStripeClient();
+        const checkoutAmount = parseFloat(checkout.total_amount as any);
+        // ACP merchants in this seed price in USD; if the row currency is
+        // anything else (USDC etc.) we still charge in USD on the card —
+        // the merchant's USD invoice is the source of truth.
+        const amountInCents = Math.round(checkoutAmount * 100);
+        const stripeCurrency = (checkout.currency === 'USDC' || !checkout.currency) ? 'usd' : checkout.currency.toLowerCase();
+
+        stripePaymentIntent = await stripe.createPaymentIntent({
+          amount: amountInCents,
+          currency: stripeCurrency,
+          customerId: pmRow.stripe_customer_id,
+          paymentMethodId: pmRow.stripe_payment_method_id,
+          confirm: true,
+          offSession: true,
+          description: `Sly checkout: ${checkout.merchant_name || checkout.merchant_id}`,
+          metadata: {
+            checkout_id: checkout.checkout_id,
+            payos_checkout_uuid: checkout.id,
+            merchant_id: checkout.merchant_id,
+            agent_id: checkout.agent_id,
+            wallet_payment_method_id: pmRow.id,
+            sly_user_id: pmRow.user_id,
+            source: 'acp',
+          },
+          idempotencyKey: validated.idempotency_key || `acp-pm-${checkout.id}`,
+        });
+
+        if (stripePaymentIntent.status === 'succeeded') {
+          paymentStatus = 'completed';
+        } else if (stripePaymentIntent.status === 'requires_action') {
+          paymentStatus = 'pending';
+        } else if (stripePaymentIntent.status === 'processing') {
+          paymentStatus = 'processing';
+        } else {
+          paymentStatus = 'pending';
+        }
+
+        // Create the transfer row + update the checkout, then mark the
+        // upstream approval (if any) as executed and short-circuit out.
+        const { data: transfer, error: transferError } = await (supabase as any)
+          .from('transfers')
+          .insert({
+            tenant_id: ctx.tenantId,
+            environment: getEnv(ctx),
+            from_account_id: checkout.account_id,
+            to_account_id: merchantAccountId || checkout.account_id,
+            amount: checkout.total_amount,
+            currency: checkout.currency,
+            type: 'acp',
+            status: paymentStatus,
+            description: `ACP checkout: ${checkout.merchant_name || checkout.merchant_id} (card ${pmRow.brand} ${pmRow.last4})`,
+            idempotency_key: validated.idempotency_key,
+            protocol_metadata: {
+              protocol: 'acp',
+              checkout_id: checkout.checkout_id,
+              merchant_id: checkout.merchant_id,
+              merchant_account_id: merchantAccountId,
+              merchant_name: checkout.merchant_name,
+              agent_id: checkout.agent_id,
+              cart_items: items?.map(i => ({
+                name: i.name, quantity: i.quantity, price: parseFloat(i.unit_price as any),
+              })),
+              wallet_payment_method_id: pmRow.id,
+              stripe_payment_intent_id: stripePaymentIntent.id,
+              stripe_payment_method: pmRow.stripe_payment_method_id,
+              card_brand: pmRow.brand,
+              card_last4: pmRow.last4,
+            },
+            initiated_by_type: ctx.actorType,
+            initiated_by_id: ctx.userId || ctx.apiKeyId || ctx.actorId || 'unknown',
+            initiated_by_name: ctx.userName || ctx.actorName || null,
+          })
+          .select()
+          .single();
+
+        if (transferError) {
+          console.error('[ACP] Card-path transfer creation error:', transferError);
+          return c.json({ error: 'Failed to record transfer' }, 500);
+        }
+
+        await (supabase as any)
+          .from('acp_checkouts')
+          .update({
+            status: paymentStatus === 'completed' ? 'completed' : 'processing',
+            transfer_id: transfer.id,
+            shared_payment_token: validated.shared_payment_token,
+            payment_method: 'card',
+            completed_at: paymentStatus === 'completed' ? new Date().toISOString() : null,
+            checkout_data: {
+              ...((checkout.checkout_data as Record<string, unknown>) ?? {}),
+              stripe_payment_intent_id: stripePaymentIntent.id,
+              stripe_payment_status: stripePaymentIntent.status,
+              card_brand: pmRow.brand,
+              card_last4: pmRow.last4,
+            },
+          })
+          .eq('id', id);
+
+        if (preApprovedApprovalId) {
+          try {
+            const approvalService = createApprovalWorkflowService(supabase);
+            await approvalService.markExecuted(preApprovedApprovalId, transfer.id);
+          } catch (markErr: any) {
+            console.warn('[ACP] markExecuted failed (card path):', markErr.message);
+          }
+        }
+
+        if (walletId && paymentStatus === 'completed') {
+          const spendingPolicyService = createSpendingPolicyService(supabase);
+          await spendingPolicyService.recordSpending(walletId, checkoutAmount);
+        }
+
+        const telemetry = createCheckoutTelemetryService(supabase);
+        telemetry.record({
+          protocol: 'acp',
+          event_type: 'checkout.completed',
+          success: true,
+          merchant_id: checkout.merchant_id,
+          merchant_domain: checkout.merchant_url ?? undefined,
+          merchant_name: checkout.merchant_name ?? undefined,
+          agent_id: checkout.agent_id,
+          agent_name: checkout.agent_name ?? undefined,
+          amount: checkoutAmount,
+          currency: checkout.currency,
+        });
+
+        trackOp({
+          tenantId: ctx.tenantId,
+          operation: OpType.ACP_CHECKOUT_COMPLETED,
+          subject: `acp/checkout/${id}`,
+          actorType: ctx.actorType,
+          actorId: ctx.actorId || ctx.userId || ctx.apiKeyId,
+          correlationId: (c as any).get('requestId') as string | undefined,
+          success: true,
+        });
+
+        return c.json({
+          data: {
+            checkout_id: id,
+            transfer_id: transfer.id,
+            status: paymentStatus === 'completed' ? 'completed' : 'processing',
+            payment_status: paymentStatus,
+            payment_method: 'card',
+            card_brand: pmRow.brand,
+            card_last4: pmRow.last4,
+            stripe_payment_intent_id: stripePaymentIntent.id,
+            completed_at: paymentStatus === 'completed' ? new Date().toISOString() : null,
+            total_amount: checkoutAmount,
+            currency: checkout.currency,
+          },
+        }, 200);
+      } catch (cardErr: any) {
+        console.error('[ACP] Stripe card charge failed:', cardErr.message);
+        const telemetry = createCheckoutTelemetryService(supabase);
+        telemetry.record({
+          protocol: 'acp',
+          event_type: 'checkout.payment_failed',
+          success: false,
+          merchant_id: checkout.merchant_id,
+          merchant_name: checkout.merchant_name ?? undefined,
+          failure_reason: cardErr.message,
+          failure_code: 'CARD_DECLINED',
+          agent_id: checkout.agent_id,
+          amount: parseFloat(checkout.total_amount as any),
+          currency: checkout.currency,
+        });
+        return c.json({
+          error: 'Card payment failed',
+          details: cardErr.message,
+        }, 402);
+      }
+    }
+    // ── End buyer-card path ─────────────────────────────────────────────
 
     // Look up agent's wallet for direct debit
     if (checkout.agent_id) {
@@ -933,6 +1163,16 @@ app.post('/checkouts/:id/complete', async (c) => {
                     completed_at: new Date().toISOString(),
                   })
                   .eq('id', id);
+
+                // Mark the upstream approval as executed (if any)
+                if (preApprovedApprovalId) {
+                  try {
+                    const approvalService = createApprovalWorkflowService(supabase);
+                    await approvalService.markExecuted(preApprovedApprovalId, walletTransfer.id);
+                  } catch (markErr: any) {
+                    console.warn('[ACP] markExecuted failed (wallet path):', markErr.message);
+                  }
+                }
 
                 return c.json({
                   data: {
@@ -1109,6 +1349,16 @@ app.post('/checkouts/:id/complete', async (c) => {
     if (walletId && paymentStatus === 'completed') {
       const spendingPolicyService = createSpendingPolicyService(supabase);
       await spendingPolicyService.recordSpending(walletId, parseFloat(checkout.total_amount as any));
+    }
+
+    // Mark the upstream approval as executed (Stripe / fallthrough path)
+    if (preApprovedApprovalId && paymentStatus === 'completed') {
+      try {
+        const approvalService = createApprovalWorkflowService(supabase);
+        await approvalService.markExecuted(preApprovedApprovalId, transfer.id);
+      } catch (markErr: any) {
+        console.warn('[ACP] markExecuted failed (stripe path):', markErr.message);
+      }
     }
 
     // Record agent daily usage when payment completed

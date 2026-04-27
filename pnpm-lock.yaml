@@ -390,7 +390,13 @@ importers:
         version: link:../../packages/ui
       '@stripe/crypto':
         specifier: ^0.0.4
-        version: 0.0.4(@stripe/stripe-js@1.54.2)
+        version: 0.0.4(@stripe/stripe-js@9.3.1)
+      '@stripe/react-stripe-js':
+        specifier: ^6.2.0
+        version: 6.2.0(@stripe/stripe-js@9.3.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@stripe/stripe-js':
+        specifier: ^9.3.1
+        version: 9.3.1
       '@supabase/ssr':
         specifier: ^0.5.2
         version: 0.5.2(@supabase/supabase-js@2.87.1(bufferutil@4.1.0)(utf-8-validate@5.0.10))
@@ -516,7 +522,7 @@ importers:
     dependencies:
       '@sly_ai/sdk':
         specifier: ^0.1.3
-        version: 0.1.3(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+        version: 0.1.3(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)
       commander:
         specifier: ^12.0.0
         version: 12.1.0
@@ -544,7 +550,7 @@ importers:
         version: 1.25.1(hono@4.12.8)(zod@3.25.76)
       '@sly_ai/sdk':
         specifier: ^0.1.6
-        version: 0.1.6(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+        version: 0.1.6(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)
     devDependencies:
       '@types/node':
         specifier: ^20.14.10
@@ -4399,8 +4405,16 @@ packages:
     peerDependencies:
       '@stripe/stripe-js': ^1.46.0
 
-  '@stripe/stripe-js@1.54.2':
-    resolution: {integrity: sha512-R1PwtDvUfs99cAjfuQ/WpwJ3c92+DAMy9xGApjqlWQMj0FKQabUAys2swfTRNzuYAYJh7NqK2dzcYVNkKLEKUg==}
+  '@stripe/react-stripe-js@6.2.0':
+    resolution: {integrity: sha512-GSCErjljZEQv9LaxP30xGOwstcMyyUzb5JyihXwvjOU95yrfhbiPG4K2KkwxYxn+WY0/AyHsRhPPoGRw7urBzg==}
+    peerDependencies:
+      '@stripe/stripe-js': '>=9.2.0 <10.0.0'
+      react: '>=16.8.0 <20.0.0'
+      react-dom: '>=16.8.0 <20.0.0'
+
+  '@stripe/stripe-js@9.3.1':
+    resolution: {integrity: sha512-oWpAEENuVg8aw4W2OUAM9WxRDtIV2YTLr2nr6qHT+D8tHPW7bya61ufinPpUespyRNUVXqesnHo+jQdUNsGywA==}
+    engines: {node: '>=12.16'}
 
   '@supabase/auth-js@2.87.1':
     resolution: {integrity: sha512-6RDeOf5TVoaXFtEstN188ykp3pXLZaU9qoAWfx8dc50FFAAqt+kcFJ96V0IvSmcpb4mDAWcpTJ7BegmVDn/WIw==}
@@ -14049,11 +14063,11 @@ snapshots:
     dependencies:
       '@sinonjs/commons': 3.0.1
 
-  '@sly_ai/sdk@0.1.3(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
+  '@sly_ai/sdk@0.1.3(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)':
     dependencies:
       '@x402/core': 2.1.0
       '@x402/evm': 2.1.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
-      '@x402/express': 2.1.0(bufferutil@4.1.0)(express@5.2.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@x402/express': 2.1.0(bufferutil@4.1.0)(express@5.2.1)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@x402/fetch': 2.1.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
       ai: 3.4.33(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(vue@3.5.26(typescript@5.9.3))(zod@3.25.76)
       zod: 3.25.76
@@ -14075,11 +14089,11 @@ snapshots:
       - vue
       - ws
 
-  '@sly_ai/sdk@0.1.6(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
+  '@sly_ai/sdk@0.1.6(bufferutil@4.1.0)(express@5.2.1)(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(typescript@5.9.3)(utf-8-validate@5.0.10)':
     dependencies:
       '@x402/core': 2.1.0
       '@x402/evm': 2.1.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
-      '@x402/express': 2.1.0(bufferutil@4.1.0)(express@5.2.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      '@x402/express': 2.1.0(bufferutil@4.1.0)(express@5.2.1)(typescript@5.9.3)(utf-8-validate@5.0.10)
       '@x402/fetch': 2.1.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
       ai: 3.4.33(react@19.2.3)(sswr@2.2.0(svelte@5.46.1))(svelte@5.46.1)(vue@3.5.26(typescript@5.9.3))(zod@3.25.76)
       zod: 3.25.76
@@ -15009,11 +15023,18 @@ snapshots:
 
   '@standard-schema/utils@0.3.0': {}
 
-  '@stripe/crypto@0.0.4(@stripe/stripe-js@1.54.2)':
+  '@stripe/crypto@0.0.4(@stripe/stripe-js@9.3.1)':
     dependencies:
-      '@stripe/stripe-js': 1.54.2
+      '@stripe/stripe-js': 9.3.1
 
-  '@stripe/stripe-js@1.54.2': {}
+  '@stripe/react-stripe-js@6.2.0(@stripe/stripe-js@9.3.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
+    dependencies:
+      '@stripe/stripe-js': 9.3.1
+      prop-types: 15.8.1
+      react: 19.2.3
+      react-dom: 19.2.3(react@19.2.3)
+
+  '@stripe/stripe-js@9.3.1': {}
 
   '@supabase/auth-js@2.87.1':
     dependencies:
@@ -16651,7 +16672,7 @@ snapshots:
       - utf-8-validate
       - ws
 
-  '@x402/express@2.1.0(bufferutil@4.1.0)(express@5.2.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
+  '@x402/express@2.1.0(bufferutil@4.1.0)(express@5.2.1)(typescript@5.9.3)(utf-8-validate@5.0.10)':
     dependencies:
       '@coinbase/cdp-sdk': 1.40.1(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@solana/kit': 2.3.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))

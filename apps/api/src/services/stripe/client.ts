@@ -18,6 +18,7 @@ export interface PaymentIntentParams {
   amount: number;  // in cents
   currency: string;
   paymentMethodId?: string;
+  paymentMethodTypes?: string[]; // Force a specific set, e.g., ['card'] to disable Link/wallets
   customerId?: string;
   description?: string;
   metadata?: Record<string, string>;
@@ -177,25 +178,39 @@ export class StripeClient {
     if (params.customerId) data.customer = params.customerId;
     if (params.description) data.description = params.description;
     if (params.metadata) data.metadata = params.metadata;
-    
+
+    // Explicit type list takes precedence over automatic_payment_methods.
+    // Used to force card-only and skip Link/wallet auto-prompts.
+    const hasExplicitTypes = !!params.paymentMethodTypes?.length;
+    if (hasExplicitTypes) {
+      data.payment_method_types = params.paymentMethodTypes!;
+    }
+
     if (params.confirm !== undefined) {
       data.confirm = params.confirm;
-      
+
       if (params.offSession) {
         // Off-session payments (ACP, server-side) don't need return_url
         data.off_session = true;
       } else if (params.returnUrl) {
         // On-session with explicit return URL
         data.return_url = params.returnUrl;
-      } else {
+      } else if (!hasExplicitTypes) {
         // Default: disable redirects to avoid return_url requirement
         data.automatic_payment_methods = {
           enabled: true,
           allow_redirects: 'never',
         };
       }
+    } else if (!hasExplicitTypes) {
+      // Non-confirm path also defaults to automatic_payment_methods
+      // unless explicit types are specified.
+      data.automatic_payment_methods = {
+        enabled: true,
+        allow_redirects: 'never',
+      };
     }
-    
+
     if (params.returnUrl && !params.offSession) data.return_url = params.returnUrl;
 
     return this.request<PaymentIntent>(
@@ -278,6 +293,70 @@ export class StripeClient {
     return this.request<PaymentMethod>('POST', `/payment_methods/${paymentMethodId}/attach`, {
       customer: customerId,
     });
+  }
+
+  /**
+   * Detach a PaymentMethod from a Customer
+   */
+  async detachPaymentMethod(paymentMethodId: string): Promise<PaymentMethod> {
+    return this.request<PaymentMethod>('POST', `/payment_methods/${paymentMethodId}/detach`);
+  }
+
+  /**
+   * List a Customer's PaymentMethods (used as a webhook-less reconciliation
+   * path in the wallet endpoints, so the demo works without a `stripe listen`
+   * tunnel running).
+   */
+  async listCustomerPaymentMethods(customerId: string, type: string = 'card'): Promise<PaymentMethod[]> {
+    const res = await this.request<{ data: PaymentMethod[] }>(
+      'GET',
+      `/customers/${customerId}/payment_methods?type=${type}`
+    );
+    return res.data || [];
+  }
+
+  // ==========================================================================
+  // SetupIntents
+  // ==========================================================================
+
+  /**
+   * Create a SetupIntent (used for vaulting cards via Payment Element).
+   */
+  async createSetupIntent(params: {
+    customer: string;
+    usage?: 'on_session' | 'off_session';
+    paymentMethodTypes?: string[];
+    metadata?: Record<string, string>;
+  }): Promise<{
+    id: string;
+    client_secret: string;
+    status: string;
+    customer: string;
+    payment_method?: string;
+  }> {
+    const data: Record<string, any> = {
+      customer: params.customer,
+      usage: params.usage || 'off_session',
+    };
+    if (params.paymentMethodTypes?.length) data.payment_method_types = params.paymentMethodTypes;
+    else {
+      data.automatic_payment_methods = { enabled: true, allow_redirects: 'never' };
+    }
+    if (params.metadata) data.metadata = params.metadata;
+    return this.request('POST', '/setup_intents', data);
+  }
+
+  /**
+   * Retrieve a SetupIntent
+   */
+  async getSetupIntent(id: string): Promise<{
+    id: string;
+    status: string;
+    customer: string;
+    payment_method?: string;
+    client_secret: string;
+  }> {
+    return this.request('GET', `/setup_intents/${id}`);
   }
 
   // ==========================================================================

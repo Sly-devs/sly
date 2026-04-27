@@ -103,7 +103,17 @@ export function createMcpServer(
     {
       capabilities: {
         tools: {},
-      },
+        // Declare the MCP UI extension so Claude Desktop knows we'll
+        // return mcp-app HTML resources in tool results. Without this,
+        // the client may treat embedded HTML as plain text.
+        // The SDK's capabilities type doesn't include this extension,
+        // so we cast at the boundary.
+        ['experimental' as any]: {
+          'io.modelcontextprotocol/ui': {
+            mimeTypes: ['text/html;profile=mcp-app'],
+          },
+        },
+      } as any,
       instructions: [
         'This is the Sly payment platform MCP server.',
         '"Accounts" in this system are merchant or entity records within the tenant\'s own payment ledger — NOT user accounts on external services.',
@@ -470,6 +480,119 @@ export function createMcpServer(
             },
           ],
         };
+      }
+
+      // ======================================================================
+      // B2C Checkout (sly_buy) — wraps create + complete with saved card
+      // ======================================================================
+
+      case 'sly_buy': {
+        const { merchant, items } = args as {
+          merchant: string;
+          items: Array<{ name: string; quantity?: number }>;
+        };
+        const result: any = await ctx.sly.request('/v1/buy', {
+          method: 'POST',
+          body: JSON.stringify({
+            merchant,
+            items: items.map(i => ({ ...i, quantity: i.quantity ?? 1 })),
+          }),
+        });
+
+        // Most Sly endpoints wrap responses in { success, data, meta }.
+        const data = result?.data ?? result;
+
+        if (data?.status === 'approval_required') {
+          const itemRows = (data.items ?? [])
+            .map((it: any) => `| ${it.quantity}× ${it.name} | ${data.currency} ${Number(it.total).toFixed(2)} |`)
+            .join('\n');
+          const summary =
+            `### 🍽️ ${data.merchant} — approval needed\n\n` +
+            `| Item | Price |\n|---|---:|\n${itemRows}\n` +
+            `| **Total** | **${data.currency} ${Number(data.total).toFixed(2)}** |\n\n` +
+            `**Pay with:** ${data.card_on_file}\n` +
+            `**Why approval:** ${data.reason}\n\n` +
+            `### → [**Approve ${data.currency} ${Number(data.total).toFixed(2)}**](${data.approve_url})\n\n` +
+            `Tap that to authorize the charge. Single-use, expires in 24 hr.\n\n` +
+            `_(Approval ID: \`${data.approval_id}\`)_\n\n` +
+            `IMPORTANT: After surfacing this card to the user, immediately call ` +
+            `sly_buy_status({ approval_id: "${data.approval_id}", wait: 60 }) ` +
+            `to wait for the user's tap. The user does NOT need to tell you they approved — the long-poll will return as soon as the charge clears.`;
+
+          // NOTE: We intentionally don't include the inline_ui HTML as
+          // an embedded resource here. Claude Desktop announces the
+          // io.modelcontextprotocol/ui extension in its handshake but
+          // does not actually render mcp-app HTML in any released
+          // build (as of 2026-04). Sending it caused Claude to either
+          // dump the raw HTML or hallucinate a button that doesn't
+          // exist in the chat. The text path with the markdown approve
+          // link is what reliably renders in every client today.
+          // ChatGPT's Apps SDK does render — when surfacing through
+          // the HTTP MCP endpoint, we can include the resource again.
+          return { content: [{ type: 'text', text: summary }] };
+        }
+
+        if (data?.status === 'completed') {
+          const piId = data.charge?.id;
+          // Receipt deep-link to Stripe Dashboard. We prefix the URL with
+          // STRIPE_ACCOUNT_ID when set so the click lands in the correct
+          // account directly (otherwise the dashboard tries to resolve
+          // against whichever account the user's browser is already
+          // logged into). When unset we omit the prefix — Stripe will
+          // route to the most-recently-used account.
+          const stripeAcct = process.env.STRIPE_ACCOUNT_ID || '';
+          const stripeLink = piId
+            ? ` · [View on Stripe →](https://dashboard.stripe.com${stripeAcct ? '/' + stripeAcct : ''}/test/payments/${piId})`
+            : '';
+          const summary =
+            `✅ **Order placed at ${data.merchant}**\n\n` +
+            `Charged **${data.currency} ${Number(data.total).toFixed(2)}** to ${data.charge?.brand ?? 'card'} •••• ${data.charge?.last4 ?? '••••'}${stripeLink}\n`;
+          return { content: [{ type: 'text', text: summary }] };
+        }
+
+        return { content: [{ type: 'text', text: JSON.stringify(data ?? result, null, 2) }] };
+      }
+
+      case 'sly_buy_status': {
+        const { approval_id, wait } = args as { approval_id: string; wait?: number };
+        const w = typeof wait === 'number' ? Math.max(0, Math.min(60, wait)) : 60;
+        const result: any = await ctx.sly.request(
+          `/v1/buy/status/${encodeURIComponent(approval_id)}?wait=${w}`,
+        );
+        const data = result?.data ?? result;
+
+        if (data?.status === 'completed') {
+          const piId = data.charge?.id;
+          // Receipt deep-link to Stripe Dashboard. We prefix the URL with
+          // STRIPE_ACCOUNT_ID when set so the click lands in the correct
+          // account directly (otherwise the dashboard tries to resolve
+          // against whichever account the user's browser is already
+          // logged into). When unset we omit the prefix — Stripe will
+          // route to the most-recently-used account.
+          const stripeAcct = process.env.STRIPE_ACCOUNT_ID || '';
+          const stripeLink = piId
+            ? ` · [View on Stripe →](https://dashboard.stripe.com${stripeAcct ? '/' + stripeAcct : ''}/test/payments/${piId})`
+            : '';
+          const summary =
+            `✅ **Order placed at ${data.merchant}**\n\n` +
+            `Charged **${data.currency} ${Number(data.total).toFixed(2)}** to ${data.charge?.brand ?? 'card'} •••• ${data.charge?.last4 ?? '••••'}${stripeLink}`;
+          return { content: [{ type: 'text', text: summary }] };
+        }
+        if (data?.status === 'denied') {
+          return { content: [{ type: 'text', text: '❌ Order denied by the user.' }] };
+        }
+        if (data?.status === 'expired') {
+          return { content: [{ type: 'text', text: '⌛ Approval link expired before the user tapped.' }] };
+        }
+        if (data?.status === 'approval_required' || data?.status === 'approved_pending_charge') {
+          return {
+            content: [{
+              type: 'text',
+              text: `Still pending — call sly_buy_status again with the same approval_id to keep waiting. (current state: ${data.status})`,
+            }],
+          };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(data ?? result, null, 2) }] };
       }
 
       // ======================================================================

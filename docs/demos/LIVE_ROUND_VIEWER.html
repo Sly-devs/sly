@@ -1100,6 +1100,30 @@ async function executeScenario(scenario) {
       }
       const simMode = document.getElementById('modeSelect').value || 'openrouter';
       const isBaseline = document.getElementById('baselineToggle')?.checked || false;
+      // Live-money scenarios pay real USDC on Base mainnet. Gate behind a
+      // typed confirmation so a misclick can't drain a treasury wallet.
+      // Phrase matches what the sim sidecar's /run gate expects.
+      const LIVE_MONEY_SCENARIOS = new Set(['resale_chain_x402_external', 'external_marketplace_x402']);
+      let confirmLiveSpend;
+      if (LIVE_MONEY_SCENARIOS.has(scenario.id)) {
+        const cap = (params && (params.maxRoundSpendUsdc || params.maxPricePerCallUsdc)) || '?';
+        const typed = window.prompt(
+          '⚠ LIVE MONEY SCENARIO\n\n' +
+          scenario.name + ' will spend real USDC on Base mainnet against agentic.market endpoints.\n' +
+          'Round cap: $' + cap + '\n\n' +
+          'Type LIVE to confirm. Anything else cancels.',
+        );
+        if (typed !== 'LIVE') {
+          addFeedItem('error', 'Live-money scenario cancelled — confirmation phrase not entered.', 'rejected');
+          scenarioRunning = false;
+          document.getElementById('stopBtn').style.display = 'none';
+          document.getElementById('runBtn').disabled = false;
+          document.getElementById('scenarioSelect').disabled = false;
+          return;
+        }
+        confirmLiveSpend = 'I_UNDERSTAND_REAL_USDC_WILL_BE_SPENT';
+        addFeedItem('alert', '⚠ Live spend confirmed by operator — proceeding to fire on Base mainnet.', 'disputed');
+      }
       endpoint = url + '/admin/round/sim/run';
       body = {
         scenarioId: scenario.id,
@@ -1108,6 +1132,7 @@ async function executeScenario(scenario) {
         baseline: isBaseline,
         params,
         ...(styles ? { styles } : {}),
+        ...(confirmLiveSpend ? { confirmLiveSpend } : {}),
       };
     } else {
       endpoint = url + '/admin/round/execute';

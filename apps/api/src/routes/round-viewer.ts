@@ -707,6 +707,16 @@ roundViewerRouter.post('/seed-agent', async (c) => {
     if (typeof body?.kyaTier === 'number') {
       update.kya_tier = body.kyaTier;
     }
+    // Allow re-seeding to flip an existing agent's environment between
+    // test ↔ live. Without this a sim agent first seeded as 'test' could
+    // never be migrated to live without a manual DB fix. Note: the env
+    // flip alone doesn't add an agent_eoa wallet on the new chain — the
+    // /v1/agents/:id/evm-keys provisioning step (kicked off by the sim
+    // seeder after this) generates the appropriate-chain EOA based on
+    // the agent's current environment.
+    if (body?.environment === 'live' || body?.environment === 'test') {
+      update.environment = body.environment;
+    }
     await supabase.from('agents').update(update).eq('id', existing.id);
 
     // Find or top up wallet — create one if it doesn't exist yet.
@@ -820,6 +830,12 @@ roundViewerRouter.post('/seed-agent', async (c) => {
   const { generateAgentToken, hashApiKey, getKeyPrefix } = await import('../utils/crypto.js');
   const token = generateAgentToken();
 
+  // Optional environment flag — sim seeders default to 'test' (Base Sepolia
+  // signing only) so accidental live-money runs are impossible. Pass
+  // environment='live' explicitly to seed an agent that signs Base mainnet
+  // x402 transactions.
+  const requestedEnv = body?.environment === 'live' ? 'live' : 'test';
+
   const { data: agent, error: agentErr } = await supabase
     .from('agents')
     .insert({
@@ -836,6 +852,7 @@ roundViewerRouter.post('/seed-agent', async (c) => {
       auth_client_id: getKeyPrefix(token),
       permissions: [],
       effective_limit_per_tx: 1000,
+      environment: requestedEnv,
     })
     .select('id')
     .single();

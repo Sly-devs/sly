@@ -26,6 +26,8 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { startRun, listScenarios, type RunHandle } from './runner.js';
 import {
   list as listTemplates,
@@ -152,6 +154,40 @@ function statusSnapshot(run: CurrentRun | null) {
 
 // ─── Route handlers ───────────────────────────────────────────────────────
 
+/**
+ * Inspect a template row and decide whether it moves real USDC.
+ * Two signals trigger the live-money gate:
+ *   1. `buildingBlock: external_marketplace_x402` — direct external buys.
+ *   2. `sourceProtocol: x402_external` inside a resale_chain blockConfig —
+ *      the reseller's source leg pays an agentic.market endpoint.
+ * The `requiresLiveConfirm: true` flag in frontmatter is also honored so
+ * future templates can opt in without changing this code.
+ */
+function inspectLiveMoneyScenario(tpl: any): { isLive: boolean; reason: string; estimatedMaxSpendUsdc: number } {
+  try {
+    const md: string = tpl?.markdown || '';
+    const { frontmatter } = parseFrontmatter(md);
+    const buildingBlock = (frontmatter.buildingBlock as string | undefined) || tpl?.building_block || '';
+    const blockConfig = (frontmatter.blockConfig as Record<string, unknown> | undefined) || {};
+    const requiresFlag = frontmatter.requiresLiveConfirm === true;
+    const isExternalBlock = buildingBlock === 'external_marketplace_x402';
+    const isResaleExternal = buildingBlock === 'resale_chain' && (blockConfig as any)?.sourceProtocol === 'x402_external';
+    if (requiresFlag || isExternalBlock || isResaleExternal) {
+      const cap = Number((blockConfig as any)?.maxRoundSpendUsdc) || 0;
+      const reason = isExternalBlock
+        ? 'buildingBlock=external_marketplace_x402 — buyers pay agentic.market endpoints directly.'
+        : isResaleExternal
+          ? 'sourceProtocol=x402_external in resale_chain — reseller pays agentic.market endpoints upstream.'
+          : 'frontmatter requiresLiveConfirm=true.';
+      return { isLive: true, reason, estimatedMaxSpendUsdc: cap };
+    }
+  } catch {
+    // Frontmatter parse failure — be conservative, treat as non-live and
+    // let the runner surface its own clearer error.
+  }
+  return { isLive: false, reason: '', estimatedMaxSpendUsdc: 0 };
+}
+
 async function handleRun(req: IncomingMessage, res: ServerResponse) {
   if (current && !current.finishedAt) {
     return send(res, 409, {
@@ -169,6 +205,43 @@ async function handleRun(req: IncomingMessage, res: ServerResponse) {
 
   const scenarioId: string = body?.scenarioId;
   if (!scenarioId) return send(res, 400, { error: 'Missing scenarioId' });
+
+  // ─── Live-money confirmation gate ────────────────────────────────────
+  // Scenarios that pull from external x402 endpoints (agentic.market) move
+  // real USDC on Base mainnet. We require the caller to (a) acknowledge
+  // this with a typed phrase AND (b) have a live agent pool seeded. Either
+  // missing → 412.
+  try {
+    const tpl = await getByTemplateId(scenarioId);
+    if (tpl) {
+      const liveCheck = inspectLiveMoneyScenario(tpl);
+      if (liveCheck.isLive) {
+        if (body?.confirmLiveSpend !== 'I_UNDERSTAND_REAL_USDC_WILL_BE_SPENT') {
+          return send(res, 412, {
+            error: 'Live-money scenario requires confirmation',
+            scenarioId,
+            reason: liveCheck.reason,
+            estimatedMaxSpendUsdc: liveCheck.estimatedMaxSpendUsdc,
+            hint: 'Add {"confirmLiveSpend":"I_UNDERSTAND_REAL_USDC_WILL_BE_SPENT"} to the request body. The viewer prompts for this typed phrase before firing.',
+          });
+        }
+        // Confirm the live agent pool exists. Without tokens.live.json, the
+        // resale x402_external scenario would fall back to test agents that
+        // can only sign Base Sepolia, and every cycle would 400.
+        const liveTokensPath = resolve(process.cwd(), 'tokens.live.json');
+        if (!existsSync(liveTokensPath)) {
+          return send(res, 412, {
+            error: 'Live agent pool not seeded',
+            hint: 'Run POST /seed with {"environment":"live","confirmLivePool":"CONFIRM_LIVE_POOL", ...counts} first. Then fund the resulting EOA addresses on Base mainnet before retrying.',
+          });
+        }
+      }
+    }
+  } catch (e: any) {
+    // Template lookup failed — fall through to startRun, which will surface
+    // its own clearer error if the scenarioId really is unknown.
+    console.warn('[sim-server] live-gate template lookup failed:', e?.message);
+  }
 
   const mode: 'scripted' | 'api' | 'subagent' = body?.mode || 'api';
   const durationMs: number = body?.durationMs ?? 120_000;
@@ -411,24 +484,40 @@ async function handleSeed(req: IncomingMessage, res: ServerResponse) {
   const opportunist = Number.isFinite(body?.opportunist) ? Math.max(0, Math.min(10, body.opportunist)) : 0;
   const researcher = Number.isFinite(body?.researcher) ? Math.max(0, Math.min(5, body.researcher)) : 0;
 
+  // Live pool toggle. When environment='live', agents are seeded against
+  // mainnet (Base mainnet x402 signing) and stored in tokens.live.json,
+  // separate from the test pool. We require an explicit confirm string in
+  // the body so a typo in a curl can't accidentally provision live agents.
+  const environment: 'test' | 'live' = body?.environment === 'live' ? 'live' : 'test';
+  if (environment === 'live' && body?.confirmLivePool !== 'CONFIRM_LIVE_POOL') {
+    return send(res, 412, {
+      error: 'Live agent pool requires confirmation',
+      hint: 'Pass {"environment":"live","confirmLivePool":"CONFIRM_LIVE_POOL"} to provision a live pool. The resulting EOAs are on Base mainnet and will sign real USDC.',
+    });
+  }
+
   const total = honest + quality + rogue + whale + colluder + budget + specialist + newcomer + rogueSpam + mm + conservative + opportunist + researcher;
-  console.log(`[sim-server] re-seeding pool: ${total} agents (${honest}h ${quality}q ${rogue}r ${whale}w ${colluder}c ${budget}b ${specialist}s ${newcomer}n ${rogueSpam}rs ${mm}mm ${conservative}cb ${opportunist}o ${researcher}re)`);
+  console.log(`[sim-server] re-seeding pool: ${total} agents env=${environment} (${honest}h ${quality}q ${rogue}r ${whale}w ${colluder}c ${budget}b ${specialist}s ${newcomer}n ${rogueSpam}rs ${mm}mm ${conservative}cb ${opportunist}o ${researcher}re)`);
   try {
     const result = await seedPersonas(
       { honest, quality, rogue, whale, colluder, budget, specialist, newcomer, rogueSpam, mm, conservative, opportunist, researcher },
-      { baseUrl, adminKey, log: (m: string) => console.log(`[sim-server][seed] ${m}`) },
+      { baseUrl, adminKey, log: (m: string) => console.log(`[sim-server][seed] ${m}`), environment },
     );
     return send(res, 200, {
       data: {
         total: result.total,
         errors: result.errors,
+        environment,
+        tokensFile: environment === 'live' ? 'tokens.live.json' : 'tokens.json',
         // Return the new pool so the viewer can refresh without a separate fetch
-        agents: loadSimAgents().map((a) => ({
+        agents: loadSimAgents({ live: environment === 'live' }).map((a) => ({
           agentId: a.agentId,
           name: a.name,
           templateId: a.templateId,
           style: a.style,
           balance: a.balance,
+          environment: a.environment,
+          agentEoaAddress: a.agentEoaAddress,
         })),
       },
     });

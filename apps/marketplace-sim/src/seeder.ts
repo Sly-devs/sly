@@ -42,6 +42,7 @@ async function seedOne(
   templateId: string,
   name: string,
   kyaTier: number,
+  environment: 'test' | 'live' = 'test',
 ): Promise<SeededAgentRecord> {
   const res = await fetch(`${baseUrl}/admin/round/seed-agent`, {
     method: 'POST',
@@ -53,6 +54,7 @@ async function seedOne(
       name,
       description: `marketplace-sim persona: ${templateId}`,
       kyaTier,
+      environment,
     }),
   });
 
@@ -72,6 +74,7 @@ async function seedOne(
     walletId: d.walletId,
     balance: d.balance,
     kyaTier,
+    environment,
     seededAt: new Date().toISOString(),
   };
 
@@ -115,9 +118,10 @@ async function seedOne(
       const eoaData = eoaJson.data ?? eoaJson;
       if (eoaData.ethereumAddress) {
         record.agentEoaAddress = eoaData.ethereumAddress;
-        // Test agents (the default for sim seeding) sign Base Sepolia per
-        // /v1/agents/:id/x402-sign env↔chain coherence rule.
-        record.agentEoaChain = 'base-sepolia';
+        // EOA chain follows the agent's environment (enforced server-side
+        // at /v1/agents/:id/x402-sign — test ↔ Base Sepolia, live ↔ Base
+        // mainnet).
+        record.agentEoaChain = environment === 'live' ? 'base' : 'base-sepolia';
       }
     } else {
       // Already provisioned, or the platform refused. Both non-fatal —
@@ -173,13 +177,30 @@ async function registerSkills(
  */
 export async function seedPersonas(
   counts: SeedCounts,
-  opts: { baseUrl: string; adminKey: string; tokensPath?: string; log?: (msg: string) => void } = {} as any,
+  opts: {
+    baseUrl: string;
+    adminKey: string;
+    tokensPath?: string;
+    log?: (msg: string) => void;
+    /** Persona environment. 'test' (Base Sepolia signing) by default;
+     *  'live' creates a separate live pool that signs Base mainnet — only
+     *  pick this when you intend to spend real USDC. The live pool writes
+     *  to tokens.live.json by default to keep it cleanly separated from
+     *  the test pool. */
+    environment?: 'test' | 'live';
+  } = {} as any,
 ): Promise<SeedResult> {
   const baseUrl = opts.baseUrl;
   const adminKey = opts.adminKey;
   if (!baseUrl || !adminKey) throw new Error('baseUrl + adminKey required');
   const log = opts.log || (() => {});
-  const tokensPath = opts.tokensPath || TOKENS_PATH;
+  const environment = opts.environment === 'live' ? 'live' : 'test';
+  // Live pool gets its own tokens file so a careless ls-then-load can't
+  // accidentally hand a live agent to a test scenario.
+  const defaultPath = environment === 'live'
+    ? resolve(process.cwd(), 'tokens.live.json')
+    : TOKENS_PATH;
+  const tokensPath = opts.tokensPath || defaultPath;
 
   const errors: string[] = [];
   const plan: Array<[string, number]> = [
@@ -215,8 +236,8 @@ export async function seedPersonas(
     for (let i = 1; i <= n; i++) {
       const name = `sim-${template.namePrefix}-${i}`;
       try {
-        log(`Seeding ${name} (kyaTier=${template.defaultKyaTier})...`);
-        const record = await seedOne(baseUrl, adminKey, templateId, name, template.defaultKyaTier);
+        log(`Seeding ${name} (kyaTier=${template.defaultKyaTier}, env=${environment})...`);
+        const record = await seedOne(baseUrl, adminKey, templateId, name, template.defaultKyaTier, environment);
         records.push(record);
         // Register skills from the persona template
         const skillCount = template.skills?.length

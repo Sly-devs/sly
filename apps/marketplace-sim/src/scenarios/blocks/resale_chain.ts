@@ -25,11 +25,91 @@ function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+/** External agentic.market endpoint flattened to a resale-source shape. */
+interface ExternalEndpoint {
+  serviceId: string;
+  serviceName: string;
+  category: string;
+  url: string;
+  method: string;
+  priceUsdc: number;
+  network: string;
+  host: string;
+}
+
+const AGENTIC_MARKET_CATALOG = 'https://api.agentic.market/v1/services';
+const REALISTIC_PRICE_CEILING_USDC = 10.0; // skip wei↔USDC parse-error outliers
+const REACHABLE_NETWORKS_FOR_RESALE = new Set(['Base', 'eip155:8453']); // mainnet only
+
+/**
+ * Pull the agentic.market catalog and flatten to priced + Base-reachable
+ * x402 endpoints under maxPricePerCallUsdc. Mirrors the loader in
+ * external_marketplace_x402.ts; kept inline here so resale_chain can
+ * compile without a runtime import from another scenario block.
+ */
+async function loadAgenticMarketEndpointsForResale(maxPricePerCallUsdc: number): Promise<ExternalEndpoint[]> {
+  const PAGE = 200;
+  const seen = new Set<string>();
+  const services: any[] = [];
+  let offset = 0;
+  while (offset < 1000) {
+    const res = await fetch(`${AGENTIC_MARKET_CATALOG}?limit=${PAGE}&offset=${offset}`);
+    if (!res.ok) break;
+    const body = await res.json() as any;
+    const page: any[] = Array.isArray(body?.services) ? body.services : [];
+    if (page.length === 0) break;
+    let added = 0;
+    for (const s of page) {
+      if (s?.id && !seen.has(s.id)) { seen.add(s.id); services.push(s); added++; }
+    }
+    if (added === 0 || page.length < PAGE) break;
+    offset += PAGE;
+  }
+
+  const flat: ExternalEndpoint[] = [];
+  for (const svc of services) {
+    const endpoints = Array.isArray(svc.endpoints) ? svc.endpoints : [];
+    for (const ep of endpoints) {
+      const priceRaw = ep?.pricing?.amount;
+      if (typeof priceRaw !== 'string' || priceRaw.trim() === '') continue;
+      const priceUsdc = Number(priceRaw);
+      if (!Number.isFinite(priceUsdc) || priceUsdc <= 0) continue;
+      if (priceUsdc > REALISTIC_PRICE_CEILING_USDC) continue;
+      if (priceUsdc > maxPricePerCallUsdc) continue;
+      const network = ep?.pricing?.network || svc?.networks?.[0] || '';
+      if (!REACHABLE_NETWORKS_FOR_RESALE.has(network)) continue;
+      let host = '';
+      try { host = new URL(ep.url).hostname; } catch { continue; }
+      flat.push({
+        serviceId: svc.id,
+        serviceName: svc.name || svc.id,
+        category: svc.category || 'Uncategorized',
+        url: ep.url,
+        method: (ep.method || 'GET').toUpperCase(),
+        priceUsdc,
+        network,
+        host,
+      });
+    }
+  }
+  return flat;
+}
+
 export interface ResaleChainConfig {
-  /** Merchant protocol the reseller sources from. Only ACP/UCP — x402 resale is deferred. */
-  sourceProtocol: 'acp' | 'ucp';
+  /** Merchant protocol the reseller sources from.
+   *  - 'acp' / 'ucp': internal Sly merchants seeded by scripts/seed-sim-commerce.ts
+   *  - 'x402_external': REAL agentic.market endpoints — requires reseller agents
+   *    to have a provisioned + funded agent_eoa wallet. Settles on Base via USDC.
+   */
+  sourceProtocol: 'acp' | 'ucp' | 'x402_external';
   /** Markup factor applied over merchant cost (e.g. 1.25 = 25% markup). */
   markup?: number;
+  /** When sourceProtocol='x402_external': max per-call price the reseller will
+   *  pay upstream (USDC). Default $0.10 to keep blast radius bounded. */
+  maxPricePerCallUsdc?: number;
+  /** When sourceProtocol='x402_external': max total upstream spend per round
+   *  (USDC). Default $1.00. The round terminates once this is reached. */
+  maxRoundSpendUsdc?: number;
   defaults?: {
     cycleSleepMs?: number;
     resellerStyles?: PersonaStyle[];
@@ -52,10 +132,12 @@ export async function runResaleChain(
   const baseUrl = process.env.SLY_API_URL!;
   const adminKey = process.env.SLY_PLATFORM_ADMIN_KEY!;
 
-  if (config.sourceProtocol !== 'acp' && config.sourceProtocol !== 'ucp') {
-    throw new Error(`resale_chain: sourceProtocol must be 'acp' or 'ucp'`);
+  if (!['acp', 'ucp', 'x402_external'].includes(config.sourceProtocol)) {
+    throw new Error(`resale_chain: sourceProtocol must be 'acp' | 'ucp' | 'x402_external'`);
   }
   const markup = config.markup ?? 1.25;
+  const maxPricePerCallUsdc = config.maxPricePerCallUsdc ?? 0.10;
+  const maxRoundSpendUsdc = config.maxRoundSpendUsdc ?? 1.00;
   const cycleSleepMs = (params.cycleSleepMs as number) || config.defaults?.cycleSleepMs || 3000;
   const resellerStyles = config.defaults?.resellerStyles || (['whale', 'mm'] as PersonaStyle[]);
   const buyerStyles = config.defaults?.buyerStyles || (['honest'] as PersonaStyle[]);
@@ -75,13 +157,36 @@ export async function runResaleChain(
     return { completedTrades: 0, totalVolume: 0, findings: ['Insufficient pool'] };
   }
 
-  const merchants = await adminClient.listMerchants({ limit: 50 });
-  if (merchants.length === 0) {
-    await adminClient.comment(
-      `resale_chain: no merchants found. Run scripts/seed-sim-commerce.ts.`,
-      'alert',
-    );
-    return { completedTrades: 0, totalVolume: 0, findings: ['No merchants'] };
+  // Source-of-supply: either internal Sly merchants (acp/ucp) or external
+  // agentic.market x402 endpoints. Loaded once at round start; per-cycle
+  // pick happens below. external_x402 endpoints are flattened into the same
+  // shape as internal catalog items so the downstream resale flow doesn't
+  // care which path produced them.
+  let merchants: any[] = [];
+  let externalEndpoints: ExternalEndpoint[] = [];
+  if (config.sourceProtocol === 'x402_external') {
+    try {
+      externalEndpoints = await loadAgenticMarketEndpointsForResale(maxPricePerCallUsdc);
+    } catch (e: any) {
+      await adminClient.comment(`resale_chain (x402_external): catalog fetch failed: ${e.message}`, 'alert');
+      return { completedTrades: 0, totalVolume: 0, findings: ['Catalog unreachable'] };
+    }
+    if (externalEndpoints.length === 0) {
+      await adminClient.comment(
+        `resale_chain (x402_external): no agentic.market endpoints under $${maxPricePerCallUsdc.toFixed(2)}/call on Base — try raising maxPricePerCallUsdc`,
+        'alert',
+      );
+      return { completedTrades: 0, totalVolume: 0, findings: ['No affordable endpoints'] };
+    }
+  } else {
+    merchants = await adminClient.listMerchants({ limit: 50 });
+    if (merchants.length === 0) {
+      await adminClient.comment(
+        `resale_chain: no merchants found. Run scripts/seed-sim-commerce.ts.`,
+        'alert',
+      );
+      return { completedTrades: 0, totalVolume: 0, findings: ['No merchants'] };
+    }
   }
 
   if (!dryRun) {
@@ -106,6 +211,9 @@ export async function runResaleChain(
   let cycle = 0;
   let completedTrades = 0;
   let totalVolume = 0;
+  // Tracks upstream spend on agentic.market when sourceProtocol='x402_external'.
+  // Round terminates when this hits maxRoundSpendUsdc. Stays 0 in acp/ucp mode.
+  let totalSpendUsdc = 0;
   const findings: string[] = [];
   const startedAt = Date.now();
 
@@ -131,14 +239,81 @@ export async function runResaleChain(
     if (dryRun) { completedTrades++; break; }
 
     try {
-      // ─── 1. Reseller picks a merchant + product and buys it ──────────
-      const merchant = pick(merchants);
-      const catalogRaw = merchant?.catalog?.products || merchant?.catalog || [];
-      const catalog: any[] = Array.isArray(catalogRaw) ? catalogRaw : [];
-      if (catalog.length === 0) continue;
-      const item = pick(catalog) as { id?: string; name: string; unit_price_cents?: number; currency?: string };
-      const merchantCost = (item?.unit_price_cents ?? 0) / 100;
-      if (merchantCost <= 0) continue;
+      // ─── 1. Reseller picks an upstream source + buys it ─────────────
+      // For acp/ucp: pick from internal merchant catalog.
+      // For x402_external: pick from cached agentic.market endpoints; pay
+      // via the agent's on-chain EOA. Round terminates when the per-round
+      // spend cap is reached.
+      let merchantName: string;
+      let merchantNodeId: string;
+      let item: { id?: string; name: string; unit_price_cents?: number; currency?: string };
+      let merchantCost: number;
+
+      if (config.sourceProtocol === 'x402_external') {
+        if (totalSpendUsdc >= maxRoundSpendUsdc) {
+          await adminClient.comment(
+            `resale_chain (x402_external): round spend cap $${maxRoundSpendUsdc.toFixed(2)} reached at $${totalSpendUsdc.toFixed(4)} — ending`,
+            'governance',
+          );
+          break;
+        }
+        const remaining = maxRoundSpendUsdc - totalSpendUsdc;
+        const fits = externalEndpoints.filter((e) => e.priceUsdc <= remaining);
+        if (fits.length === 0) {
+          await adminClient.comment(
+            `resale_chain (x402_external): $${remaining.toFixed(4)} remaining can't cover any catalog endpoint — ending`,
+            'governance',
+          );
+          break;
+        }
+        const ep = pick(fits);
+        merchantName = `${ep.serviceName} (${ep.host})`;
+        merchantNodeId = `ext:agentic-market:${ep.host}`;
+        item = { id: ep.serviceId, name: ep.serviceName, unit_price_cents: Math.round(ep.priceUsdc * 100), currency: 'USDC' };
+        merchantCost = ep.priceUsdc;
+
+        // Pay the upstream BEFORE marking the source done. If x402-sign
+        // returns 4xx (no EOA, KYA cap, frozen wallet) we want to surface
+        // it as an alert and skip the cycle, NOT proceed to A2A resale.
+        const USDC_DECIMALS = 1_000_000;
+        const maxPriceBaseUnits = String(BigInt(Math.floor(merchantCost * USDC_DECIMALS)));
+        let upstreamPaid = false;
+        try {
+          const result = await clients[reseller.agentId].x402FetchExternal({
+            agentId: reseller.agentId,
+            url: ep.url,
+            method: ep.method,
+            maxPriceBaseUnits,
+            agentReason: `resale source: ${ep.serviceName} (${ep.category}) — for resale to peer at ${markup.toFixed(2)}×`,
+          });
+          if (result.paid) {
+            upstreamPaid = true;
+            totalSpendUsdc += merchantCost;
+          } else {
+            await adminClient.comment(
+              `resale_chain (x402_external): upstream ${ep.host} returned ${result.status ?? 'no-response'}${result.error ? ` — ${result.error}` : ''}; skipping cycle`,
+              'alert',
+            );
+          }
+        } catch (e: any) {
+          if (!handleSuspension(e, reseller)) {
+            await adminClient.comment(
+              `resale_chain (x402_external): upstream call to ${ep.host} threw: ${e.message}`,
+              'alert',
+            );
+          }
+        }
+        if (!upstreamPaid) continue;
+      } else {
+        const merchant = pick(merchants);
+        const catalogRaw = merchant?.catalog?.products || merchant?.catalog || [];
+        const catalog: any[] = Array.isArray(catalogRaw) ? catalogRaw : [];
+        if (catalog.length === 0) continue;
+        item = pick(catalog) as { id?: string; name: string; unit_price_cents?: number; currency?: string };
+        merchantCost = (item?.unit_price_cents ?? 0) / 100;
+        if (merchantCost <= 0) continue;
+        merchantName = merchant.name;
+        merchantNodeId = 'merch:' + String(merchant.id);
 
       if (config.sourceProtocol === 'acp') {
         const checkoutId = `sim_resale_${cycle}_${randomUUID().slice(0, 8)}`;
@@ -181,17 +356,21 @@ export async function runResaleChain(
           try { await clients[reseller.agentId].completeUcpCheckout(checkoutId); } catch {}
         }
       }
+      } // end internal-source else-branch
 
-      // Merchant purchase happened — emit a milestone NOW so the merchant
-      // shows on the graph even if the downstream A2A resale fails.
+      // Source purchase happened — emit a milestone NOW so the upstream
+      // shows on the graph even if the downstream A2A resale fails. The
+      // `merchantNodeId` is either `merch:<uuid>` (internal) or
+      // `ext:agentic-market:<host>` (x402_external) — viewer renders both
+      // as merchant squares.
       await adminClient.milestone(
-        `\u{1F6D2} ${reseller.name} sourced "${item.name}" from ${merchant.name} ($${merchantCost.toFixed(2)}) — preparing resale`,
+        `\u{1F6D2} ${reseller.name} sourced "${item.name}" from ${merchantName} ($${merchantCost.toFixed(4)}) — preparing resale`,
         {
           agentId: reseller.agentId,
           agentName: reseller.name,
           icon: '\u{1F6D2}',
-          toId: 'merch:' + String(merchant.id),
-          toName: merchant.name,
+          toId: merchantNodeId,
+          toName: merchantName,
           toKind: 'merchant',
           amount: merchantCost,
           currency: 'USDC',
@@ -205,7 +384,7 @@ export async function runResaleChain(
       // claimTask later 403s with "Agent can only claim tasks assigned to
       // them" (same pattern as concierge.ts: buyer→concierge).
       const resalePrice = Math.round(merchantCost * markup * 100) / 100;
-      const orderPrompt = `Order for "${item.name}" from your resale inventory (sourced from ${merchant.name}). Agreed price $${resalePrice.toFixed(2)} (your cost $${merchantCost.toFixed(2)}, markup ×${markup.toFixed(2)}). Deliver and I'll release payment on acceptance.`;
+      const orderPrompt = `Order for "${item.name}" from your resale inventory (sourced from ${merchantName}). Agreed price $${resalePrice.toFixed(2)} (your cost $${merchantCost.toFixed(4)}, markup ×${markup.toFixed(2)}). Deliver and I'll release payment on acceptance.`;
       let taskId: string;
       try {
         const created = await clients[buyer.agentId].createTask({
@@ -217,7 +396,7 @@ export async function runResaleChain(
               simRound: scenarioId,
               cycle,
               resale: true,
-              merchantId: merchant.merchant_id || merchant.id,
+              merchantId: merchantNodeId,
               merchantCost,
               resalePrice,
               item: item.name,
@@ -337,7 +516,7 @@ export async function runResaleChain(
       try {
         await clients[reseller.agentId].completeTask(
           taskId,
-          `Delivered "${item.name}" from ${merchant.name}. Your cost: $${resalePrice.toFixed(2)}. My margin: $${(resalePrice - merchantCost).toFixed(2)}.`,
+          `Delivered "${item.name}" from ${merchantName}. Your cost: $${resalePrice.toFixed(2)}. My margin: $${(resalePrice - merchantCost).toFixed(4)}.`,
         );
         await adminClient.comment(
           `\u2705 ${reseller.name} delivered "${item.name}" — awaiting ${buyer.name} acceptance`,
@@ -402,7 +581,7 @@ export async function runResaleChain(
       // will surface as regular agent→agent activity and their volume flows
       // through the normal mandate-completion aggregator.
       await adminClient.milestone(
-        `\u{1F501} ${reseller.name} resold "${item.name}" (${merchant.name} → ${buyer.name}, margin $${(resalePrice - merchantCost).toFixed(2)})`,
+        `\u{1F501} ${reseller.name} resold "${item.name}" (${merchantName} → ${buyer.name}, margin $${(resalePrice - merchantCost).toFixed(4)})`,
         {
           agentId: reseller.agentId,
           agentName: reseller.name,

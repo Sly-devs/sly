@@ -98,6 +98,39 @@ async function seedOne(
     // Non-fatal — agent falls back to bearer token auth
   }
 
+  // Provision an on-chain EOA for x402 signing against external endpoints
+  // (external_marketplace_x402, resale x402_external). Idempotent — the
+  // platform endpoint returns the existing key if one exists. Test agents
+  // get a Base Sepolia EOA; live agents would get Base mainnet, but seeding
+  // creates test agents by default. **No money moves here** — funding the
+  // resulting address is a separate, explicit step (faucet for sepolia or
+  // a treasury transfer for live).
+  try {
+    const eoaRes = await fetch(`${baseUrl}/v1/agents/${d.id}/evm-keys`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${d.token}`, 'Content-Type': 'application/json' },
+    });
+    if (eoaRes.ok) {
+      const eoaJson = await eoaRes.json();
+      const eoaData = eoaJson.data ?? eoaJson;
+      if (eoaData.ethereumAddress) {
+        record.agentEoaAddress = eoaData.ethereumAddress;
+        // Test agents (the default for sim seeding) sign Base Sepolia per
+        // /v1/agents/:id/x402-sign env↔chain coherence rule.
+        record.agentEoaChain = 'base-sepolia';
+      }
+    } else {
+      // Already provisioned, or the platform refused. Both non-fatal —
+      // sim works fine for non-x402 scenarios; only x402_external needs it.
+      const text = await eoaRes.text();
+      if (eoaRes.status !== 409 && process.env.LOG_LEVEL === 'debug') {
+        console.warn(`[seeder] /evm-keys for ${name}: HTTP ${eoaRes.status} ${text.slice(0, 120)}`);
+      }
+    }
+  } catch {
+    // Non-fatal — agent works for everything except external x402 signing
+  }
+
   return record;
 }
 

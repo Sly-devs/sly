@@ -35,6 +35,12 @@ export interface SeededAgentRecord {
   walletId?: string;
   balance: number;
   kyaTier: number;
+  /** On-chain agent EOA address — provisioned via /v1/agents/:id/evm-keys.
+   *  Required for x402FetchExternal flows (external_marketplace_x402, resale
+   *  x402_external). Empty until the agent is reseeded with EOA enabled. */
+  agentEoaAddress?: string;
+  /** EOA chain — 'base-sepolia' for test agents, 'base' for live. */
+  agentEoaChain?: 'base' | 'base-sepolia';
   seededAt: string;
 }
 

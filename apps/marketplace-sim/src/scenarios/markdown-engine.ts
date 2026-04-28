@@ -32,6 +32,7 @@ import { runMerchantBuy, type MerchantBuyConfig } from './blocks/merchant_buy.js
 import { runConcierge, type ConciergeConfig } from './blocks/concierge.js';
 import { runResaleChain, type ResaleChainConfig } from './blocks/resale_chain.js';
 import { runMerchantComparison, type MerchantComparisonConfig } from './blocks/merchant_comparison.js';
+import { runExternalMarketplaceX402, type ExternalMarketplaceX402Config } from './blocks/external_marketplace_x402.js';
 import { runOneToOne, type OneToOneConfig } from './blocks/one_to_one.js';
 import { runRingTrade, type RingTradeConfig } from './blocks/ring_trade.js';
 import { runMultiHop, type MultiHopConfig } from './blocks/multi_hop.js';
@@ -39,7 +40,7 @@ import { runDoubleAuction, type DoubleAuctionConfig } from './blocks/double_auct
 import type { TemplateRow } from '../templates/store.js';
 
 /** Building blocks the engine knows how to dispatch. */
-export const KNOWN_BLOCKS = ['bake_off', 'one_to_one', 'ring_trade', 'multi_hop', 'double_auction', 'merchant_buy', 'concierge', 'resale_chain', 'merchant_comparison'] as const;
+export const KNOWN_BLOCKS = ['bake_off', 'one_to_one', 'ring_trade', 'multi_hop', 'double_auction', 'merchant_buy', 'concierge', 'resale_chain', 'merchant_comparison', 'external_marketplace_x402'] as const;
 export type KnownBlock = typeof KNOWN_BLOCKS[number];
 
 export function isKnownBlock(s: string | null | undefined): s is KnownBlock {
@@ -158,6 +159,11 @@ export function buildScenarioFromTemplate(template: TemplateRow): ScenarioDefini
           scenarioId: template.template_id,
           config: blockConfig as unknown as MerchantComparisonConfig,
         });
+      case 'external_marketplace_x402':
+        return runExternalMarketplaceX402(ctx, {
+          scenarioId: template.template_id,
+          config: blockConfig as unknown as ExternalMarketplaceX402Config,
+        });
       default:
         throw new Error(
           `Template "${template.template_id}" uses unknown buildingBlock "${buildingBlock}". Available: ${KNOWN_BLOCKS.join(', ')}`,
@@ -268,6 +274,13 @@ export async function dryRunTemplate(template: TemplateRow, ctx: ScenarioContext
       await runMerchantComparison(ctx, {
         scenarioId: template.template_id,
         config: blockConfig as unknown as MerchantComparisonConfig,
+        dryRun: true,
+      });
+      return;
+    case 'external_marketplace_x402':
+      await runExternalMarketplaceX402(ctx, {
+        scenarioId: template.template_id,
+        config: blockConfig as unknown as ExternalMarketplaceX402Config,
         dryRun: true,
       });
       return;

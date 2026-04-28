@@ -1369,6 +1369,44 @@ Prerequisite: \`pnpm --filter @sly/api tsx scripts/seed-sim-commerce.ts\` must h
 exist in the sim tenant with overlapping sku fields.
 `;
 
+const EXTERNAL_MARKETPLACE_X402 = `---
+id: external_marketplace_x402
+name: External x402 Marketplace (agentic.market)
+buildingBlock: external_marketplace_x402
+requires: [whale, mm, honest]
+pool: { whale: 1, mm: 2, honest: 3, opportunist: 2 }
+params:
+  - { key: cycleSleepMs, type: int, label: Sleep between cycles (ms), default: 4000, min: 1000, max: 10000, step: 500 }
+  - { key: maxRoundSpendUsdc, type: float, label: Max total round spend (USDC), default: 1.0, min: 0.10, max: 10.0, step: 0.10 }
+  - { key: maxPricePerCallUsdc, type: float, label: Max per-call price (USDC), default: 0.10, min: 0.001, max: 5.0, step: 0.01 }
+analyzerHints: |
+  Sim agents transact against REAL external x402 endpoints listed on agentic.market. Each cycle picks an active
+  buyer + a random affordable endpoint, runs the full 402 → /v1/agents/:id/x402-sign → X-PAYMENT retry loop
+  against the external URL, settles on Base via USDC. Endpoints are sourced live from
+  \`https://api.agentic.market/v1/services\` (no internal merchant seeding needed). Failures are surfaced as
+  alert comments — typical causes are vendor 5xx, sign rejected by KYA limits, or facilitator timeouts.
+
+  EXPECTED: real on-chain settlement of small-dollar payments (typically <$0.01/call). The viewer will draw
+  buyer→ext:agentic-market:<host> edges per successful purchase. Round terminates early once
+  \`maxRoundSpendUsdc\` is reached.
+blockConfig:
+  defaults:
+    cycleSleepMs: 4000
+    buyerStyles: [whale, mm, honest, opportunist]
+  maxRoundSpendUsdc: 1.0
+  maxPricePerCallUsdc: 0.10
+---
+
+# External x402 Marketplace (agentic.market)
+
+Drives sim agents through real x402 purchases against agentic.market endpoints. The catalog is fetched live at
+round start and filtered to Base+USDC reachability. Each cycle: a buyer picks an affordable endpoint, signs an
+authorization through the platform's x402-sign endpoint, retries the request with X-PAYMENT, settles on-chain.
+
+Round-budget cap (\`maxRoundSpendUsdc\`) and per-call cap (\`maxPricePerCallUsdc\`) keep the spend bounded.
+Mainnet by default — set \`SLY_API_URL\` to a sandbox + Base Sepolia config to dry-run.
+`;
+
 export const BUILT_INS: BuiltInTemplate[] = [
   {
     template_id: 'competitive_review_real',
@@ -1537,6 +1575,12 @@ export const BUILT_INS: BuiltInTemplate[] = [
     name: 'Merchant Comparison (agents shop competing SKUs)',
     building_block: 'merchant_comparison',
     markdown: MERCHANT_COMPARISON,
+  },
+  {
+    template_id: 'external_marketplace_x402',
+    name: 'External x402 Marketplace (agentic.market)',
+    building_block: 'external_marketplace_x402',
+    markdown: EXTERNAL_MARKETPLACE_X402,
   },
 ];
 

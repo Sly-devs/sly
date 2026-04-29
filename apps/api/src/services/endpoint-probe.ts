@@ -90,13 +90,20 @@ function inferSchema(value: unknown): Schema {
     const sampled = value.slice(0, MAX_ARRAY_SAMPLES);
     if (sampled.length === 0) return { type: 'array' };
     const itemSchemas = sampled.map(inferSchema);
-    // If all items have the same single type, collapse to a single items schema
-    const allSame = itemSchemas.every(
-      (s) => JSON.stringify(s) === JSON.stringify(itemSchemas[0])
-    );
+    // Deduplicate identical shapes so we don't end up with anyOf:[A, A].
+    const dedup: Schema[] = [];
+    for (const s of itemSchemas) {
+      const key = JSON.stringify(s);
+      if (!dedup.some((d) => JSON.stringify(d) === key)) dedup.push(s);
+    }
     return {
       type: 'array',
-      items: allSame ? itemSchemas[0] : { oneOf: itemSchemas },
+      // Use anyOf, not oneOf. Inferred object schemas have
+      // additionalProperties: true, so a value matching the "richer" shape
+      // also matches the "leaner" one — oneOf (exactly-one) would fail
+      // ambiguously while anyOf (at-least-one) is the correct semantic for
+      // permissive heterogeneous arrays.
+      items: dedup.length === 1 ? dedup[0] : { anyOf: dedup },
     };
   }
   if (typeof value === 'object') {

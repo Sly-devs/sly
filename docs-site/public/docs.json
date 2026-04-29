@@ -32,6 +32,18 @@
       "linkedin": "https://www.linkedin.com/company/sly-ai"
     }
   },
+  "api": {
+    "playground": {
+      "display": "interactive",
+      "proxy": false
+    },
+    "mdx": {
+      "server": [
+        "https://sandbox.getsly.ai/v1",
+        "https://api.getsly.ai/v1"
+      ]
+    }
+  },
   "navigation": {
     "tabs": [
       {
@@ -159,6 +171,7 @@
               "agents/persistent-sse",
               "agents/a2a-agent-card",
               "agents/mcp-tool-catalog",
+              "agents/llms-txt",
               "agents/scope-grants",
               "agents/kill-switch",
               "agents/approval-workflows"

@@ -225,7 +225,10 @@ describe('buildAcceptsArray', () => {
     expect(a.payTo).toBe('0xPayoutWallet');
     expect(a.amount).toBe('10000'); // 0.01 USDC at 6 decimals
     expect(a.asset).toBe('0xUSDC');
-    expect(a.extra.name).toBe('USDC');
+    // EIP-712 domain `name` matches the contract's on-chain name() —
+    // 'USD Coin' for native USDC on Base mainnet. Misalignment causes
+    // signature recovery to fail at the facilitator.
+    expect(a.extra.name).toBe('USD Coin');
   });
 });
 

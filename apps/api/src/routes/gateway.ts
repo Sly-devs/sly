@@ -229,38 +229,78 @@ export function isReservedSlug(slug: string): boolean {
  * accept matching the endpoint's network/currency/payTo.
  */
 /**
- * Canonical USDC contract addresses keyed by every supported alias for a
- * network: x402 short slug, Sly slug, and CAIP-2.
+ * Canonical USDC contract config per network — address + on-chain
+ * EIP-712 domain (name, version) verified by reading name() and
+ * version() from each contract. Buyers sign EIP-3009
+ * transferWithAuthorization against this exact domain; if the
+ * `extra.name` we advertise doesn't match the contract's name(),
+ * signature recovery returns the wrong address and CDP rejects with
+ * `invalid_payload`.
  *
- * `PaymentRequirements.asset` (per @x402/core) is a non-null string; if
- * the endpoint row has `asset_address` set, that wins. Otherwise we fall
- * back to these well-known USDC addresses so the publish flow works
- * out-of-the-box.
+ * Keyed by every alias the codebase uses: x402 short slug, Sly slug,
+ * CAIP-2.
  */
-const USDC_BY_NETWORK: Record<string, string> = {
-  // Base mainnet
-  base: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  'base-mainnet': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  'eip155:8453': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  // Base sepolia
-  'base-sepolia': '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
-  'eip155:84532': '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
-  // Ethereum mainnet
-  'eip155:1': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  ethereum: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  // Optimism mainnet
-  'eip155:10': '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
-  optimism: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+interface UsdcConfig {
+  address: string;
+  domainName: string;
+  domainVersion: string;
+}
+
+const USDC_BASE_MAINNET: UsdcConfig = {
+  address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  domainName: 'USD Coin', // verified on-chain via name() — NOT "USDC"
+  domainVersion: '2',
 };
 
-function resolveAssetAddress(network: string, endpointAsset: string | null): string {
+const USDC_BASE_SEPOLIA: UsdcConfig = {
+  address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  domainName: 'USDC', // testnet uses the short name
+  domainVersion: '2',
+};
+
+const USDC_ETH_MAINNET: UsdcConfig = {
+  address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  domainName: 'USD Coin',
+  domainVersion: '2',
+};
+
+const USDC_OP_MAINNET: UsdcConfig = {
+  address: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+  domainName: 'USD Coin',
+  domainVersion: '2',
+};
+
+const USDC_BY_NETWORK: Record<string, UsdcConfig> = {
+  // Base mainnet
+  base: USDC_BASE_MAINNET,
+  'base-mainnet': USDC_BASE_MAINNET,
+  'eip155:8453': USDC_BASE_MAINNET,
+  // Base sepolia
+  'base-sepolia': USDC_BASE_SEPOLIA,
+  'eip155:84532': USDC_BASE_SEPOLIA,
+  // Ethereum mainnet
+  'eip155:1': USDC_ETH_MAINNET,
+  ethereum: USDC_ETH_MAINNET,
+  // Optimism mainnet
+  'eip155:10': USDC_OP_MAINNET,
+  optimism: USDC_OP_MAINNET,
+};
+
+function resolveUsdcConfig(network: string, endpointAsset: string | null): UsdcConfig {
   // Prefer an explicit asset on the endpoint when it looks like a real
   // EVM address. Tests sometimes pass a placeholder ('0xUSDC') — in that
   // case still honor it so the test doesn't need a 40-hex value.
+  // We still need a domain name/version though, so look those up from
+  // the network even when the address is overridden.
+  const networkCfg = USDC_BY_NETWORK[network];
   if (endpointAsset && endpointAsset.startsWith('0x') && endpointAsset.length >= 4) {
-    return endpointAsset;
+    return {
+      address: endpointAsset,
+      domainName: networkCfg?.domainName ?? 'USDC',
+      domainVersion: networkCfg?.domainVersion ?? '2',
+    };
   }
-  return USDC_BY_NETWORK[network] ?? '';
+  return networkCfg ?? { address: '', domainName: 'USDC', domainVersion: '2' };
 }
 
 /**
@@ -277,20 +317,26 @@ function buildAcceptsArray(endpoint: EndpointRow, payTo: string): unknown[] {
   // ERC-20 (USDC/EURC = 6 decimals) — atomic units.
   const decimals = 6;
   const amountMinor = toMinorUnits(baseAmount, decimals);
-  const asset = resolveAssetAddress(network, endpoint.asset_address);
+  const usdc = resolveUsdcConfig(network, endpoint.asset_address);
 
   return [
     {
       scheme: 'exact',
       network,
-      asset,
+      asset: usdc.address,
       amount: amountMinor,
       payTo,
       maxTimeoutSeconds: 60,
       extra: {
-        // ERC-20 token name + version for EIP-712 domain construction.
-        name: endpoint.currency === 'EURC' ? 'EURC' : 'USDC',
-        version: '2',
+        // The EIP-712 domain `name` and `version` MUST match the
+        // ERC-20's on-chain values exactly. The buyer signs against
+        // these, and the facilitator recovers the signer address by
+        // re-deriving the domain from these fields. Mismatch →
+        // signature recovers to a different address → CDP rejects
+        // as `invalid_payload`. (Verified on-chain via name()/version()
+        // for each network's USDC contract.)
+        name: usdc.domainName,
+        version: usdc.domainVersion,
       },
     },
   ];

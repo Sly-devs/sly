@@ -37,11 +37,13 @@ import {
   CheckCircle2,
   ExternalLink,
   Globe,
-  Rocket
+  Rocket,
+  Pencil
 } from 'lucide-react';
 import { PublishStatusBadge } from '@/components/x402/publish-status-badge';
 import { PublicationTimeline } from '@/components/x402/publication-timeline';
 import { PublishToMarketDialog } from '@/components/x402/publish-to-market-dialog';
+import { EditEndpointDialog } from '@/components/x402/edit-endpoint-dialog';
 import type { X402Endpoint, X402PublishEvent, X402PublishStatusResponse } from '@sly/api-client';
 
 export default function X402EndpointDetailPage() {
@@ -53,6 +55,7 @@ export default function X402EndpointDetailPage() {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedGateway, setCopiedGateway] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
 
   // Fetch endpoint details
   const { data: endpointData, isLoading: endpointLoading } = useQuery({
@@ -208,6 +211,10 @@ const response = await client.fetch('https://your-api.com${endpoint?.path || '/a
             {endpoint.status}
           </Badge>
           <PublishStatusBadge status={effectivePublishStatus} />
+          <Button variant="outline" onClick={() => setEditDialogOpen(true)}>
+            <Pencil className="h-4 w-4 mr-2" />
+            Edit
+          </Button>
           <Button onClick={() => setPublishDialogOpen(true)}>
             <Rocket className="h-4 w-4 mr-2" />
             {isPublished ? 'Manage publication' : 'Publish to Agentic.Market'}
@@ -534,6 +541,15 @@ const response = await client.fetch('https://your-api.com${endpoint?.path || '/a
             queryClient.invalidateQueries({ queryKey: ['x402', 'endpoint', endpointId] });
             queryClient.invalidateQueries({ queryKey: ['x402', 'endpoint', endpointId, 'publish-status'] });
           }}
+        />
+      )}
+
+      {/* Edit endpoint dialog */}
+      {endpoint && (
+        <EditEndpointDialog
+          endpoint={endpoint as X402Endpoint}
+          open={editDialogOpen}
+          onOpenChange={setEditDialogOpen}
         />
       )}
     </div>

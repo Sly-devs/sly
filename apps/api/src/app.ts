@@ -101,6 +101,7 @@ import { agentConnectPublicRouter, agentConnectAuthRouter } from './routes/agent
 import authScopesRouter from './routes/auth-scopes.js';
 import organizationScopesRouter from './routes/organization/scopes.js';
 import { requireTenantScope } from './middleware/require-tenant-scope.js';
+import { gatewayMiddleware } from './routes/gateway.js';
 
 const app = new Hono();
 
@@ -113,6 +114,15 @@ app.use('*', requestId);
 
 // Timing tracking (must be early to track full request time)
 app.use('*', timingMiddleware);
+
+// ============================================
+// x402 Bazaar Gateway (One-Click Publish — Worktree C)
+// Host-routed middleware that fronts published tenant endpoints at
+// `*.x402.getsly.ai`. Must run BEFORE the response wrapper, CORS, auth,
+// and the /v1/* routes — it returns raw Response objects and handles
+// its own security model. Non-gateway hosts fall through.
+// ============================================
+app.use('*', gatewayMiddleware());
 
 // CORS preflight for admin round viewer — must be BEFORE response wrapper
 app.use('/admin/round/*', async (c, next) => {

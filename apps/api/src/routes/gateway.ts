@@ -166,6 +166,8 @@ interface SettleResult {
   extensionResponses?: string;
   error?: string;
   status?: number;
+  /** Buyer address recovered from the signed paymentPayload by CDP. */
+  payer?: string;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -662,6 +664,7 @@ async function callCdpVerifyAndSettle(input: {
   return {
     ok: true,
     txHash: settleResp.transaction,
+    payer: settleResp.payer,
     extensionResponses: 'processing',
   };
 }
@@ -725,20 +728,38 @@ async function recordSettleEvent(input: {
   txHash?: string;
   extensionResponses?: string;
   error?: string;
+  /** Buyer's address (probe wallet, organic agent, etc.) — NULL if unknown. */
+  payerAddress?: string | null;
+  /**
+   * Settle amount in atomic minor units (USDC = 6 decimals). Used to
+   * increment endpoint analytics + insert the transfers row. Set only on
+   * a successful, non-rejected settle.
+   */
+  amountMinor?: string | null;
+  /** Endpoint base_price in major units (decimal string). Used for transfers.amount. */
+  amountMajor?: string | null;
+  currency?: string | null;
+  network?: string | null;
+  payToAddress?: string | null;
+  accountId?: string | null;
+  environment?: string | null;
 }): Promise<void> {
   const supabase: any = createClient();
+  const now = new Date().toISOString();
 
-  // Update endpoint state
+  // Determine whether this is a successful, indexed-eligible settle.
+  const wasRejected = input.extensionResponses?.toLowerCase().includes('rejected');
+  const settleSucceeded = input.ok && !wasRejected;
+
+  // ── Update endpoint state ─────────────────────────────────────────────
   const update: Record<string, unknown> = {
-    last_settle_at: new Date().toISOString(),
+    last_settle_at: now,
   };
   if (input.ok) {
-    // Promote to publishing/processing if extension is processing/indexed.
-    if (input.extensionResponses?.toLowerCase().includes('rejected')) {
+    if (wasRejected) {
       update.publish_status = 'failed';
       update.publish_error = `extension_rejected: ${input.extensionResponses}`;
     } else if (input.extensionResponses) {
-      // 'processing' or future statuses
       update.publish_status = 'processing';
       update.publish_error = null;
     }
@@ -752,20 +773,73 @@ async function recordSettleEvent(input: {
     .eq('id', input.endpointId)
     .eq('tenant_id', input.tenantId);
 
-  // Insert audit row
+  // ── Analytics: increment total_calls + total_revenue on success ──────
+  // Done as a fresh SELECT/UPDATE rather than an RPC because we don't
+  // need atomicity here (one settle per request, not contended).
+  if (settleSucceeded && input.amountMajor) {
+    const { data: ep } = await supabase
+      .from('x402_endpoints')
+      .select('total_calls, total_revenue')
+      .eq('id', input.endpointId)
+      .eq('tenant_id', input.tenantId)
+      .single();
+    if (ep) {
+      const calls = Number((ep as any).total_calls ?? 0) + 1;
+      const revenue =
+        Number((ep as any).total_revenue ?? 0) + Number(input.amountMajor);
+      await supabase
+        .from('x402_endpoints')
+        .update({ total_calls: calls, total_revenue: revenue })
+        .eq('id', input.endpointId)
+        .eq('tenant_id', input.tenantId);
+    }
+  }
+
+  // ── Transfers row: drives the dashboard's Transactions tab ──────────
+  if (settleSucceeded && input.amountMajor) {
+    await supabase.from('transfers').insert({
+      tenant_id: input.tenantId,
+      type: 'x402',
+      status: 'completed',
+      to_account_id: input.accountId ?? null,
+      to_account_name: null,
+      initiated_by_type: 'agent',
+      initiated_by_id: input.payerAddress ?? 'external-buyer',
+      initiated_by_name: input.payerAddress ?? null,
+      amount: input.amountMajor,
+      currency: input.currency ?? 'USDC',
+      tx_hash: input.txHash ?? null,
+      external_tx_hash: input.txHash ?? null,
+      settlement_network: input.network ?? null,
+      settled_at: now,
+      completed_at: now,
+      processing_at: now,
+      environment: input.environment ?? 'live',
+      description: 'x402 gateway settle',
+      protocol_metadata: {
+        protocol: 'x402',
+        endpoint_id: input.endpointId,
+        pay_to: input.payToAddress ?? null,
+        extension_responses: input.extensionResponses ?? null,
+        via: 'gateway',
+      },
+    });
+  }
+
+  // ── Audit row for the publish-events timeline ────────────────────────
   await supabase.from('x402_publish_events').insert({
     tenant_id: input.tenantId,
     endpoint_id: input.endpointId,
     actor_type: 'system',
     actor_id: null,
-    event: input.ok && !input.extensionResponses?.toLowerCase().includes('rejected')
-      ? 'first_settle'
-      : 'extension_rejected',
+    event: settleSucceeded ? 'first_settle' : 'extension_rejected',
     details: {
       via: 'gateway',
       tx_hash: input.txHash || null,
       extension_responses: input.extensionResponses || null,
       error: input.error || null,
+      amount: input.amountMajor || null,
+      payer: input.payerAddress || null,
     },
   });
 }
@@ -1024,6 +1098,10 @@ async function dispatchGatewayRequest(
   // Persist the settle outcome regardless of success — drives publish_status
   // transitions and audit timeline.
   try {
+    // Pull amount + currency + network from the matched accept entry so
+    // analytics tracking matches what was actually paid (not a separately
+    // computed value that could drift).
+    const matched = (accepts as any[])[0] || {};
     await recordSettleEvent({
       tenantId: tenant.id,
       endpointId: endpoint.id,
@@ -1031,6 +1109,15 @@ async function dispatchGatewayRequest(
       txHash: settle.txHash,
       extensionResponses: settle.extensionResponses,
       error: settle.error,
+      payerAddress: settle.payer ?? null,
+      amountMinor: String(matched.amount ?? ''),
+      amountMajor:
+        endpoint.base_price != null ? String(endpoint.base_price) : null,
+      currency: endpoint.currency ?? 'USDC',
+      network: matched.network ?? endpoint.network ?? null,
+      payToAddress: wallet.address,
+      accountId: endpoint.account_id,
+      environment: (endpoint as any).environment ?? null,
     });
   } catch (e) {
     // Audit failures must not break the proxy path.

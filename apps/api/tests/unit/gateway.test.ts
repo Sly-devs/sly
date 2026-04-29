@@ -427,6 +427,41 @@ describe('handleGatewayRequest — end-to-end branches', () => {
     expect(body.extensions.bazaar).toEqual(PUBLIC_ENDPOINT.discovery_metadata);
   });
 
+  it('emits PAYMENT-REQUIRED header that @x402/core decodes back to our PaymentRequired (buyer-parser integration)', async () => {
+    // The DEFINITIVE test: take our 402 response, run @x402/core's
+    // actual decodePaymentRequiredHeader against the PAYMENT-REQUIRED
+    // header, and assert it round-trips to our exact PaymentRequired.
+    // If this passes, x402-fetch's parser will accept our response.
+    (mockedCreateClient as any).mockReturnValue(
+      buildSupabaseMock({
+        tenant: TENANT,
+        endpoint: { ...PUBLIC_ENDPOINT, asset_address: null },
+        wallet: PAYOUT_WALLET,
+      }),
+    );
+    const res = await handleGatewayRequest(
+      makeContext({ host: 'acme.x402.getsly.ai', pathname: '/weather' }),
+    );
+    expect(res.status).toBe(402);
+
+    const headerValue = res.headers.get('PAYMENT-REQUIRED');
+    expect(headerValue).toBeTruthy();
+
+    // Use the canonical decoder — same code path the buyer client
+    // (x402-fetch) runs.
+    const { decodePaymentRequiredHeader } = await import('@x402/core/http');
+    const decoded: any = decodePaymentRequiredHeader(headerValue!);
+
+    expect(decoded.x402Version).toBe(2);
+    expect(decoded.resource).toBeDefined();
+    expect(decoded.resource.url).toContain('acme.x402.getsly.ai');
+    expect(decoded.accepts).toHaveLength(1);
+    expect(decoded.accepts[0].scheme).toBe('exact');
+    expect(decoded.accepts[0].amount).toBeDefined();
+    expect(decoded.accepts[0].asset).toBeDefined();
+    expect(decoded.extensions?.bazaar).toBeDefined();
+  });
+
   it('emits a 402 body matching @x402/core PaymentRequired shape exactly', async () => {
     // Regression: x402-fetch parses the 402 body with Zod and rejects
     // anything off-shape. This locks the structure so future drift is

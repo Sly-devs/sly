@@ -786,7 +786,10 @@ async function dispatchGatewayRequest(
   }
 
   // ── 402 challenge ────────────────────────────────────────────────────
-  const paymentHeader = c.req.header('x-payment');
+  // x402 v2 transport: buyers send their signed payload in PAYMENT-SIGNATURE.
+  // X-PAYMENT is the v1 name; we read both for compat.
+  const paymentHeader =
+    c.req.header('payment-signature') ?? c.req.header('x-payment');
   const resourceUrl = `https://${hostHeader}${url.pathname}${url.search}`;
   const accepts = buildAcceptsArray(endpoint, wallet.address);
 
@@ -797,7 +800,7 @@ async function dispatchGatewayRequest(
     //     accepts: PaymentRequirements[], extensions? }
     const body = {
       x402Version: 2,
-      error: 'X-PAYMENT header required',
+      error: 'PAYMENT-SIGNATURE header required',
       resource: {
         url: resourceUrl,
         description: endpoint.description ?? '',
@@ -808,15 +811,31 @@ async function dispatchGatewayRequest(
         bazaar: buildBazaarExtension(endpoint.discovery_metadata),
       },
     };
-    return new Response(JSON.stringify(body), {
-      status: 402,
-      headers: {
-        'content-type': 'application/json',
-        // CDP-required headers per @coinbase/x402 SDK conventions.
-        'x402-version': '2',
-        'access-control-expose-headers': 'EXTENSION-RESPONSES, X-Payment-Receipt',
-      },
-    });
+
+    // x402 v2 buyer parser reads `PAYMENT-REQUIRED` header (base64-encoded
+    // PaymentRequired). Without this header, x402-fetch throws "Invalid
+    // payment required response" because the body-fallback path only
+    // accepts v1.
+    let paymentRequiredHeader = '';
+    try {
+      const httpMod: any = await import('@x402/core/http');
+      paymentRequiredHeader = httpMod.encodePaymentRequiredHeader(body);
+    } catch {
+      // If the encoder isn't available (test envs), fall back to the body
+      // and let v1 clients work via the body-fallback path.
+    }
+
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'x402-version': '2',
+      'access-control-expose-headers':
+        'PAYMENT-REQUIRED, PAYMENT-RESPONSE, EXTENSION-RESPONSES, X-Payment-Receipt',
+    };
+    if (paymentRequiredHeader) {
+      headers['PAYMENT-REQUIRED'] = paymentRequiredHeader;
+    }
+
+    return new Response(JSON.stringify(body), { status: 402, headers });
   }
 
   // ── Verify + settle through CDP Facilitator ──────────────────────────

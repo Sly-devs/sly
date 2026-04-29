@@ -114,3 +114,109 @@ templates that activate without code).
 Once an agent exists, re-run the probe (the same script that produced
 this doc) and we'll have the agent ID + can plan the Connected App
 + runtime adapter from a known starting point.
+
+---
+
+## Re-probe after agent creation (2026-04-29 16:08 UTC)
+
+User created an Agentforce Service Agent named `SFDC_Agent` via Setup
+UI. Re-running the probe surfaced this:
+
+### Agent presence
+
+| Surface | Result |
+|---|---|
+| `User WHERE Name LIKE '%Agent%'` | **1 hit** — `EinsteinServiceAgent User` (Id `005fj00000EpeUnAAJ`, username `sfdc_agent@00dfj00000h9zdz729720761.ext`, alias `einstein`, IsActive=true) |
+| Permission set assignments on that user | **`AgentforceServiceAgentSecureBase`** (confirms it's a Service Agent), plus 2 anonymized perm sets, plus 1 base agent perm set |
+| `GenAiPlannerDefinition` count | **0** (data API + tooling API) |
+| `GenAiPluginDefinition` count | **0** |
+| `GenAiFunctionDefinition` count | **0** |
+| `BotDefinition` / `BotVersion` | **0** |
+| `ConnectedApplication` (tooling) | INVALID_FIELD on FullName — query shape varies |
+
+**Conclusion:** Agentforce Service Agents (the pre-built template the
+user picked) are provisioned as a managed-package-style asset. They
+spawn a service User but do **not** materialize into the standard
+`GenAiPlannerDefinition` table that custom-built agents use. So the
+metadata path that works for hand-built agents is a dead end for this
+template.
+
+### Runtime endpoint probes (all unauthenticated to clarify auth model)
+
+| Path | HTTP | Notes |
+|---|---|---|
+| `{instance}/services/data/v66.0/connect/agentforce/agents` | 404 | |
+| `{instance}/services/data/v66.0/connect/ai-bots-services/agents` | 404 | |
+| `{instance}/services/data/v66.0/connect/copilot/agents` | 404 | |
+| `{instance}/services/data/v66.0/einstein/copilot/agents` | 404 | |
+| `{instance}/services/data/v66.0/einstein/ai-agent/v1/agents` | 404 | |
+| `{instance}/services/data/v66.0/agentforce/agents` | 404 | |
+| `https://api.salesforce.com/einstein/ai-agent/v1/agents/{userId}/sessions` (with sf CLI token, agentId=user id) | 404 | Endpoint host is gated entirely behind Connected App OAuth — even the root `api.salesforce.com/` returns 404 with the CLI token. |
+| Connect API resource catalog (`{instance}/services/data/v66.0/connect/`) | 200 | 40 resources advertised, **none AI-related** (only `action-email`). |
+
+**Conclusion:** The Agentforce Agent API runtime is **not exposed on
+the org's instance URL**. It lives on `https://api.salesforce.com` and
+is entirely gated by Connected App OAuth. We can't reach it with the
+sf CLI session token regardless of the agent ID format we try.
+
+### Hard requirements for runtime invocation
+
+To call `SFDC_Agent` from the sim we need:
+
+1. **A Connected App** in `agentforce-org` with these OAuth scopes:
+   - `api` (general API)
+   - `einstein_gpt_api` (Agentforce / Einstein gateway)
+   - `sfap_api` (Salesforce API Gateway)
+   - `refresh_token offline_access`
+2. **Consumer Key + Consumer Secret** from that Connected App, stored
+   server-side (env var or `connected_accounts` row).
+3. **OAuth Client Credentials grant** against the org's My Domain:
+   ```
+   POST {instance}/services/oauth2/token
+   grant_type=client_credentials
+   client_id=<consumer_key>
+   client_secret=<consumer_secret>
+   ```
+   Returns an access token usable against `api.salesforce.com`.
+4. **Run-as User** assignment on the Connected App pointing at a
+   licensed Agentforce user (the EinsteinServiceAgent user might
+   suffice, but more likely needs a separate licensed admin/integration
+   user).
+5. **Agent ID resolution** — the actual agent ID format isn't yet
+   known. With a real Connected App token in hand we'll either:
+   a. Find an enumeration endpoint Salesforce documents.
+   b. Use the agent's published `DeveloperName` (`SFDC_Agent`) which
+      Salesforce sometimes accepts as an ID.
+
+## What the user needs to do next
+
+In `agentforce-org` Setup UI:
+
+1. **Setup → App Manager → New Connected App**
+2. Name: `Sly Sim Agent Bridge` (or similar). Contact email = your email.
+3. **Enable OAuth Settings** = checked.
+4. **Callback URL**: `http://localhost:1717/OauthRedirect` (placeholder
+   — we use client-credentials, not the auth-code flow, but Salesforce
+   requires *some* callback URL).
+5. **Selected OAuth Scopes** — add all of:
+   - `Manage user data via APIs (api)`
+   - `Access Einstein GPT services (einstein_gpt_api)`
+   - `Access the Salesforce API Platform (sfap_api)` (if visible — may
+     require Agent API admin perms)
+   - `Perform requests at any time (refresh_token, offline_access)`
+6. **Enable Client Credentials Flow** — checked. Set "Run As" to a
+   licensed admin user (your own user is fine for sandbox testing).
+7. Save. Wait ~10 min for Salesforce to provision the keys.
+8. **App Manager → View** the new Connected App → **Manage Consumer
+   Details** → copy the **Consumer Key** and **Consumer Secret**.
+9. Hand them to the assistant via env vars (don't paste into chat):
+   ```
+   echo 'AGENTFORCE_CONSUMER_KEY=<key>' >> /tmp/agentforce-creds.env
+   echo 'AGENTFORCE_CONSUMER_SECRET=<secret>' >> /tmp/agentforce-creds.env
+   chmod 600 /tmp/agentforce-creds.env
+   ```
+
+Once `/tmp/agentforce-creds.env` exists, we resume the probe — fetch
+a Client Credentials token and try `api.salesforce.com` with it. From
+there we can enumerate the agent's invocation surface and start
+building the runtime adapter.

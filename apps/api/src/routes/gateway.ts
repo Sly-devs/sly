@@ -378,12 +378,15 @@ export function buildProxyHeaders(opts: ProxyRequestOptions): Record<string, str
 // ──────────────────────────────────────────────────────────────────────────
 
 /**
- * Minimal CDP facilitator client. Worktree B will likely swap this for the
- * `@coinbase/x402` SDK once that dep lands; until then, a direct HTTP call
- * keeps the gateway buildable without the dependency.
+ * Settle a buyer's x402 payment via Coinbase's CDP Facilitator.
  *
- * Returns a structured result with the EXTENSION-RESPONSES header so the
- * caller can persist publish state.
+ * Uses @coinbase/x402's facilitator config + @x402/core's
+ * HTTPFacilitatorClient so request/response schemas match exactly what
+ * CDP expects: the X-PAYMENT header is decoded into a PaymentPayload
+ * and POSTed alongside the matched paymentRequirements entry.
+ *
+ * Returns a structured result with the EXTENSION-RESPONSES header so
+ * the caller can persist publish state.
  */
 async function callCdpVerifyAndSettle(input: {
   paymentHeader: string;
@@ -401,75 +404,97 @@ async function callCdpVerifyAndSettle(input: {
       status: 500,
     };
   }
-  const { apiKeyId, apiKeySecret } = creds;
 
-  // CDP Facilitator authenticates with a Bearer JWT signed with the API
-  // key (ES256). @coinbase/x402's createAuthHeader generates it for us
-  // — same scheme the official SDK uses internally. Soft-fail on JWT
-  // errors so unit tests with mock creds still exercise the response
-  // parsing; in prod a missing auth header will produce a real 401
-  // which the non-2xx branch below handles.
-  let authHeader: string | undefined;
+  let HTTPFacilitatorClient: any;
+  let createFacilitatorConfig: any;
+  let decodePaymentSignatureHeader: any;
   try {
-    const { createAuthHeader } = await import('@coinbase/x402');
-    const url = new URL(facilitatorUrl);
-    authHeader = await createAuthHeader(
-      apiKeyId,
-      apiKeySecret,
-      'POST',
-      url.host,
-      `${url.pathname}/settle`.replace(/\/+/g, '/')
-    );
+    const httpMod: any = await import('@x402/core/http');
+    const cbMod: any = await import('@coinbase/x402');
+    HTTPFacilitatorClient = httpMod.HTTPFacilitatorClient;
+    decodePaymentSignatureHeader = httpMod.decodePaymentSignatureHeader;
+    createFacilitatorConfig = cbMod.createFacilitatorConfig;
   } catch (err: any) {
-    console.warn('[gateway] JWT generation failed, proceeding unsigned:', err?.message);
-  }
-
-  // CDP exposes /verify and /settle; we call settle which performs verify
-  // implicitly, returning the EXTENSION-RESPONSES header on the response.
-  const settleHeaders: Record<string, string> = {
-    'content-type': 'application/json',
-  };
-  if (authHeader) settleHeaders.Authorization = authHeader;
-
-  const settleRes = await fetch(`${facilitatorUrl}/settle`, {
-    method: 'POST',
-    headers: settleHeaders,
-    body: JSON.stringify({
-      paymentHeader: input.paymentHeader,
-      paymentRequirements: input.accepts,
-      resource: input.resourceUrl,
-    }),
-  }).catch((err) => {
-    return new Response(
-      JSON.stringify({ error: err?.message || 'fetch failed' }),
-      { status: 502 },
-    );
-  });
-
-  const extensionResponses = settleRes.headers.get('extension-responses') ?? undefined;
-  let body: any = null;
-  try {
-    body = await settleRes.json();
-  } catch {
-    // Non-JSON body is acceptable for some failure paths.
-  }
-
-  if (!settleRes.ok) {
     return {
       ok: false,
-      status: settleRes.status,
-      error: body?.error || body?.message || `CDP settle failed (${settleRes.status})`,
-      extensionResponses,
+      status: 500,
+      error: `x402 SDK load failed: ${err?.message || 'unknown'}`,
     };
   }
 
+  // Decode the buyer's X-PAYMENT header → PaymentPayload object.
+  let paymentPayload: any;
+  try {
+    paymentPayload = decodePaymentSignatureHeader(input.paymentHeader);
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 400,
+      error: `Invalid X-PAYMENT header: ${err?.message || 'decode failed'}`,
+    };
+  }
+
+  // Pick the paymentRequirements entry matching the buyer's network +
+  // scheme. accepts[] usually has one entry today; future-proofed for
+  // multi-network publishes.
+  const acceptsArray = Array.isArray(input.accepts) ? (input.accepts as any[]) : [];
+  const matched = acceptsArray.find(
+    (a) =>
+      (a?.network === paymentPayload?.network ||
+        a?.network === paymentPayload?.paymentRequirements?.network) &&
+      (a?.scheme === paymentPayload?.scheme ||
+        a?.scheme === paymentPayload?.paymentRequirements?.scheme)
+  ) ?? acceptsArray[0];
+
+  if (!matched) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'No accepts entry matched the buyer payment',
+    };
+  }
+
+  // @coinbase/x402 builds the JWT auth headers; HTTPFacilitatorClient
+  // uses them to call /verify and /settle on CDP's hosted facilitator.
+  const facilitatorConfig = createFacilitatorConfig(creds.apiKeyId, creds.apiKeySecret);
+  const client = new HTTPFacilitatorClient({
+    url: facilitatorUrl,
+    createAuthHeaders: facilitatorConfig.createAuthHeaders,
+  });
+
+  let settleResp: any;
+  try {
+    settleResp = await client.settle(paymentPayload, matched);
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 502,
+      error: `CDP settle threw: ${err?.message || 'unknown'}`,
+    };
+  }
+
+  // SettleResponse shape: { success, errorReason?, payer?, transaction, network }
+  // EXTENSION-RESPONSES is conveyed by Coinbase as part of the body /
+  // headers chain — the SDK does not expose them as a separate field on
+  // the response object, so we treat success+transaction as "processed".
+  if (!settleResp?.success) {
+    return {
+      ok: false,
+      status: 402,
+      error: settleResp?.errorReason || 'CDP settle returned success=false',
+      extensionResponses: settleResp?.errorReason ? `rejected:${settleResp.errorReason}` : 'rejected',
+    };
+  }
+
+  // Treat a successful settle as the indexing trigger — the bazaar
+  // extension on the original 402 challenge is what CDP reads.
   return {
     ok: true,
-    txHash: body?.transactionHash || body?.txHash,
-    extensionResponses,
-    rawSettleHeader: settleRes.headers.get('x-payment-response') ?? undefined,
+    txHash: settleResp.transaction,
+    extensionResponses: 'processing',
   };
 }
+
 
 // ──────────────────────────────────────────────────────────────────────────
 // DB lookups (always tenant-filtered)
@@ -730,7 +755,7 @@ async function dispatchGatewayRequest(
 
   if (!paymentHeader) {
     const body = {
-      x402Version: 1,
+      x402Version: 2,
       accepts,
       error: 'X-PAYMENT header required',
       extensions: {
@@ -742,7 +767,7 @@ async function dispatchGatewayRequest(
       headers: {
         'content-type': 'application/json',
         // CDP-required headers per @coinbase/x402 SDK conventions.
-        'x402-version': '1',
+        'x402-version': '2',
         'access-control-expose-headers': 'EXTENSION-RESPONSES, X-Payment-Receipt',
       },
     });
@@ -840,7 +865,7 @@ async function dispatchGatewayRequest(
   if (settle.extensionResponses) {
     respHeaders.set('EXTENSION-RESPONSES', settle.extensionResponses);
   }
-  respHeaders.set('x402-version', '1');
+  respHeaders.set('x402-version', '2');
   respHeaders.set(
     'access-control-expose-headers',
     'EXTENSION-RESPONSES, X-Payment-Receipt, x402-version',

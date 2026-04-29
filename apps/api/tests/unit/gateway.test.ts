@@ -417,9 +417,9 @@ describe('handleGatewayRequest — end-to-end branches', () => {
       makeContext({ host: 'acme.x402.getsly.ai', pathname: '/weather' }),
     );
     expect(res.status).toBe(402);
-    expect(res.headers.get('x402-version')).toBe('1');
+    expect(res.headers.get('x402-version')).toBe('2');
     const body = await res.json();
-    expect(body.x402Version).toBe(1);
+    expect(body.x402Version).toBe(2);
     expect(body.accepts).toHaveLength(1);
     expect(body.accepts[0].payTo).toBe(PAYOUT_WALLET.address);
     expect(body.accepts[0].resource).toContain('acme.x402.getsly.ai');
@@ -645,9 +645,9 @@ describe('handlePathBasedGatewayRequest — DNS-fallback shape', () => {
       makePathContext({ tenant: 'acme', service: 'weather' }),
     );
     expect(res.status).toBe(402);
-    expect(res.headers.get('x402-version')).toBe('1');
+    expect(res.headers.get('x402-version')).toBe('2');
     const body = await res.json();
-    expect(body.x402Version).toBe(1);
+    expect(body.x402Version).toBe(2);
     expect(body.extensions?.bazaar?.description).toBe('Daily forecast');
     // The resource URL should reflect the path-based shape.
     expect(body.accepts[0].resource).toBe(

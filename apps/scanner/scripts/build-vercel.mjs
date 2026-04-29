@@ -17,7 +17,6 @@ import {
   existsSync,
   readdirSync,
   copyFileSync,
-  readFileSync,
 } from 'node:fs';
 import { resolve, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,10 +26,11 @@ const scannerDir = resolve(__dirname, '..');
 const repoRoot = resolve(scannerDir, '../..');
 const outputDir = resolve(scannerDir, '.vercel/output');
 const fnDir = resolve(outputDir, 'functions/index.func');
-const staticDir = resolve(outputDir, 'static');
 const reportsSourceDir = resolve(repoRoot, 'scanner-reports');
-const reportsOutDir = resolve(staticDir, 'reports');
-const ROOT_REPORT = 'baseline-q1-2026-report.html';
+// Reports ride along inside the function bundle. With `experimentalServices`
+// in vercel.json, the `/` prefix routes entirely to the function — Vercel's
+// static layer is bypassed, so app.ts serves these directly off disk.
+const reportsOutDir = resolve(fnDir, 'reports');
 
 if (existsSync(outputDir)) {
   rmSync(outputDir, { recursive: true, force: true });
@@ -80,8 +80,8 @@ writeFileSync(
   JSON.stringify({ type: 'commonjs' }, null, 2),
 );
 
-// Copy the pre-generated scanner reports (HTML/MD/CSV/PDF) to static/reports/.
-// These showcase what the scanner produces; served publicly.
+// Copy pre-generated scanner reports (HTML/MD/CSV/PDF) into the function dir.
+// app.ts serves them off disk at GET / and /reports/*.
 if (existsSync(reportsSourceDir)) {
   mkdirSync(reportsOutDir, { recursive: true });
   const reportFiles = readdirSync(reportsSourceDir).filter((f) => {
@@ -91,32 +91,16 @@ if (existsSync(reportsSourceDir)) {
   for (const file of reportFiles) {
     copyFileSync(resolve(reportsSourceDir, file), resolve(reportsOutDir, file));
   }
-  console.log(`[build-vercel] Copied ${reportFiles.length} report files to static/reports/`);
-
-  // Serve the Q1 baseline at the root URL as a landing page.
-  const landing = resolve(reportsSourceDir, ROOT_REPORT);
-  if (existsSync(landing)) {
-    copyFileSync(landing, resolve(staticDir, 'index.html'));
-  }
+  console.log(`[build-vercel] Copied ${reportFiles.length} report files into function bundle`);
 }
 
-// Root config.json: static files take precedence; API catches the rest.
-// /reports/* is served from static/reports/; / serves static/index.html.
-// Crons: monthly partition top-up. Per-tenant scheduled rescan is tracked
-// as a follow-up (needs a schedules table + dashboard UX — not a single
-// env-var tenant).
+// `experimentalServices` in vercel.json supersedes the routes array — we keep
+// only the cron block, which is still honored.
 writeFileSync(
   resolve(outputDir, 'config.json'),
   JSON.stringify(
     {
       version: 3,
-      routes: [
-        { src: '/', dest: '/index.html' },
-        { src: '/reports', dest: '/reports/index.html' },
-        { src: '/reports/', dest: '/reports/index.html' },
-        { handle: 'filesystem' },
-        { src: '/(.*)', dest: '/index' },
-      ],
       crons: [
         // 1st of each month at 00:00 UTC — create next 3 months of usage
         // event partitions so writes don't start failing.
@@ -127,38 +111,5 @@ writeFileSync(
     2,
   ),
 );
-
-// Also emit a tiny /reports/ directory index so people browsing the reports
-// path don't get a raw 404.
-if (existsSync(reportsOutDir)) {
-  const files = readdirSync(reportsOutDir).filter((f) => f.endsWith('.html'));
-  const items = files
-    .map((f) => `    <li><a href="/reports/${f}">${f}</a></li>`)
-    .join('\n');
-  writeFileSync(
-    resolve(reportsOutDir, 'index.html'),
-    `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Sly Scanner Reports</title>
-<style>
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:720px;margin:48px auto;padding:0 24px;line-height:1.6;color:#1e1b4b}
-h1{color:#7c3aed}
-ul{padding-left:20px}
-a{color:#7c3aed;text-decoration:none}
-a:hover{text-decoration:underline}
-</style>
-</head>
-<body>
-<h1>Sly Scanner Reports</h1>
-<p>Generated reports from <a href="https://docs.getsly.ai/scanner">Sly Scanner</a>.</p>
-<ul>
-${items}
-</ul>
-</body>
-</html>`,
-  );
-}
 
 console.log('[build-vercel] .vercel/output ready');

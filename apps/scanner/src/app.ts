@@ -1,3 +1,5 @@
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { timing } from 'hono/timing';
@@ -50,6 +52,66 @@ declare module 'hono' {
     requestId: string;
   }
 }
+
+// Reports + landing — `experimentalServices` in vercel.json routes the entire
+// `/` prefix to this function, so `.vercel/output/static/` is never served.
+// We bundle the report HTML/MD/CSV/PDF next to the function (build-vercel.mjs)
+// and serve them ourselves.
+const REPORT_PATH_CANDIDATES = [
+  resolve(process.cwd(), 'reports'),                       // bundled function dir
+  resolve(process.cwd(), 'scanner-reports'),               // dev from repo root
+  resolve(process.cwd(), '..', '..', 'scanner-reports'),   // dev from apps/scanner
+];
+const LANDING_FILENAME = 'baseline-q1-2026-report.html';
+const REPORTS_DIR =
+  REPORT_PATH_CANDIDATES.find((dir) =>
+    existsSync(resolve(dir, LANDING_FILENAME)),
+  ) ?? REPORT_PATH_CANDIDATES[0]!;
+const LANDING_HTML = existsSync(resolve(REPORTS_DIR, LANDING_FILENAME))
+  ? readFileSync(resolve(REPORTS_DIR, LANDING_FILENAME), 'utf-8')
+  : null;
+
+app.get('/', (c) => {
+  if (!LANDING_HTML) {
+    return c.json({ service: 'sly-scanner', status: 'ok' });
+  }
+  return c.html(LANDING_HTML);
+});
+
+const REPORT_FILE_RE = /^[a-z0-9_-]+\.(html|md|csv|pdf|png|jpe?g)$/i;
+const REPORT_CT: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  md: 'text/markdown; charset=utf-8',
+  csv: 'text/csv; charset=utf-8',
+  pdf: 'application/pdf',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+};
+
+app.get('/reports', (c) => c.redirect('/reports/'));
+app.get('/reports/', (c) => {
+  const items = ['baseline-q1-2026-report.html', 'baseline-q1-2026-report.md', 'uk-eu-latam-africa-300-report.html', 'uk-eu-latam-africa-300-report.pdf']
+    .filter((f) => existsSync(resolve(REPORTS_DIR, f)))
+    .map((f) => `    <li><a href="/reports/${f}">${f}</a></li>`)
+    .join('\n');
+  return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sly Scanner Reports</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:720px;margin:48px auto;padding:0 24px;line-height:1.6;color:#1e1b4b}h1{color:#7c3aed}a{color:#7c3aed;text-decoration:none}a:hover{text-decoration:underline}</style></head><body><h1>Sly Scanner Reports</h1><ul>\n${items}\n</ul></body></html>`);
+});
+
+app.get('/reports/:file', (c) => {
+  const file = c.req.param('file');
+  if (!REPORT_FILE_RE.test(file)) {
+    return c.json({ error: 'not_found' }, 404);
+  }
+  const target = resolve(REPORTS_DIR, file);
+  if (!target.startsWith(REPORTS_DIR + '/') || !existsSync(target)) {
+    return c.json({ error: 'not_found' }, 404);
+  }
+  const ext = file.split('.').pop()!.toLowerCase();
+  const ct = REPORT_CT[ext] ?? 'application/octet-stream';
+  c.header('Content-Type', ct);
+  return c.body(readFileSync(target));
+});
 
 // Public routes — health, readiness
 app.route('/', healthRouter);

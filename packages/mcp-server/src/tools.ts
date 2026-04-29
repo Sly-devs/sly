@@ -1624,6 +1624,95 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: 'x402_validate_endpoint',
+    description:
+      "Validate an x402 endpoint's readiness to publish on agentic.market. Returns a checklist (reachability, description length, wallet binding, schema/example presence) plus best-effort probed metadata the caller can edit before publishing.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        endpointId: {
+          type: 'string',
+          description: 'UUID of the x402 endpoint to validate',
+        },
+      },
+      required: ['endpointId'],
+    },
+  },
+  {
+    name: 'x402_publish_endpoint',
+    description:
+      "Publish an x402 endpoint to Coinbase's agentic.market catalog. Switches the endpoint's facilitator to CDP and triggers the first settle that causes Coinbase to index the bazaar extension. Use `force=true` to republish on metadata edits even if the endpoint is already published.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        endpointId: {
+          type: 'string',
+          description: 'UUID of the x402 endpoint to publish',
+        },
+        metadataOverride: {
+          type: 'object',
+          description:
+            'Optional partial overrides for the discovery metadata: description, category, input/output schema and example, bodyType.',
+          properties: {
+            description: { type: 'string', description: 'Buyer-facing description (20–280 chars)' },
+            category: { type: 'string', description: 'Optional Bazaar category hint' },
+            input: {
+              type: 'object',
+              properties: {
+                schema: { type: 'object', description: 'JSON Schema for request input' },
+                example: {},
+              },
+            },
+            output: {
+              type: 'object',
+              properties: {
+                schema: { type: 'object', description: 'JSON Schema for response output' },
+                example: {},
+              },
+            },
+            bodyType: { type: 'string', enum: ['json'], description: 'Body content type' },
+          },
+        },
+        force: {
+          type: 'boolean',
+          description:
+            'Force a republish even if the endpoint is already published or the metadata is unchanged.',
+        },
+      },
+      required: ['endpointId'],
+    },
+  },
+  {
+    name: 'x402_unpublish_endpoint',
+    description:
+      "Unpublish an x402 endpoint from agentic.market. Reverts facilitator routing to internal and flips visibility to private. Coinbase's catalog entry may persist until upstream pruning.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        endpointId: {
+          type: 'string',
+          description: 'UUID of the x402 endpoint to unpublish',
+        },
+      },
+      required: ['endpointId'],
+    },
+  },
+  {
+    name: 'x402_get_publish_status',
+    description:
+      'Get the publish lifecycle status and event timeline for an x402 endpoint. Use this to poll for a terminal state (`published` or `failed`) after calling x402_publish_endpoint.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        endpointId: {
+          type: 'string',
+          description: 'UUID of the x402 endpoint',
+        },
+      },
+      required: ['endpointId'],
+    },
+  },
+  {
     name: 'x402_list_endpoints',
     description: 'List x402 payment endpoints with optional filtering.',
     inputSchema: {

@@ -60,6 +60,14 @@ import type {
   CreateX402EndpointInput,
   UpdateX402EndpointInput,
   X402EndpointsListParams,
+  // x402 publish lifecycle types
+  X402ValidateResponse,
+  X402PublishInput,
+  X402PublishResponse,
+  X402PublishStatusResponse,
+  // tenant payout wallet types
+  TenantPayoutWallet,
+  BindTenantPayoutWalletInput,
   Wallet,
   CreateWalletInput,
   UpdateWalletInput,
@@ -909,6 +917,66 @@ export class SlyClient {
      */
     delete: (id: string) =>
       this.delete<{ success: boolean }>(`/x402/endpoints/${id}`),
+
+    /**
+     * Validate an x402 endpoint for publishing to agentic.market.
+     *
+     * Returns a readiness checklist: endpoint reachability, description
+     * length, wallet binding, schema/example presence. The optional
+     * `probedMetadata` is a best-effort guess from auto-probe — the UI
+     * lets the user edit before publishing.
+     */
+    validate: (id: string) =>
+      this.post<X402ValidateResponse>(`/x402/endpoints/${id}/validate`, {}),
+
+    /**
+     * Publish an x402 endpoint to agentic.market.
+     *
+     * Switches `facilitator_mode` to `cdp`, persists the (possibly
+     * overridden) discovery metadata, and triggers the first self-paid
+     * settle that causes Coinbase to index the endpoint. Caller polls
+     * `getPublishStatus` until terminal state.
+     */
+    publish: (id: string, input: X402PublishInput = {}) =>
+      this.post<X402PublishResponse>(`/x402/endpoints/${id}/publish`, input),
+
+    /**
+     * Unpublish an x402 endpoint. Sets `visibility='private'` and reverts
+     * facilitator routing to internal. Coinbase's catalog entry may
+     * persist until pruned upstream.
+     */
+    unpublish: (id: string) =>
+      this.post<X402PublishResponse>(`/x402/endpoints/${id}/unpublish`, {}),
+
+    /**
+     * Get the publish lifecycle status + event timeline for an endpoint.
+     */
+    getPublishStatus: (id: string) =>
+      this.get<X402PublishStatusResponse>(`/x402/endpoints/${id}/publish-status`),
+  };
+
+  // ============================================
+  // Tenant Payout Wallets API
+  // ============================================
+
+  tenantPayoutWallets = {
+    /**
+     * List the tenant's payout wallets — one row per
+     * (account, network) tuple. These addresses are used as the on-chain
+     * `payTo` recipient when an x402 endpoint is published to
+     * agentic.market.
+     */
+    list: () =>
+      this.get<{ data: TenantPayoutWallet[] }>('/tenant-payout-wallets').then(r => r.data),
+
+    /**
+     * Bind (or auto-provision) a payout wallet for a given
+     * (account, network) tuple. If `provider` is omitted, the API may
+     * auto-provision a Sly-managed CDP smart wallet on the requested
+     * network.
+     */
+    bind: (input: BindTenantPayoutWalletInput) =>
+      this.post<{ data: TenantPayoutWallet }>('/tenant-payout-wallets', input).then(r => r.data),
   };
 
   // ============================================

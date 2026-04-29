@@ -8,7 +8,8 @@
 
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApiClient } from '@/lib/api-client';
 import {
   Card,
@@ -30,13 +31,18 @@ import {
   TrendingUp,
   BarChart3,
   Users,
-  Settings,
-  Code,
   Webhook,
   ArrowLeft,
   Copy,
-  CheckCircle2
+  CheckCircle2,
+  ExternalLink,
+  Globe,
+  Rocket
 } from 'lucide-react';
+import { PublishStatusBadge } from '@/components/x402/publish-status-badge';
+import { PublicationTimeline } from '@/components/x402/publication-timeline';
+import { PublishToMarketDialog } from '@/components/x402/publish-to-market-dialog';
+import type { X402Endpoint, X402PublishEvent, X402PublishStatusResponse } from '@sly/api-client';
 
 export default function X402EndpointDetailPage() {
   const params = useParams();
@@ -45,6 +51,8 @@ export default function X402EndpointDetailPage() {
   const api = useApiClient();
   const endpointId = params.id as string;
   const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedGateway, setCopiedGateway] = useState(false);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
 
   // Fetch endpoint details
   const { data: endpointData, isLoading: endpointLoading } = useQuery({
@@ -67,9 +75,46 @@ export default function X402EndpointDetailPage() {
     enabled: !!api,
   });
 
+  // Fetch publish status + event timeline (Worktree D — agentic.market publish lifecycle).
+  const { data: publishStatusData } = useQuery({
+    queryKey: ['x402', 'endpoint', endpointId, 'publish-status'],
+    queryFn: () => api!.x402Endpoints.getPublishStatus(endpointId),
+    enabled: !!api,
+    // Refresh every 10s while in a non-terminal state; otherwise stale-only.
+    refetchInterval: (query) => {
+      const data = query.state.data as X402PublishStatusResponse | undefined;
+      const status = data?.publishStatus;
+      if (status === 'validating' || status === 'publishing' || status === 'processing') {
+        return 10_000;
+      }
+      return false;
+    },
+  });
+
   // Handle double-nested API responses
   const rawEndpoint = (endpointData as any);
-  const endpoint = rawEndpoint?.data?.data || rawEndpoint?.data || rawEndpoint;
+  const endpoint: X402Endpoint | undefined = rawEndpoint?.data?.data || rawEndpoint?.data || rawEndpoint;
+
+  // Publish-status response is already typed; the API may double-wrap.
+  const rawPublishStatus = (publishStatusData as any);
+  const publishStatus: X402PublishStatusResponse | undefined =
+    rawPublishStatus?.data?.data || rawPublishStatus?.data || rawPublishStatus;
+  const publishEvents: X402PublishEvent[] = publishStatus?.events ?? [];
+
+  // Effective publish lifecycle status — prefer the live poll, fall back to
+  // whatever the endpoint row carried at fetch time.
+  const effectivePublishStatus =
+    publishStatus?.publishStatus ?? endpoint?.publishStatus ?? 'draft';
+  const isPublished = effectivePublishStatus === 'published';
+  const catalogServiceId = publishStatus?.catalogServiceId ?? endpoint?.catalogServiceId ?? null;
+  const gatewayUrl = publishStatus?.gatewayUrl ?? endpoint?.gatewayUrl ?? null;
+  const serviceSlug = endpoint?.serviceSlug ?? null;
+
+  const publicListingUrl = catalogServiceId
+    ? `https://agentic.market/services/${catalogServiceId}`
+    : serviceSlug
+      ? `https://api.agentic.market/v1/services/search?q=${encodeURIComponent(serviceSlug)}`
+      : null;
 
   const rawAnalytics = (analyticsData as any);
   // Analytics might be in root, data, or data.data
@@ -162,12 +207,54 @@ const response = await client.fetch('https://your-api.com${endpoint?.path || '/a
           <Badge variant={endpoint.status === 'active' ? 'default' : 'secondary'}>
             {endpoint.status}
           </Badge>
-          <Button variant="outline">
-            <Settings className="h-4 w-4 mr-2" />
-            Configure
+          <PublishStatusBadge status={effectivePublishStatus} />
+          <Button onClick={() => setPublishDialogOpen(true)}>
+            <Rocket className="h-4 w-4 mr-2" />
+            {isPublished ? 'Manage publication' : 'Publish to Agentic.Market'}
           </Button>
         </div>
       </div>
+
+      {/* Public listing + gateway URL */}
+      {(isPublished || gatewayUrl) && (
+        <Card>
+          <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+            {gatewayUrl && (
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <Globe className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">Gateway:</span>
+                <code className="text-sm font-mono truncate">{gatewayUrl}</code>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    navigator.clipboard.writeText(gatewayUrl);
+                    setCopiedGateway(true);
+                    setTimeout(() => setCopiedGateway(false), 2000);
+                  }}
+                >
+                  {copiedGateway ? (
+                    <CheckCircle2 className="h-4 w-4" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+            )}
+            {isPublished && publicListingUrl && (
+              <Link
+                href={publicListingUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline dark:text-blue-400 shrink-0"
+              >
+                <ExternalLink className="h-4 w-4" />
+                View public listing
+              </Link>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Analytics Stats */}
       {analyticsLoading ? (
@@ -284,6 +371,9 @@ const response = await client.fetch('https://your-api.com${endpoint?.path || '/a
               </CardContent>
             </Card>
           </div>
+
+          {/* Publication Timeline */}
+          <PublicationTimeline events={publishEvents} />
         </TabsContent>
 
         {/* Transactions Tab */}
@@ -432,6 +522,20 @@ const response = await client.fetch('https://your-api.com${endpoint?.path || '/a
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Publish to Agentic.Market — Worktree D dialog */}
+      {endpoint && (
+        <PublishToMarketDialog
+          endpoint={endpoint as X402Endpoint}
+          open={publishDialogOpen}
+          onOpenChange={setPublishDialogOpen}
+          mode={isPublished ? 'edit' : 'publish'}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ['x402', 'endpoint', endpointId] });
+            queryClient.invalidateQueries({ queryKey: ['x402', 'endpoint', endpointId, 'publish-status'] });
+          }}
+        />
+      )}
     </div>
   );
 }

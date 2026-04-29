@@ -12011,6 +12011,1384 @@
           }
         }
       }
+    },
+    "/v1/funding/sources": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Register a funding source",
+        "description": "Card, bank, or crypto wallet that funds Sly accounts. Bank/card sources require verification before they can fund.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFundingSourceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Source registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FundingSource"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "List funding sources",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "account_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "card",
+                "bank_account_us",
+                "bank_account_eu",
+                "bank_account_latam",
+                "crypto_wallet"
+              ]
+            },
+            "required": false,
+            "name": "type",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "stripe",
+                "plaid",
+                "belvo",
+                "moonpay",
+                "transak",
+                "circle",
+                "coinbase",
+                "crossmint",
+                "adyen"
+              ]
+            },
+            "required": false,
+            "name": "provider",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "unverified",
+                "pending_verification",
+                "verified",
+                "blocked"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/FundingSource"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/sources/{id}": {
+      "get": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Get a funding source",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FundingSource"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Remove a funding source",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "In-flight transactions still reference this source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/sources/{id}/verify": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Trigger verification",
+        "description": "For bank accounts, sends micro-deposits or initiates Plaid identity check. For cards, performs $0 auth. Status updates async via webhook.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verification started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FundingSource"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already verified or in invalid state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/widget-sessions": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Create an embedded widget session",
+        "description": "Returns a short-lived session token to pass to the Plaid Link or Belvo widget client-side. The user completes the link flow in the browser; the resulting public_token is then used with POST /sources.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "plaid",
+                      "belvo"
+                    ]
+                  },
+                  "account_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "products": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Plaid: [\"auth\",\"transactions\"]; Belvo: equivalent product list"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "account_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "link_token": {
+                          "type": "string"
+                        },
+                        "expires_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "link_token",
+                        "expires_at"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/transactions": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Initiate a funding transaction",
+        "description": "Pulls funds from a verified source into a Sly wallet. Always include `idempotency_key` — duplicate funding is the most expensive bug class.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitiateFundingInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Initiated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FundingTransaction"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Source declined or insufficient",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Source unverified or idempotency-key collision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "List funding transactions",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "source_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "account_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "processing",
+                "completed",
+                "failed"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/FundingTransaction"
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "number"
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        },
+                        "totalPages": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "limit",
+                        "total",
+                        "totalPages"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "pagination"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/transactions/{id}": {
+      "get": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Get transaction status",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FundingTransaction"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/estimate-fees": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Estimate fees for a funding request",
+        "description": "Preview provider + Sly fees + FX spread before committing. Use to display costs to the end user.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "source_type": {
+                    "type": "string",
+                    "enum": [
+                      "card",
+                      "bank_account_us",
+                      "bank_account_eu",
+                      "bank_account_latam",
+                      "crypto_wallet"
+                    ]
+                  },
+                  "amount_cents": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "destination_currency": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source_type",
+                  "amount_cents",
+                  "currency"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Estimate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FeeEstimate"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/conversion-quote": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Lock an FX conversion quote",
+        "description": "Lock a rate for a from→to currency pair. Use the returned `id` on POST /transactions to use the quoted rate.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "from_currency": {
+                    "type": "string"
+                  },
+                  "to_currency": {
+                    "type": "string"
+                  },
+                  "amount_cents": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "from_currency",
+                  "to_currency",
+                  "amount_cents"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ConversionQuote"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported pair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/providers": {
+      "get": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "List funding providers",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Providers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "type": "string",
+                            "enum": [
+                              "stripe",
+                              "plaid",
+                              "belvo",
+                              "moonpay",
+                              "transak",
+                              "circle",
+                              "coinbase",
+                              "crossmint",
+                              "adyen"
+                            ]
+                          },
+                          "types": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "card",
+                                "bank_account_us",
+                                "bank_account_eu",
+                                "bank_account_latam",
+                                "crypto_wallet"
+                              ]
+                            }
+                          },
+                          "regions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "active": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "types",
+                          "regions",
+                          "active"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/conversion-rates": {
+      "get": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "List supported conversion pairs",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pairs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          },
+                          "min_cents": {
+                            "type": "integer"
+                          },
+                          "max_cents": {
+                            "type": "integer"
+                          },
+                          "typical_spread": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "from",
+                          "to",
+                          "min_cents",
+                          "max_cents",
+                          "typical_spread"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/topup-link": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Generate a hosted top-up link",
+        "description": "Returns a Sly-hosted URL where an end user can fund a wallet without your front-end handling card data. Single-use, expires in 1 hour.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "wallet_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "amount_cents": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "return_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "wallet_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Hosted session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HostedFundingSession"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/onramp-session": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Coinbase fiat→USDC on-ramp session",
+        "description": "Embedded Coinbase on-ramp. User completes funding in Coinbase's flow; wallet credited on confirmation.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "wallet_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "default_amount_usd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "supported_payment_methods": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "card",
+                        "ach",
+                        "apple_pay",
+                        "google_pay"
+                      ]
+                    }
+                  },
+                  "return_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "wallet_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HostedFundingSession"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/stripe-onramp-session": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Stripe fiat→crypto on-ramp session",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "wallet_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "default_amount_usd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "return_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "wallet_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HostedFundingSession"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/offramp-session": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "USDC→fiat off-ramp session",
+        "description": "Move funds out of a Sly wallet to a registered bank account via the Coinbase off-ramp.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "wallet_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "amount_usd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "destination_bank_account_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "wallet_id",
+                  "amount_usd",
+                  "destination_bank_account_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HostedFundingSession"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funding/crossmint-order": {
+      "post": {
+        "tags": [
+          "Funding"
+        ],
+        "summary": "Crossmint card→USDC order",
+        "description": "Crossmint hosted card-to-USDC flow. Mobile- and web-friendly.",
+        "x-visibility": "public",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "wallet_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "amount_usd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "return_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "wallet_id",
+                  "amount_usd"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HostedFundingSession"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -15713,6 +17091,442 @@
         "required": [
           "name",
           "environment"
+        ]
+      },
+      "FundingSource": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "card",
+              "bank_account_us",
+              "bank_account_eu",
+              "bank_account_latam",
+              "crypto_wallet"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "stripe",
+              "plaid",
+              "belvo",
+              "moonpay",
+              "transak",
+              "circle",
+              "coinbase",
+              "crossmint",
+              "adyen"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "pending_verification",
+              "verified",
+              "blocked"
+            ]
+          },
+          "last_four": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bank_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "network": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For crypto_wallet — base, polygon, solana, etc."
+          },
+          "wallet_address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "account_id",
+          "type",
+          "provider",
+          "status",
+          "created_at"
+        ]
+      },
+      "CreateFundingSourceInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "card"
+                ]
+              },
+              "account_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "stripe",
+                  "adyen"
+                ]
+              },
+              "setup_token": {
+                "type": "string",
+                "description": "Tokenized card from your processor"
+              }
+            },
+            "required": [
+              "type",
+              "account_id",
+              "provider",
+              "setup_token"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "bank_account_us",
+                  "bank_account_eu"
+                ]
+              },
+              "account_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "plaid",
+                  "stripe"
+                ]
+              },
+              "public_token": {
+                "type": "string"
+              },
+              "link_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "account_id",
+              "provider"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "bank_account_latam"
+                ]
+              },
+              "account_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "belvo"
+                ]
+              },
+              "link_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "account_id",
+              "provider",
+              "link_id"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "crypto_wallet"
+                ]
+              },
+              "account_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "circle",
+                  "coinbase"
+                ]
+              },
+              "wallet_address": {
+                "type": "string"
+              },
+              "network": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "account_id",
+              "provider",
+              "wallet_address",
+              "network"
+            ]
+          }
+        ]
+      },
+      "FundingTransaction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "wallet_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "destination_currency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "processing",
+              "completed",
+              "failed"
+            ]
+          },
+          "fees": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "integer"
+              },
+              "sly": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "provider",
+              "sly",
+              "total"
+            ]
+          },
+          "estimated_settlement": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "failure_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "amount_cents",
+          "currency",
+          "status",
+          "fees",
+          "created_at"
+        ]
+      },
+      "InitiateFundingInput": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "type": "string"
+          },
+          "wallet_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 100000000
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 4
+          },
+          "destination_currency": {
+            "type": "string"
+          },
+          "conversion_quote_id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "amount_cents",
+          "currency"
+        ]
+      },
+      "FeeEstimate": {
+        "type": "object",
+        "properties": {
+          "provider_fee": {
+            "type": "integer"
+          },
+          "sly_fee": {
+            "type": "integer"
+          },
+          "fx_spread_cents": {
+            "type": "integer"
+          },
+          "total_fee": {
+            "type": "integer"
+          },
+          "net_amount_cents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "provider_fee",
+          "sly_fee",
+          "fx_spread_cents",
+          "total_fee",
+          "net_amount_cents"
+        ]
+      },
+      "ConversionQuote": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "from_currency": {
+            "type": "string"
+          },
+          "to_currency": {
+            "type": "string"
+          },
+          "rate": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "destination_amount_cents": {
+            "type": "integer"
+          },
+          "fee_cents": {
+            "type": "integer"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "from_currency",
+          "to_currency",
+          "rate",
+          "amount_cents",
+          "destination_amount_cents",
+          "fee_cents",
+          "expires_at"
+        ]
+      },
+      "HostedFundingSession": {
+        "type": "object",
+        "properties": {
+          "session_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "session_token": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "session_url",
+          "expires_at"
         ]
       }
     },

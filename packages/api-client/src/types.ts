@@ -690,6 +690,50 @@ export type X402EndpointStatus = 'active' | 'paused' | 'disabled';
 export type X402Currency = 'USDC' | 'EURC';
 export type WalletStatus = 'active' | 'frozen' | 'depleted';
 
+// ── Publish lifecycle (agentic.market / Coinbase Bazaar) ──────────────────
+export type X402EndpointVisibility = 'private' | 'public';
+
+export type X402PublishStatus =
+  | 'draft'
+  | 'validating'
+  | 'publishing'
+  | 'processing'
+  | 'published'
+  | 'failed'
+  | 'unpublished';
+
+export type X402FacilitatorMode = 'internal' | 'cdp';
+
+export type X402PublishEventType =
+  | 'publish_requested'
+  | 'validated'
+  | 'extension_rejected'
+  | 'first_settle'
+  | 'indexed'
+  | 'republish_requested'
+  | 'unpublish_requested'
+  | 'unpublished'
+  | 'failed';
+
+/**
+ * Bazaar extension payload mirroring the shape Coinbase indexes when CDP
+ * Facilitator settles a payment for an endpoint. Stored frozen on the
+ * endpoint at last successful publish.
+ */
+export interface X402DiscoveryMetadata {
+  description: string;
+  category?: string;
+  input?: {
+    schema?: Record<string, unknown>;
+    example?: unknown;
+  };
+  output?: {
+    schema?: Record<string, unknown>;
+    example?: unknown;
+  };
+  bodyType?: 'json';
+}
+
 export interface X402Endpoint {
   id: string;
   tenantId: string;
@@ -710,6 +754,26 @@ export interface X402Endpoint {
   webhookUrl?: string;
   createdAt: string;
   updatedAt: string;
+
+  // Publish lifecycle fields (added 20260428)
+  visibility?: X402EndpointVisibility;
+  publishStatus?: X402PublishStatus;
+  publishError?: string | null;
+  publishedAt?: string | null;
+  lastIndexedAt?: string | null;
+  lastSettleAt?: string | null;
+  catalogServiceId?: string | null;
+  discoveryMetadata?: X402DiscoveryMetadata | null;
+  metadataDirty?: boolean;
+  facilitatorMode?: X402FacilitatorMode;
+  category?: string | null;
+  serviceSlug?: string | null;
+  backendUrl?: string | null;
+  // backend_auth contents (HMAC secrets) are never exposed to clients
+  hasBackendAuth?: boolean;
+
+  // Computed at read time when serviceSlug + tenant.slug are both set
+  gatewayUrl?: string | null;
 }
 
 export interface CreateX402EndpointInput {
@@ -725,6 +789,11 @@ export interface CreateX402EndpointInput {
   assetAddress?: string;
   network?: string;
   webhookUrl?: string;
+
+  // Gateway routing (optional at create; required before publish)
+  serviceSlug?: string;
+  backendUrl?: string;
+  category?: string;
 }
 
 export interface UpdateX402EndpointInput {
@@ -734,12 +803,91 @@ export interface UpdateX402EndpointInput {
   volumeDiscounts?: Array<{ threshold: number; priceMultiplier: number }>;
   status?: X402EndpointStatus;
   webhookUrl?: string;
+  serviceSlug?: string;
+  backendUrl?: string;
+  category?: string;
 }
 
 export interface X402EndpointsListParams extends PaginationParams {
   accountId?: string;
   status?: X402EndpointStatus;
   method?: X402EndpointMethod;
+  visibility?: X402EndpointVisibility;
+  publishStatus?: X402PublishStatus;
+}
+
+// ── Publish API request/response shapes ───────────────────────────────────
+
+export interface X402ValidationError {
+  field: string;
+  reason: string;
+}
+
+export interface X402ValidateResponse {
+  ok: boolean;
+  errors: X402ValidationError[];
+  probedMetadata?: X402DiscoveryMetadata;
+  walletReady: boolean;
+  reachable: boolean;
+}
+
+export interface X402PublishInput {
+  metadataOverride?: Partial<X402DiscoveryMetadata>;
+  force?: boolean;
+}
+
+export interface X402PublishResponse {
+  status: 'ok' | 'failed';
+  publishStatus: X402PublishStatus;
+  publishError?: string | null;
+  errors?: X402ValidationError[];
+}
+
+export interface X402PublishEvent {
+  id: string;
+  tenantId: string;
+  endpointId: string;
+  actorType: 'user' | 'agent' | 'api_key' | 'system';
+  actorId?: string | null;
+  event: X402PublishEventType;
+  details: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface X402PublishStatusResponse {
+  publishStatus: X402PublishStatus;
+  publishError?: string | null;
+  publishedAt?: string | null;
+  lastIndexedAt?: string | null;
+  lastSettleAt?: string | null;
+  catalogServiceId?: string | null;
+  gatewayUrl?: string | null;
+  events: X402PublishEvent[];
+}
+
+// ── Tenant payout wallet (for x402 publish payTo) ─────────────────────────
+
+export type TenantPayoutWalletProvisionedBy = 'user' | 'auto';
+export type TenantPayoutWalletProvider = 'cdp' | 'privy' | 'external';
+
+export interface TenantPayoutWallet {
+  id: string;
+  tenantId: string;
+  accountId: string;
+  network: string;
+  address: string;
+  provisionedBy: TenantPayoutWalletProvisionedBy;
+  provider: TenantPayoutWalletProvider;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BindTenantPayoutWalletInput {
+  accountId: string;
+  network: string;
+  address: string;
+  provider?: TenantPayoutWalletProvider;
 }
 
 // ============================================

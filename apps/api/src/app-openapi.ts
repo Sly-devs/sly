@@ -40,6 +40,7 @@ import refundsOpenAPIRouter from './routes/openapi/refunds.js';
 import disputesOpenAPIRouter from './routes/openapi/disputes.js';
 import webhooksOpenAPIRouter from './routes/openapi/webhooks.js';
 import apiKeysOpenAPIRouter from './routes/openapi/api-keys.js';
+import fundingOpenAPIRouter from './routes/openapi/funding.js';
 
 export function buildOpenAPIApp(): OpenAPIHono {
   const app = new OpenAPIHono();
@@ -76,6 +77,7 @@ export function buildOpenAPIApp(): OpenAPIHono {
   app.route('/v1/disputes', disputesOpenAPIRouter);
   app.route('/v1/webhooks', webhooksOpenAPIRouter);
   app.route('/v1/api-keys', apiKeysOpenAPIRouter);
+  app.route('/v1/funding', fundingOpenAPIRouter);
 
   return app;
 }

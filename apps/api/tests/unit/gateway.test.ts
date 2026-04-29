@@ -427,6 +427,42 @@ describe('handleGatewayRequest — end-to-end branches', () => {
     expect(body.extensions.bazaar).toEqual(PUBLIC_ENDPOINT.discovery_metadata);
   });
 
+  it('PAYMENT-REQUIRED header survives non-ASCII descriptions (em dashes, smart quotes)', async () => {
+    // Regression: @x402/core's safeBase64Encode uses btoa which throws
+    // "Invalid character" on multi-byte UTF-8. The em dash in a human-
+    // written description was enough to silently fail the encode in prod.
+    // Sanitize layer should replace common non-ASCII glyphs before encoding.
+    (mockedCreateClient as any).mockReturnValue(
+      buildSupabaseMock({
+        tenant: TENANT,
+        endpoint: {
+          ...PUBLIC_ENDPOINT,
+          asset_address: null,
+          description:
+            'Endpoint with non-ASCII — em dashes, “smart quotes”, ellipsis…',
+          discovery_metadata: {
+            description: 'bazaar metadata — also has em dash',
+            output: { schema: { type: 'object' }, example: {} },
+          },
+        },
+        wallet: PAYOUT_WALLET,
+      }),
+    );
+    const res = await handleGatewayRequest(
+      makeContext({ host: 'acme.x402.getsly.ai', pathname: '/weather' }),
+    );
+    expect(res.status).toBe(402);
+    const headerValue = res.headers.get('PAYMENT-REQUIRED');
+    expect(headerValue).toBeTruthy();
+
+    const { decodePaymentRequiredHeader } = await import('@x402/core/http');
+    const decoded: any = decodePaymentRequiredHeader(headerValue!);
+    // Round-trip works → description was sanitized to ASCII before encode.
+    expect(decoded.resource.description).toContain('em dashes');
+    expect(decoded.resource.description).not.toContain('—');
+    expect(decoded.extensions.bazaar.description).not.toContain('—');
+  });
+
   it('emits PAYMENT-REQUIRED header that @x402/core decodes back to our PaymentRequired (buyer-parser integration)', async () => {
     // The DEFINITIVE test: take our 402 response, run @x402/core's
     // actual decodePaymentRequiredHeader against the PAYMENT-REQUIRED

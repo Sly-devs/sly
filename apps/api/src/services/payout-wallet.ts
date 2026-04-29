@@ -235,7 +235,13 @@ async function provisionCdpSmartWallet(caip2Network: string): Promise<string> {
       'CDP credentials missing (set CDP_API_KEY_ID/CDP_API_KEY_NAME and CDP_API_KEY_SECRET/CDP_API_KEY_PRIVATE_KEY). Cannot auto-provision wallet.'
     );
   }
-  const { apiKeyId, apiKeySecret } = creds;
+  if (!creds.walletSecret) {
+    throw new Error(
+      'CDP_WALLET_SECRET not set — required by @coinbase/cdp-sdk 1.40+ for wallet ' +
+        'create/sign operations. Obtain it from portal.cdp.coinbase.com (Wallet Secret tab on the API key).'
+    );
+  }
+  const { apiKeyId, apiKeySecret, walletSecret } = creds;
 
   let CdpClient: any;
   try {
@@ -254,7 +260,7 @@ async function provisionCdpSmartWallet(caip2Network: string): Promise<string> {
     throw new Error('@coinbase/cdp-sdk did not export CdpClient — wallet provisioning unsupported.');
   }
 
-  const cdp = new CdpClient({ apiKeyId, apiKeySecret });
+  const cdp = new CdpClient({ apiKeyId, apiKeySecret, walletSecret });
   // The CDP SDK's exact method name varies across minor versions; we try
   // the documented one first and fall back to alternatives without
   // exploding on an interface drift.

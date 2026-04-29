@@ -50,6 +50,14 @@ async function main() {
     );
     process.exit(1);
   }
+  if (!creds.walletSecret) {
+    console.error(
+      '[provision-publish-probe] FAILED: CDP_WALLET_SECRET not set. Required by ' +
+        '@coinbase/cdp-sdk 1.40+ for any wallet operation. Obtain it from ' +
+        'portal.cdp.coinbase.com (Wallet Secret tab on the API key).'
+    );
+    process.exit(1);
+  }
   console.log(
     `[provision-publish-probe] CDP creds resolved (apiKeyId=${creds.apiKeyId.slice(0, 8)}…)`
   );
@@ -76,28 +84,21 @@ async function main() {
   const cdp = new CdpClient({
     apiKeyId: creds.apiKeyId,
     apiKeySecret: creds.apiKeySecret,
+    walletSecret: creds.walletSecret,
   });
 
-  // Try the documented smart-account creation method first; fall back to
-  // alternatives because the SDK shape varies across minor versions. Same
-  // fallback ladder as apps/api/src/services/payout-wallet.ts.
+  // CDP server EOA. The publish probe sends `from: <address>` to CDP
+  // Facilitator's /settle, and CDP signs on behalf of the address using the
+  // wallet secret. EOAs work fine here — the probe transfers tiny USDC
+  // amounts; we don't need smart-account features (gasless paymaster,
+  // recoverability) for this use case.
+  const accountName = `sly-publish-probe-${network}`;
   let provisioned: ProvisionedWallet | null = null;
   try {
-    if (cdp?.evm?.createSmartAccount) {
-      const out = await cdp.evm.createSmartAccount({});
-      if (out?.address) provisioned = { address: out.address, network, raw: out };
-    } else if (cdp?.smartAccounts?.create) {
-      const out = await cdp.smartAccounts.create({});
-      if (out?.address) provisioned = { address: out.address, network, raw: out };
-    } else if (cdp?.evm?.createAccount) {
-      const out = await cdp.evm.createAccount({});
-      if (out?.address) provisioned = { address: out.address, network, raw: out };
-    } else {
-      console.error(
-        '[provision-publish-probe] FAILED: no usable smart-account creation method on CdpClient. ' +
-          'Tried evm.createSmartAccount, smartAccounts.create, evm.createAccount.'
-      );
-      process.exit(1);
+    // Idempotent: getOrCreate returns the existing account if name is taken.
+    const out = await cdp.evm.getOrCreateAccount({ name: accountName });
+    if (out?.address) {
+      provisioned = { address: out.address, network, raw: out };
     }
   } catch (err: any) {
     console.error(

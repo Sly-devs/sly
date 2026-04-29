@@ -161,15 +161,20 @@ sf CLI session token regardless of the agent ID format we try.
 
 ### Hard requirements for runtime invocation
 
-To call `SFDC_Agent` from the sim we need:
+> **Note (2026-04-29 follow-up):** Salesforce moved Connected Apps to
+> maintenance mode for new integrations — this org only allows
+> **External Client Apps (ECA)**, the modern replacement. OAuth flows
+> at runtime are identical (Client Credentials grant → bearer token →
+> `api.salesforce.com`), but the org-side setup path is different.
+> What we need on the org-side ECA:
 
-1. **A Connected App** in `agentforce-org` with these OAuth scopes:
+1. **An External Client App** in `agentforce-org` with these OAuth scopes:
    - `api` (general API)
    - `einstein_gpt_api` (Agentforce / Einstein gateway)
    - `sfap_api` (Salesforce API Gateway)
    - `refresh_token offline_access`
-2. **Consumer Key + Consumer Secret** from that Connected App, stored
-   server-side (env var or `connected_accounts` row).
+2. **Consumer Key + Consumer Secret** from the ECA, stored server-side
+   (env var or `connected_accounts` row).
 3. **OAuth Client Credentials grant** against the org's My Domain:
    ```
    POST {instance}/services/oauth2/token
@@ -177,46 +182,73 @@ To call `SFDC_Agent` from the sim we need:
    client_id=<consumer_key>
    client_secret=<consumer_secret>
    ```
-   Returns an access token usable against `api.salesforce.com`.
-4. **Run-as User** assignment on the Connected App pointing at a
-   licensed Agentforce user (the EinsteinServiceAgent user might
-   suffice, but more likely needs a separate licensed admin/integration
-   user).
+   Returns an access token usable against `api.salesforce.com`. Same
+   shape as Connected App auth — only the org-side artifact differs.
+4. **Run-as User** assignment on the ECA's policy pointing at a
+   licensed Agentforce user (your own admin user is fine for sandbox).
 5. **Agent ID resolution** — the actual agent ID format isn't yet
-   known. With a real Connected App token in hand we'll either:
+   known. With a real ECA token in hand we'll either:
    a. Find an enumeration endpoint Salesforce documents.
    b. Use the agent's published `DeveloperName` (`SFDC_Agent`) which
       Salesforce sometimes accepts as an ID.
 
-## What the user needs to do next
+## What the user needs to do next — External Client App walkthrough
 
-In `agentforce-org` Setup UI:
+ECAs split the configuration into two screens (the app itself + a
+separate policies record). Step-by-step:
 
-1. **Setup → App Manager → New Connected App**
-2. Name: `Sly Sim Agent Bridge` (or similar). Contact email = your email.
-3. **Enable OAuth Settings** = checked.
+### Step 1 — Create the ECA
+
+1. **Setup → External Client App Manager → New External Client App**
+   (search "External Client App Manager" in Setup quick find).
+2. Basic info:
+   - **External Client App Name**: `Sly Sim Agent Bridge`
+   - **API Name**: auto-fills from the name
+   - **Contact Email**: your email
+   - **Distribution State**: Local
+3. **API (Enable OAuth Settings)** = checked.
 4. **Callback URL**: `http://localhost:1717/OauthRedirect` (placeholder
-   — we use client-credentials, not the auth-code flow, but Salesforce
-   requires *some* callback URL).
+   — Client Credentials doesn't use it, but the form requires *some*
+   value).
 5. **Selected OAuth Scopes** — add all of:
    - `Manage user data via APIs (api)`
-   - `Access Einstein GPT services (einstein_gpt_api)`
-   - `Access the Salesforce API Platform (sfap_api)` (if visible — may
-     require Agent API admin perms)
+   - `Access Agentforce services (einstein_gpt_api)`
+     (label may also appear as `Access Einstein GPT services`)
+   - `Access the Salesforce API Platform (sfap_api)`
    - `Perform requests at any time (refresh_token, offline_access)`
-6. **Enable Client Credentials Flow** — checked. Set "Run As" to a
-   licensed admin user (your own user is fine for sandbox testing).
-7. Save. Wait ~10 min for Salesforce to provision the keys.
-8. **App Manager → View** the new Connected App → **Manage Consumer
-   Details** → copy the **Consumer Key** and **Consumer Secret**.
-9. Hand them to the assistant via env vars (don't paste into chat):
-   ```
+6. **Enable Client Credentials Flow** = checked.
+7. Save. Wait ~2-10 min for Salesforce to provision the consumer
+   credentials.
+
+### Step 2 — Configure the ECA's OAuth Policies
+
+ECAs separate "what the app supports" from "what your org allows".
+After saving Step 1:
+
+1. From the ECA detail page, go to the **Policies** tab (or **OAuth
+   Policies** sub-section depending on version).
+2. **Edit Policies**:
+   - **App Authorization** = Allow All Users / Self-Authorize, OR
+     restrict to your admin user — either works for testing.
+   - **Refresh Token Policy** = Refresh token is valid until revoked.
+   - **Client Credentials Flow** → **Run As** = your admin user (the
+     same user you logged into the org with). This is the user the
+     Client Credentials token will impersonate.
+3. Save.
+
+### Step 3 — Grab the consumer credentials
+
+1. Back on the ECA detail page → **Settings → OAuth Settings →
+   Consumer Key and Secret → Manage Consumer Details**.
+2. Salesforce will MFA-challenge you (email or 2FA app), then show
+   the **Consumer Key** and **Consumer Secret**.
+3. Drop them into a local file (NOT the chat):
+   ```bash
    echo 'AGENTFORCE_CONSUMER_KEY=<key>' >> /tmp/agentforce-creds.env
    echo 'AGENTFORCE_CONSUMER_SECRET=<secret>' >> /tmp/agentforce-creds.env
    chmod 600 /tmp/agentforce-creds.env
    ```
 
 Once `/tmp/agentforce-creds.env` exists, we resume the probe — fetch
-a Client Credentials token and try `api.salesforce.com` with it. From
-there we can enumerate the agent's invocation surface and start
-building the runtime adapter.
+a Client Credentials token, hit `api.salesforce.com`, enumerate the
+agent's invocation surface, and start building the runtime adapter.

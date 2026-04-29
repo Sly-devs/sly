@@ -304,16 +304,30 @@ function toMinorUnits(amount: string, decimals: number): string {
   return combined || '0';
 }
 
+/**
+ * Normalize the endpoint's network to CAIP-2 form (`eip155:NNNN`).
+ *
+ * The x402 EVM scheme derives the EIP-712 chainId via
+ * `requirements.network.split(':')[1]` — short slugs like `'base'`
+ * split to undefined → NaN → CDP rejects the signed payload with
+ * "Value is not nullable". CAIP-2 is the only form that works
+ * end-to-end through the buyer's signing flow.
+ */
 function normalizeNetwork(network: string | null | undefined): string {
-  if (!network) return 'base';
-  // CAIP-2 → x402 short name mapping (Bazaar prefers short names).
+  if (!network) return 'eip155:8453';
+  if (network.startsWith('eip155:')) return network;
   switch (network) {
-    case 'eip155:8453':
+    case 'base':
     case 'base-mainnet':
-      return 'base';
-    case 'eip155:84532':
+      return 'eip155:8453';
     case 'base-sepolia':
-      return 'base-sepolia';
+      return 'eip155:84532';
+    case 'ethereum':
+    case 'ethereum-mainnet':
+      return 'eip155:1';
+    case 'optimism':
+    case 'optimism-mainnet':
+      return 'eip155:10';
     default:
       return network;
   }

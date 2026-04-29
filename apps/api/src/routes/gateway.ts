@@ -1251,6 +1251,7 @@ async function dispatchGatewayRequest(
       lower === 'transfer-encoding' ||
       lower === 'connection' ||
       lower === 'content-length' || // we set our own below
+      lower === 'content-encoding' || // undici auto-decompresses but keeps the header — forwarding it tells the buyer to gunzip plain text → empty body
       lower === 'set-cookie' // never proxy tenant cookies to buyers
     ) {
       return;

@@ -1,0 +1,540 @@
+/**
+ * Unit tests for the x402 Bazaar gateway (Worktree C).
+ *
+ * Covers:
+ *   - Subdomain parsing: known slug, unknown slug, wrong host suffix, multi-level subdomain
+ *   - Reserved-slug guard
+ *   - 402 challenge shape: accepts[] payTo from tenant_payout_wallets, bazaar extension
+ *   - Visibility: private endpoint → 404
+ *   - HMAC signature on backend proxy when backend_auth.hmac_secret set
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  parseGatewayHost,
+  isReservedSlug,
+  computeSlyHmacSignature,
+  verifySlyHmacSignature,
+  buildProxyHeaders,
+  __testing,
+} from '../../src/routes/gateway.js';
+
+// Force a known suffix list for parser tests; the gateway reads env at call time.
+beforeEach(() => {
+  process.env.GATEWAY_HOSTNAME_SUFFIX = 'x402.getsly.ai';
+  delete process.env.GATEWAY_RESERVED_SLUGS;
+});
+
+describe('parseGatewayHost', () => {
+  it('accepts a known-shape subdomain on the prod suffix', () => {
+    expect(parseGatewayHost('acme.x402.getsly.ai')).toEqual({
+      slug: 'acme',
+      matchedSuffix: 'x402.getsly.ai',
+    });
+  });
+
+  it('accepts a subdomain on the staging suffix', () => {
+    expect(parseGatewayHost('acme.x402-staging.getsly.ai')).toEqual({
+      slug: 'acme',
+      matchedSuffix: 'x402-staging.getsly.ai',
+    });
+  });
+
+  it('accepts the local-dev `.localhost` variant (with port)', () => {
+    expect(parseGatewayHost('acme.x402.getsly.ai.localhost:4000')).toEqual({
+      slug: 'acme',
+      matchedSuffix: 'x402.getsly.ai.localhost',
+    });
+  });
+
+  it('returns null for hosts that do not match any gateway suffix', () => {
+    expect(parseGatewayHost('api.getsly.ai')).toBeNull();
+    expect(parseGatewayHost('localhost:4000')).toBeNull();
+    expect(parseGatewayHost('example.com')).toBeNull();
+  });
+
+  it('returns null for the apex (no subdomain)', () => {
+    expect(parseGatewayHost('x402.getsly.ai')).toBeNull();
+  });
+
+  it('rejects multi-level subdomains', () => {
+    const out = parseGatewayHost('api.acme.x402.getsly.ai');
+    expect(out?.slug).toBe('__INVALID_MULTILEVEL__');
+  });
+
+  it('rejects malformed slugs (leading hyphen, underscores)', () => {
+    expect(parseGatewayHost('-bad.x402.getsly.ai')?.slug).toBe('__INVALID_SHAPE__');
+    expect(parseGatewayHost('foo_bar.x402.getsly.ai')?.slug).toBe('__INVALID_SHAPE__');
+  });
+
+  it('handles missing host header', () => {
+    expect(parseGatewayHost(undefined)).toBeNull();
+    expect(parseGatewayHost('')).toBeNull();
+  });
+});
+
+describe('isReservedSlug', () => {
+  it('rejects baked-in reserved slugs', () => {
+    for (const reserved of ['api', 'app', 'dashboard', 'admin', 'www', 'auth']) {
+      expect(isReservedSlug(reserved)).toBe(true);
+    }
+  });
+
+  it('allows non-reserved tenant slugs', () => {
+    expect(isReservedSlug('acme')).toBe(false);
+    expect(isReservedSlug('contoso')).toBe(false);
+  });
+
+  it('honours GATEWAY_RESERVED_SLUGS env override', () => {
+    process.env.GATEWAY_RESERVED_SLUGS = 'foo,bar';
+    expect(isReservedSlug('foo')).toBe(true);
+    expect(isReservedSlug('bar')).toBe(true);
+    expect(isReservedSlug('api')).toBe(false); // overridden away
+  });
+});
+
+describe('computeSlyHmacSignature', () => {
+  it('produces a deterministic signature for fixed inputs', () => {
+    const sig1 = computeSlyHmacSignature({
+      hmacSecret: 'shhh',
+      timestampMs: 1_700_000_000_000,
+      method: 'POST',
+      path: '/forecast',
+      body: '{"city":"sf"}',
+    });
+    const sig2 = computeSlyHmacSignature({
+      hmacSecret: 'shhh',
+      timestampMs: 1_700_000_000_000,
+      method: 'POST',
+      path: '/forecast',
+      body: '{"city":"sf"}',
+    });
+    expect(sig1).toBe(sig2);
+    expect(sig1).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('produces different signatures when any input changes', () => {
+    const base = {
+      hmacSecret: 'shhh',
+      timestampMs: 1_700_000_000_000,
+      method: 'POST',
+      path: '/forecast',
+      body: '{}',
+    };
+    const baseSig = computeSlyHmacSignature(base);
+    expect(computeSlyHmacSignature({ ...base, hmacSecret: 'other' })).not.toBe(baseSig);
+    expect(computeSlyHmacSignature({ ...base, timestampMs: 1 })).not.toBe(baseSig);
+    expect(computeSlyHmacSignature({ ...base, method: 'GET' })).not.toBe(baseSig);
+    expect(computeSlyHmacSignature({ ...base, path: '/other' })).not.toBe(baseSig);
+    expect(computeSlyHmacSignature({ ...base, body: '{"a":1}' })).not.toBe(baseSig);
+  });
+
+  it('round-trips through verifySlyHmacSignature', () => {
+    const sig = computeSlyHmacSignature({
+      hmacSecret: 'shhh',
+      timestampMs: 42,
+      method: 'GET',
+      path: '/x',
+      body: '',
+    });
+    expect(verifySlyHmacSignature(sig, sig)).toBe(true);
+    expect(verifySlyHmacSignature(sig, sig.replace(/.$/, '0'))).toBe(false);
+  });
+});
+
+describe('buildProxyHeaders', () => {
+  it('drops Cookie, Authorization, X-Sly-* and Host', () => {
+    const buyerHeaders = new Headers({
+      cookie: 'session=abc',
+      authorization: 'Bearer leak',
+      host: 'acme.x402.getsly.ai',
+      'x-sly-spoof': 'evil',
+      'user-agent': 'curl/8',
+      accept: 'application/json',
+    });
+    const headers = buildProxyHeaders({
+      backendUrl: 'https://internal.acme.com',
+      method: 'GET',
+      servicePath: '/',
+      buyerHeaders,
+      body: undefined,
+    });
+    expect(headers['cookie']).toBeUndefined();
+    expect(headers['authorization']).toBeUndefined();
+    expect(headers['host']).toBeUndefined();
+    expect(headers['x-sly-spoof']).toBeUndefined();
+    expect(headers['user-agent']).toBe('curl/8');
+    expect(headers['accept']).toBe('application/json');
+  });
+
+  it('attaches X-Sly-Signature + X-Sly-Timestamp when hmac_secret is set', () => {
+    const buyerHeaders = new Headers({ accept: 'application/json' });
+    const headers = buildProxyHeaders({
+      backendUrl: 'https://internal.acme.com',
+      method: 'POST',
+      servicePath: '/forecast',
+      buyerHeaders,
+      body: Buffer.from('{"city":"sf"}', 'utf8'),
+      hmacSecret: 'top-secret',
+    });
+    expect(headers['x-sly-signature']).toMatch(/^sha256=[a-f0-9]{64}$/);
+    expect(headers['x-sly-timestamp']).toMatch(/^\d+$/);
+  });
+
+  it('does NOT attach signature headers when hmac_secret is absent', () => {
+    const headers = buildProxyHeaders({
+      backendUrl: 'https://internal.acme.com',
+      method: 'GET',
+      servicePath: '/',
+      buyerHeaders: new Headers(),
+      body: undefined,
+    });
+    expect(headers['x-sly-signature']).toBeUndefined();
+    expect(headers['x-sly-timestamp']).toBeUndefined();
+  });
+});
+
+describe('buildAcceptsArray', () => {
+  it('builds an exact-EVM accept entry with the resolved payTo and minor-unit amount', () => {
+    const accepts = __testing.buildAcceptsArray(
+      {
+        id: 'e1',
+        tenant_id: 't1',
+        account_id: 'a1',
+        service_slug: 'weather',
+        backend_url: 'https://internal.acme.com',
+        backend_auth: null,
+        base_price: '0.01',
+        currency: 'USDC',
+        network: 'base-mainnet',
+        asset_address: '0xUSDC',
+        payment_address: 'internal://payos/t1/a1',
+        visibility: 'public',
+        publish_status: 'published',
+        facilitator_mode: 'cdp',
+        discovery_metadata: { description: 'x' },
+        description: 'Daily forecast',
+        method: 'GET',
+      },
+      '0xPayoutWallet',
+    );
+    expect(accepts).toHaveLength(1);
+    const a = accepts[0] as any;
+    expect(a.scheme).toBe('exact');
+    expect(a.network).toBe('base'); // CAIP-2/short normalized
+    expect(a.payTo).toBe('0xPayoutWallet');
+    expect(a.maxAmountRequired).toBe('10000'); // 0.01 USDC at 6 decimals
+    expect(a.asset).toBe('0xUSDC');
+    expect(a.extra.name).toBe('USDC');
+  });
+});
+
+describe('toMinorUnits', () => {
+  it('converts decimal strings to minor units without floating-point drift', () => {
+    expect(__testing.toMinorUnits('1', 6)).toBe('1000000');
+    expect(__testing.toMinorUnits('0.01', 6)).toBe('10000');
+    expect(__testing.toMinorUnits('0.000001', 6)).toBe('1');
+    expect(__testing.toMinorUnits('1.234567', 6)).toBe('1234567');
+    // Truncates beyond the configured precision (no rounding).
+    expect(__testing.toMinorUnits('0.0000019', 6)).toBe('1');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// End-to-end gateway request handling — drives `handleGatewayRequest`
+// with mocked Supabase + facilitator + backend fetch so we cover the full
+// branch matrix without network or DB.
+// ────────────────────────────────────────────────────────────────────────
+
+const TENANT = {
+  id: '11111111-1111-1111-1111-111111111111',
+  slug: 'acme',
+  status: 'active',
+};
+
+const PUBLIC_ENDPOINT = {
+  id: 'e1111111-1111-1111-1111-111111111111',
+  tenant_id: TENANT.id,
+  account_id: 'aaaaaaaa-1111-1111-1111-111111111111',
+  service_slug: 'weather',
+  backend_url: 'https://backend.acme.test',
+  backend_auth: null,
+  base_price: '0.01',
+  currency: 'USDC',
+  network: 'base-mainnet',
+  asset_address: '0xUSDC',
+  payment_address: 'internal://payos/t1/a1',
+  visibility: 'public',
+  publish_status: 'published',
+  facilitator_mode: 'cdp',
+  discovery_metadata: { description: 'Daily forecast', category: 'weather' },
+  description: 'Daily forecast',
+  method: 'GET',
+};
+
+const PRIVATE_ENDPOINT = { ...PUBLIC_ENDPOINT, visibility: 'private', publish_status: 'draft' };
+
+const PAYOUT_WALLET = { address: '0xCAFEBABE', network: 'base-mainnet' };
+
+/**
+ * Build a fluent Supabase mock that returns canned data for the three
+ * tables the gateway hits: tenants, x402_endpoints, tenant_payout_wallets.
+ * Updates and inserts are no-ops with structured stubs so audit writes
+ * don't blow up the request path.
+ */
+function buildSupabaseMock(opts: {
+  tenant?: any;
+  endpoint?: any;
+  wallet?: any;
+}) {
+  const queryBuilder = (rows: any) => {
+    const builder: any = {
+      select: vi.fn(() => builder),
+      eq: vi.fn(() => builder),
+      in: vi.fn(() => builder),
+      limit: vi.fn(() => builder),
+      maybeSingle: vi.fn(async () => ({ data: rows ?? null, error: null })),
+      single: vi.fn(async () => ({ data: rows ?? null, error: null })),
+      update: vi.fn(() => builder),
+      insert: vi.fn(async () => ({ data: null, error: null })),
+    };
+    return builder;
+  };
+
+  return {
+    from: vi.fn((table: string) => {
+      if (table === 'tenants') return queryBuilder(opts.tenant);
+      if (table === 'x402_endpoints') return queryBuilder(opts.endpoint);
+      if (table === 'tenant_payout_wallets') return queryBuilder(opts.wallet);
+      if (table === 'x402_publish_events') return queryBuilder(null);
+      return queryBuilder(null);
+    }),
+  };
+}
+
+vi.mock('../../src/db/client.js', () => ({
+  createClient: vi.fn(),
+}));
+
+import { createClient as mockedCreateClient } from '../../src/db/client.js';
+import { handleGatewayRequest } from '../../src/routes/gateway.js';
+
+function makeContext(opts: {
+  host: string;
+  pathname: string;
+  search?: string;
+  method?: string;
+  paymentHeader?: string;
+}): any {
+  const { host, pathname, search = '', method = 'GET', paymentHeader } = opts;
+  const url = `https://${host}${pathname}${search}`;
+  const headers = new Headers({
+    host,
+    accept: 'application/json',
+    'user-agent': 'gateway-test/1.0',
+  });
+  if (paymentHeader) headers.set('x-payment', paymentHeader);
+
+  return {
+    req: {
+      url,
+      method,
+      header: (name: string) => headers.get(name) ?? undefined,
+      arrayBuffer: async () => new ArrayBuffer(0),
+      raw: { headers },
+    },
+  };
+}
+
+describe('handleGatewayRequest — end-to-end branches', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns 404 when host does not match the gateway suffix', async () => {
+    (mockedCreateClient as any).mockReturnValue(buildSupabaseMock({}));
+    const res = await handleGatewayRequest(
+      makeContext({ host: 'example.com', pathname: '/weather' }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for multi-level subdomains', async () => {
+    (mockedCreateClient as any).mockReturnValue(buildSupabaseMock({}));
+    const res = await handleGatewayRequest(
+      makeContext({ host: 'api.acme.x402.getsly.ai', pathname: '/weather' }),
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe('invalid_gateway_host');
+  });
+
+  it('returns 404 for reserved slugs (e.g. api)', async () => {
+    (mockedCreateClient as any).mockReturnValue(buildSupabaseMock({}));
+    const res = await handleGatewayRequest(
+      makeContext({ host: 'api.x402.getsly.ai', pathname: '/weather' }),
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe('reserved_slug');
+  });
+
+  it('returns 404 when tenant slug is unknown', async () => {
+    (mockedCreateClient as any).mockReturnValue(buildSupabaseMock({ tenant: null }));
+    const res = await handleGatewayRequest(
+      makeContext({ host: 'unknown.x402.getsly.ai', pathname: '/weather' }),
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe('tenant_not_found');
+  });
+
+  it('returns 404 when endpoint visibility is private', async () => {
+    (mockedCreateClient as any).mockReturnValue(
+      buildSupabaseMock({
+        tenant: TENANT,
+        endpoint: PRIVATE_ENDPOINT,
+        wallet: PAYOUT_WALLET,
+      }),
+    );
+    const res = await handleGatewayRequest(
+      makeContext({ host: 'acme.x402.getsly.ai', pathname: '/weather' }),
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe('endpoint_not_public');
+  });
+
+  it('returns 402 with bazaar extension + accepts when no X-PAYMENT header', async () => {
+    (mockedCreateClient as any).mockReturnValue(
+      buildSupabaseMock({
+        tenant: TENANT,
+        endpoint: PUBLIC_ENDPOINT,
+        wallet: PAYOUT_WALLET,
+      }),
+    );
+    const res = await handleGatewayRequest(
+      makeContext({ host: 'acme.x402.getsly.ai', pathname: '/weather' }),
+    );
+    expect(res.status).toBe(402);
+    expect(res.headers.get('x402-version')).toBe('1');
+    const body = await res.json();
+    expect(body.x402Version).toBe(1);
+    expect(body.accepts).toHaveLength(1);
+    expect(body.accepts[0].payTo).toBe(PAYOUT_WALLET.address);
+    expect(body.accepts[0].resource).toContain('acme.x402.getsly.ai');
+    expect(body.extensions.bazaar).toEqual(PUBLIC_ENDPOINT.discovery_metadata);
+  });
+
+  it('returns 404 when discovery_metadata is null (not ready to publish)', async () => {
+    (mockedCreateClient as any).mockReturnValue(
+      buildSupabaseMock({
+        tenant: TENANT,
+        endpoint: { ...PUBLIC_ENDPOINT, discovery_metadata: null },
+        wallet: PAYOUT_WALLET,
+      }),
+    );
+    const res = await handleGatewayRequest(
+      makeContext({ host: 'acme.x402.getsly.ai', pathname: '/weather' }),
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe('endpoint_metadata_missing');
+  });
+
+  it('returns 404 when payout wallet is not bound', async () => {
+    (mockedCreateClient as any).mockReturnValue(
+      buildSupabaseMock({
+        tenant: TENANT,
+        endpoint: PUBLIC_ENDPOINT,
+        wallet: null,
+      }),
+    );
+    const res = await handleGatewayRequest(
+      makeContext({ host: 'acme.x402.getsly.ai', pathname: '/weather' }),
+    );
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe('payout_wallet_not_bound');
+  });
+
+  it('proxies to backend with HMAC headers when backend_auth.hmac_secret is set', async () => {
+    (mockedCreateClient as any).mockReturnValue(
+      buildSupabaseMock({
+        tenant: TENANT,
+        endpoint: {
+          ...PUBLIC_ENDPOINT,
+          backend_auth: { hmac_secret: 'top-secret' },
+        },
+        wallet: PAYOUT_WALLET,
+      }),
+    );
+
+    const fetchSpy = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const res = await handleGatewayRequest(
+      makeContext({
+        host: 'acme.x402.getsly.ai',
+        pathname: '/weather',
+        paymentHeader: 'eyFAKE',
+      }),
+      {
+        callFacilitator: async () => ({
+          ok: true,
+          txHash: '0xabc',
+          extensionResponses: 'processing',
+        }),
+        fetchBackend: fetchSpy as any,
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('X-Payment-Receipt')).toBe('0xabc');
+    expect(res.headers.get('EXTENSION-RESPONSES')).toBe('processing');
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [, init] = fetchSpy.mock.calls[0]!;
+    const sentHeaders = init?.headers as Record<string, string>;
+    expect(sentHeaders['x-sly-signature']).toMatch(/^sha256=[a-f0-9]{64}$/);
+    expect(sentHeaders['x-sly-timestamp']).toMatch(/^\d+$/);
+    // Buyer cookies must never reach the backend.
+    expect(sentHeaders['cookie']).toBeUndefined();
+    expect(sentHeaders['authorization']).toBeUndefined();
+  });
+
+  it('returns 502 with extensionResponses when CDP rejects the extension', async () => {
+    (mockedCreateClient as any).mockReturnValue(
+      buildSupabaseMock({
+        tenant: TENANT,
+        endpoint: PUBLIC_ENDPOINT,
+        wallet: PAYOUT_WALLET,
+      }),
+    );
+
+    const res = await handleGatewayRequest(
+      makeContext({
+        host: 'acme.x402.getsly.ai',
+        pathname: '/weather',
+        paymentHeader: 'eyBAD',
+      }),
+      {
+        callFacilitator: async () => ({
+          ok: false,
+          status: 400,
+          error: 'verification_failed',
+          extensionResponses: 'rejected: missing inputSchema',
+        }),
+      },
+    );
+
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toBe('settlement_failed');
+    expect(body.extensionResponses).toContain('rejected');
+  });
+});

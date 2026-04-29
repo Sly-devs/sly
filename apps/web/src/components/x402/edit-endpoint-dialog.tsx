@@ -189,7 +189,6 @@ export function EditEndpointDialog({ endpoint, open, onOpenChange }: EditEndpoin
                 value={serviceSlug}
                 onChange={(e) => setServiceSlug(e.target.value.toLowerCase())}
                 placeholder="weather"
-                pattern="^[a-z0-9][a-z0-9-]{1,39}$"
               />
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 URL path component for the gateway.

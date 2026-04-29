@@ -149,19 +149,38 @@ async function triggerFirstSettle(
   const cdpUrl =
     process.env.CDP_FACILITATOR_URL || 'https://api.cdp.coinbase.com/platform/v2/x402';
 
-  // We don't inline the @coinbase/x402 client because it needs the full
-  // payment header construction round-trip from a real wallet. For Phase 1
-  // the synthetic settle is a server-to-server POST that returns
-  // EXTENSION-RESPONSES with the same semantics as a real settle.
+  // CDP Facilitator authenticates with a Bearer JWT signed with the API
+  // key (ES256). @coinbase/x402's createAuthHeader generates it for us
+  // — same scheme the official SDK uses internally. JWT generation can
+  // fail in test environments where CDP_API_KEY_SECRET isn't a real PEM;
+  // we soft-fail and let the fetch proceed (in tests, the mock fetch
+  // returns the expected response anyway; in prod, CDP would 401 and our
+  // non-2xx handler below surfaces it as `rejected:cdp-401:...`).
+  let authHeader: string | undefined;
   try {
+    const { createAuthHeader } = await import('@coinbase/x402');
+    const cdpHost = new URL(cdpUrl).host;
+    authHeader = await createAuthHeader(
+      apiKeyId,
+      apiKeySecret,
+      'POST',
+      cdpHost,
+      `${new URL(cdpUrl).pathname}/settle`.replace(/\/+/g, '/')
+    );
+  } catch (err: any) {
+    console.warn('[publish-x402] JWT generation failed, proceeding unsigned:', err?.message);
+  }
+
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-Sly-Probe-Wallet': probeWalletId,
+    };
+    if (authHeader) headers.Authorization = authHeader;
+
     const res = await fetch(`${cdpUrl}/settle`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CDP-API-Key-Id': apiKeyId,
-        'X-CDP-API-Key-Secret': apiKeySecret,
-        'X-Sly-Probe-Wallet': probeWalletId,
-      },
+      headers,
       body: JSON.stringify({
         scheme: 'exact-evm',
         network: mapSlyNetworkToCAIP2(endpoint.network),
@@ -186,6 +205,15 @@ async function triggerFirstSettle(
     }
     if (lower.includes('processing')) {
       return { extensionResponse: 'processing' };
+    }
+    // Non-2xx without an explicit EXTENSION-RESPONSES header — surface the
+    // upstream body so a 401/403/etc. doesn't get audit-logged as "unknown".
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return {
+        extensionResponse: 'rejected',
+        reason: `cdp-${res.status}:${body.slice(0, 200) || 'no-body'}`,
+      };
     }
     return { extensionResponse: 'unknown', reason: raw ?? `${res.status}` };
   } catch (err: any) {

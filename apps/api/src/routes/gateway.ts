@@ -403,15 +403,37 @@ async function callCdpVerifyAndSettle(input: {
   }
   const { apiKeyId, apiKeySecret } = creds;
 
+  // CDP Facilitator authenticates with a Bearer JWT signed with the API
+  // key (ES256). @coinbase/x402's createAuthHeader generates it for us
+  // — same scheme the official SDK uses internally. Soft-fail on JWT
+  // errors so unit tests with mock creds still exercise the response
+  // parsing; in prod a missing auth header will produce a real 401
+  // which the non-2xx branch below handles.
+  let authHeader: string | undefined;
+  try {
+    const { createAuthHeader } = await import('@coinbase/x402');
+    const url = new URL(facilitatorUrl);
+    authHeader = await createAuthHeader(
+      apiKeyId,
+      apiKeySecret,
+      'POST',
+      url.host,
+      `${url.pathname}/settle`.replace(/\/+/g, '/')
+    );
+  } catch (err: any) {
+    console.warn('[gateway] JWT generation failed, proceeding unsigned:', err?.message);
+  }
+
   // CDP exposes /verify and /settle; we call settle which performs verify
   // implicitly, returning the EXTENSION-RESPONSES header on the response.
+  const settleHeaders: Record<string, string> = {
+    'content-type': 'application/json',
+  };
+  if (authHeader) settleHeaders.Authorization = authHeader;
+
   const settleRes = await fetch(`${facilitatorUrl}/settle`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-cdp-api-key-id': apiKeyId,
-      'x-cdp-api-key-secret': apiKeySecret,
-    },
+    headers: settleHeaders,
     body: JSON.stringify({
       paymentHeader: input.paymentHeader,
       paymentRequirements: input.accepts,

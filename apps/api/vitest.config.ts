@@ -18,6 +18,11 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': '/src',
+      // @x402/extensions imports `ajv/dist/2020` without a .js extension.
+      // Node's CommonJS resolver finds it via package exports, but Vitest's
+      // ESM resolver is stricter and needs the .js explicitly. The
+      // production tsup build bundles ajv inline so this only affects tests.
+      'ajv/dist/2020': 'ajv/dist/2020.js',
     },
   },
 });

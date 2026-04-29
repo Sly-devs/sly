@@ -40,6 +40,7 @@
     "@coinbase/cdp-sdk": "^1.40.1",
     "@x402/core": "^2.1.0",
     "@x402/evm": "^2.1.0",
+    "@x402/extensions": "^2.1.0",
     "@x402/fetch": "^2.1.0",
     "@hono/zod-openapi": "^0.18.0",
     "@modelcontextprotocol/sdk": "^1.25.1",

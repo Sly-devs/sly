@@ -427,7 +427,16 @@ describe('handleGatewayRequest — end-to-end branches', () => {
     expect(body.accepts[0].payTo).toBe(PAYOUT_WALLET.address);
     // resource lives at top level on PaymentRequired (not per-accept)
     expect(body.resource.url).toContain('acme.x402.getsly.ai');
-    expect(body.extensions.bazaar).toEqual(PUBLIC_ENDPOINT.discovery_metadata);
+    // bazaar extension is now the canonical {info, schema} shape — not
+    // the raw metadata pass-through. Assert the structural properties
+    // that matter for the indexer.
+    expect(body.extensions.bazaar.info).toBeDefined();
+    expect(body.extensions.bazaar.info.input.type).toBe('http');
+    expect(body.extensions.bazaar.info.input.method).toBe('GET');
+    expect(body.extensions.bazaar.info.output.example).toEqual(
+      PUBLIC_ENDPOINT.discovery_metadata.output?.example,
+    );
+    expect(body.extensions.bazaar.schema.required).toContain('input');
   });
 
   it('PAYMENT-REQUIRED header survives non-ASCII descriptions (em dashes, smart quotes)', async () => {
@@ -463,7 +472,8 @@ describe('handleGatewayRequest — end-to-end branches', () => {
     // Round-trip works → description was sanitized to ASCII before encode.
     expect(decoded.resource.description).toContain('em dashes');
     expect(decoded.resource.description).not.toContain('—');
-    expect(decoded.extensions.bazaar.description).not.toContain('—');
+    // canonical shape — info.input always present
+    expect(decoded.extensions.bazaar.info).toBeDefined();
   });
 
   it('emits PAYMENT-REQUIRED header that @x402/core decodes back to our PaymentRequired (buyer-parser integration)', async () => {
@@ -770,7 +780,9 @@ describe('handlePathBasedGatewayRequest — DNS-fallback shape', () => {
     expect(res.headers.get('x402-version')).toBe('2');
     const body = await res.json();
     expect(body.x402Version).toBe(2);
-    expect(body.extensions?.bazaar?.description).toBe('Daily forecast');
+    // canonical bazaar shape: info.output.example carries the original
+    // metadata's example, info.input.method matches the endpoint method.
+    expect(body.extensions?.bazaar?.info?.input?.method).toBe('GET');
     // The resource URL lives on the top-level PaymentRequired, not on
     // each accept entry — and it reflects the path-based shape.
     expect(body.resource.url).toBe('https://api.getsly.ai/x402/acme/weather');

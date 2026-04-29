@@ -34,6 +34,11 @@ import {
   HTTPFacilitatorClient,
 } from '@x402/core/http';
 import { createFacilitatorConfig } from '@coinbase/x402';
+// Note: @x402/extensions has the same builder, but its bundle imports
+// `ajv/dist/2020` without a `.js` extension which Vitest's ESM resolver
+// rejects. We hand-roll the canonical shape (see buildBazaarExtension)
+// to avoid that test-only dep hazard. The shape mirrors the SDK type
+// defs in @x402/extensions exactly.
 
 // ──────────────────────────────────────────────────────────────────────────
 // Config
@@ -380,12 +385,89 @@ function normalizeNetwork(network: string | null | undefined): string {
 }
 
 /**
- * The full bazaar extension blob is read straight from
- * `endpoint.discovery_metadata`. The plan declares this column as the
- * frozen extension payload populated by Worktree B's publish flow.
+ * Build the canonical Bazaar discovery extension from our internal
+ * X402DiscoveryMetadata shape.
+ *
+ * Coinbase's bazaar indexer requires this exact structure (verified
+ * against `@x402/extensions`'s type defs):
+ *
+ *   { info: {
+ *       input: { type:"http", method, queryParams?, headers?,
+ *                body?, bodyType? },  // body fields for POST/PUT/PATCH
+ *       output?: { type?, format?, example? }
+ *     },
+ *     schema: { $schema, type:"object",
+ *               properties: { input: {...}, output?: {...} },
+ *               required: ["input"] }
+ *   }
+ *
+ * Hand-rolling instead of importing @x402/extensions because its bundle
+ * has an ajv import that breaks Vitest's ESM resolution.
  */
-function buildBazaarExtension(metadata: X402DiscoveryMetadata): X402DiscoveryMetadata {
-  return metadata;
+function buildBazaarExtension(
+  metadata: X402DiscoveryMetadata,
+  method: string
+): unknown {
+  const m = method.toUpperCase();
+  const isQuery = m === 'GET' || m === 'HEAD' || m === 'DELETE';
+
+  // ── info.input ────────────────────────────────────────────────────
+  const inputInfo: any = { type: 'http', method: m };
+  if (isQuery) {
+    if (metadata.input?.example && typeof metadata.input.example === 'object') {
+      inputInfo.queryParams = metadata.input.example as Record<string, unknown>;
+    }
+  } else {
+    inputInfo.bodyType = metadata.bodyType || 'json';
+    inputInfo.body =
+      (metadata.input?.example && typeof metadata.input.example === 'object'
+        ? (metadata.input.example as Record<string, unknown>)
+        : {});
+  }
+
+  // ── info.output ───────────────────────────────────────────────────
+  const outputInfo: any = {};
+  if (metadata.output?.example !== undefined) outputInfo.example = metadata.output.example;
+  // Sensible defaults that buyers/observers find useful:
+  outputInfo.type = 'json';
+
+  // ── schema (the JSON Schema that describes input/output) ─────────
+  const inputSchemaInner: any = {
+    type: 'object',
+    properties: {
+      type: { type: 'string', const: 'http' },
+      method: {
+        type: 'string',
+        enum: isQuery ? ['GET', 'HEAD', 'DELETE'] : ['POST', 'PUT', 'PATCH'],
+      },
+    },
+    required: isQuery ? ['type', 'method'] : ['type', 'method', 'bodyType', 'body'],
+    additionalProperties: true,
+  };
+  if (!isQuery) {
+    inputSchemaInner.properties.bodyType = {
+      type: 'string',
+      enum: ['json', 'form-data', 'text'],
+    };
+    inputSchemaInner.properties.body = (metadata.input?.schema as any) ?? { type: 'object' };
+  } else if (metadata.input?.schema) {
+    inputSchemaInner.properties.queryParams = metadata.input.schema as any;
+  }
+
+  const schema: any = {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    type: 'object',
+    properties: { input: inputSchemaInner },
+    required: ['input'],
+  };
+  if (metadata.output?.schema) {
+    schema.properties.output = metadata.output.schema as any;
+  }
+
+  return {
+    info: { input: inputInfo, output: outputInfo },
+    schema,
+  };
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -857,7 +939,10 @@ async function dispatchGatewayRequest(
       },
       accepts,
       extensions: {
-        bazaar: buildBazaarExtension(endpoint.discovery_metadata),
+        bazaar: buildBazaarExtension(
+          endpoint.discovery_metadata,
+          endpoint.method || 'GET'
+        ),
       },
     };
 

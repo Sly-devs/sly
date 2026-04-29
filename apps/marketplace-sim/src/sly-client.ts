@@ -939,4 +939,230 @@ export class SlyClient {
       return null;
     }
   }
+
+  /**
+   * x402 fetch against an EXTERNAL URL — the agentic.market style flow.
+   *
+   * Mirrors what the MCP `x402_fetch` tool does (packages/mcp-server/src/
+   * server-factory.ts:1953+). Probe the URL, parse the 402 challenge, get
+   * the agent's signed authorization from /v1/agents/:id/x402-sign, build
+   * an X-PAYMENT envelope, retry. The platform records a transfer for the
+   * sign + a record-settlement on completion / failure so the ledger
+   * reflects what actually happened on-chain.
+   *
+   * Used by the external_marketplace_x402 sim block to drive real
+   * agentic.market endpoints; differs from `payX402` (which only handles
+   * Sly-internal endpoints by `endpointId`).
+   */
+  async x402FetchExternal(params: {
+    agentId: string;
+    url: string;
+    method?: string;
+    body?: string;
+    headers?: Record<string, string>;
+    /** Cap in token base units (string). e.g. "100000" = $0.10 USDC. */
+    maxPriceBaseUnits?: string;
+    /** Captured intent for the ledger row — what the agent thought it was buying. */
+    agentReason?: string;
+  }): Promise<{
+    paid: boolean;
+    status: number | null;
+    pricePaidBaseUnits?: string;
+    network?: string;
+    transferId?: string | null;
+    bodyPreview?: string;
+    bodyParsed?: any;
+    error?: string;
+  }> {
+    const method = params.method || 'GET';
+    const baseHeaders: Record<string, string> = { Accept: 'application/json', ...(params.headers || {}) };
+    const firstInit: RequestInit = { method, headers: baseHeaders };
+    if (params.body !== undefined) firstInit.body = params.body;
+
+    const firstRes = await fetch(params.url, firstInit);
+    if (firstRes.status !== 402) {
+      const text = await firstRes.text();
+      return { paid: false, status: firstRes.status, bodyPreview: text.slice(0, 1024) };
+    }
+
+    const challengeText = await firstRes.text();
+    let challenge = safeParseJson(challengeText);
+    if (!challenge || typeof challenge !== 'object' || !pickX402Accept(challenge)) {
+      const headerChallenge = decodePaymentRequiredHeader(firstRes.headers.get('payment-required'));
+      if (headerChallenge) challenge = headerChallenge;
+    }
+    const accept = pickX402Accept(challenge);
+    if (!accept) {
+      return { paid: false, status: 402, error: `402 with no usable accepts[] entry. Body: ${challengeText.slice(0, 200)}` };
+    }
+    if (accept.scheme && accept.scheme !== 'exact') {
+      return { paid: false, status: 402, error: `Unsupported x402 scheme "${accept.scheme}"` };
+    }
+    const amount = String(accept.amount ?? accept.maxAmountRequired ?? '');
+    const payTo = accept.payTo;
+    if (!payTo || !amount) {
+      return { paid: false, status: 402, error: `Challenge missing payTo or amount: ${JSON.stringify(accept)}` };
+    }
+    if (params.maxPriceBaseUnits && BigInt(amount) > BigInt(params.maxPriceBaseUnits)) {
+      return { paid: false, status: 402, error: `Challenge amount ${amount} exceeds maxPriceBaseUnits ${params.maxPriceBaseUnits}` };
+    }
+    const chainId = networkToChainId(accept.network);
+    if (!chainId) {
+      return { paid: false, status: 402, error: `Unsupported network "${accept.network}"` };
+    }
+
+    const timeoutSec = Number(accept.maxTimeoutSeconds) > 0 ? Number(accept.maxTimeoutSeconds) : 300;
+    const validBefore = Math.floor(Date.now() / 1000) + timeoutSec;
+    let derivedHost: string | null = null;
+    let derivedPath: string | null = null;
+    try {
+      const u = new URL(params.url);
+      derivedHost = u.hostname;
+      derivedPath = u.pathname;
+    } catch { /* malformed url */ }
+    const resourcePayload = {
+      url: params.url,
+      host: derivedHost,
+      path: derivedPath,
+      method,
+      marketplace: derivedHost && /agentic\.market$|\.agentic\.market$/i.test(derivedHost) ? 'agentic.market' : null,
+    };
+
+    let signed: any;
+    try {
+      signed = await this.request<any>(
+        `/v1/agents/${encodeURIComponent(params.agentId)}/x402-sign`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            to: payTo,
+            value: amount,
+            chainId,
+            validBefore,
+            resource: resourcePayload,
+            ...(params.agentReason ? { intent: { reason: params.agentReason } } : {}),
+          }),
+        },
+        'agent',
+      );
+    } catch (e: any) {
+      return { paid: false, status: 402, error: `x402-sign failed: ${e.message || String(e)}` };
+    }
+
+    const safeRecord = async (failureReason: string): Promise<void> => {
+      if (!signed?.transferId) return;
+      try {
+        await this.request(
+          `/v1/transfers/${signed.transferId}/record-settlement`,
+          { method: 'POST', body: JSON.stringify({ failureReason: failureReason.slice(0, 500) }) },
+          'agent',
+        );
+      } catch { /* swallow — best-effort cleanup */ }
+    };
+
+    let xPaymentHeader: string;
+    try {
+      xPaymentHeader = buildX402PaymentHeader(challenge, signed);
+    } catch (e: any) {
+      await safeRecord(`buildX402PaymentHeader failed: ${e.message || String(e)}`);
+      return { paid: false, status: 402, error: `buildX402PaymentHeader: ${e.message}`, transferId: signed?.transferId || null };
+    }
+
+    const secondInit: RequestInit = {
+      method,
+      headers: { ...baseHeaders, 'X-PAYMENT': xPaymentHeader },
+    };
+    if (params.body !== undefined) secondInit.body = params.body;
+
+    let secondRes: Response;
+    let secondText = '';
+    try {
+      secondRes = await fetch(params.url, secondInit);
+      secondText = await secondRes.text();
+    } catch (e: any) {
+      const reason = `vendor unreachable: ${e?.message || String(e)}`;
+      await safeRecord(reason);
+      return { paid: false, status: null, error: reason, transferId: signed?.transferId || null };
+    }
+
+    const paid = secondRes.status >= 200 && secondRes.status < 300;
+    if (!paid) {
+      await safeRecord(`Vendor returned ${secondRes.status}: ${secondText.slice(0, 200)}`);
+    }
+    return {
+      paid,
+      status: secondRes.status,
+      pricePaidBaseUnits: paid ? amount : undefined,
+      network: accept.network,
+      transferId: signed?.transferId || null,
+      bodyPreview: secondText.slice(0, 1024),
+      bodyParsed: paid ? safeParseJson(secondText) : undefined,
+    };
+  }
+}
+
+// ─── x402 helpers (mirrors packages/mcp-server/src/server-factory.ts) ───
+//
+// Inlined here so the sim doesn't need a runtime dep on the MCP package.
+// Keep these in sync if the upstream challenge format evolves.
+
+function safeParseJson(s: string): any {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+function pickX402Accept(challenge: any): any | null {
+  if (!challenge || typeof challenge !== 'object') return null;
+  if (Array.isArray(challenge.accepts) && challenge.accepts.length > 0) {
+    const supported = challenge.accepts.find((a: any) => {
+      if (!a || typeof a !== 'object') return false;
+      return networkToChainId(a.network) !== null;
+    });
+    return supported || challenge.accepts[0];
+  }
+  if (challenge.scheme && challenge.network) return challenge;
+  return null;
+}
+
+function decodePaymentRequiredHeader(header: string | null | undefined): any | null {
+  if (!header) return null;
+  try {
+    const json = Buffer.from(header, 'base64').toString('utf8');
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function networkToChainId(network: string | undefined): number | null {
+  if (!network) return null;
+  const n = String(network).toLowerCase();
+  if (n === 'base' || n === 'eip155:8453') return 8453;
+  if (n === 'base-sepolia' || n === 'eip155:84532') return 84532;
+  const m = n.match(/^eip155:(\d+)$/);
+  if (m) return Number(m[1]);
+  return null;
+}
+
+function buildX402PaymentHeader(challenge: any, signed: any): string {
+  const accept = pickX402Accept(challenge) || {};
+  const x402Version = (challenge && typeof challenge === 'object' && challenge.x402Version) || 2;
+  const scheme = accept.scheme || 'exact';
+  const network = accept.network || (signed.chainId === 84532 ? 'base-sepolia' : 'base');
+  const envelope = {
+    x402Version,
+    scheme,
+    network,
+    payload: {
+      authorization: {
+        from: signed.from,
+        to: signed.to,
+        value: String(signed.value),
+        validAfter: String(signed.validAfter ?? 0),
+        validBefore: String(signed.validBefore),
+        nonce: signed.nonce,
+      },
+      signature: signed.signature,
+    },
+  };
+  return Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64');
 }

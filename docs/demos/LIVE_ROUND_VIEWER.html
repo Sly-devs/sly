@@ -143,6 +143,13 @@ canvas{width:100%;height:100%}
 #poolPopover #reseedBtn{background:#10b981;color:white;border:none;padding:6px 14px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;width:100%;margin-top:6px}
 #poolPopover #reseedBtn:hover{opacity:0.9}
 #poolPopover #reseedBtn:disabled{opacity:0.4;cursor:not-allowed}
+#poolPopover.live-mode{border-color:#ef4444}
+#poolPopover.live-mode .pp-title{color:#ef4444}
+#poolPopover.live-mode #reseedBtn{background:#ef4444}
+#poolPopover .pp-live{margin:6px 0;padding:6px 8px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:4px;display:flex;align-items:center;gap:6px;font-size:11px;color:#ef4444}
+#poolPopover .pp-live input{margin:0}
+#poolPopover .pp-live .pp-live-warn{display:none;font-size:10px;line-height:1.4;color:#fca5a5;margin-top:6px;padding-top:6px;border-top:1px dashed rgba(239,68,68,0.3)}
+#poolPopover.live-mode .pp-live-warn{display:block}
 
 /* Report modal */
 .modal-backdrop{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;display:none;align-items:center;justify-content:center}
@@ -234,6 +241,11 @@ canvas{width:100%;height:100%}
     <div class="pp-row"><label>Rogue</label><input type="number" id="poolRogue" min="0" max="20" value="1"></div>
     <div class="pp-row"><label>Whale</label><input type="number" id="poolWhale" min="0" max="5" value="0"></div>
     <div class="pp-row"><label>Colluder</label><input type="number" id="poolColluder" min="0" max="10" value="0"></div>
+    <label class="pp-live" title="When checked, agents are seeded against Base mainnet — required for x402 scenarios that pay agentic.market endpoints. Test pool stays separate.">
+      <input type="checkbox" id="poolLive" onchange="updatePoolPopoverMode()">
+      <span>🔴 Live pool (Base mainnet — real USDC)</span>
+    </label>
+    <div class="pp-live-warn">EOAs will be provisioned on Base mainnet. You'll need to fund them from your treasury before scenarios can transact. Live agents are stored separately in tokens.live.json.</div>
     <button id="reseedBtn" onclick="reseedPool()">⟳ Re-seed pool</button>
   </div>
 </div>
@@ -963,6 +975,23 @@ async function refreshPool() {
   }
 }
 
+// Toggle the popover into "live mode" — red border, red button, expanded
+// warning copy. Purely visual; the actual confirmation prompt fires when
+// the user clicks the seed button.
+function updatePoolPopoverMode() {
+  const pop = document.getElementById('poolPopover');
+  const live = document.getElementById('poolLive')?.checked;
+  const btn = document.getElementById('reseedBtn');
+  if (!pop || !btn) return;
+  if (live) {
+    pop.classList.add('live-mode');
+    btn.textContent = '⟳ Seed LIVE pool (real USDC)';
+  } else {
+    pop.classList.remove('live-mode');
+    btn.textContent = '⟳ Re-seed pool';
+  }
+}
+
 async function reseedPool() {
   if (!connected) { addFeedItem('error', 'Connect first', 'error'); return; }
   if (scenarioRunning) {
@@ -977,25 +1006,71 @@ async function reseedPool() {
   const rogue = parseInt(document.getElementById('poolRogue').value, 10) || 0;
   const whale = parseInt(document.getElementById('poolWhale').value, 10) || 0;
   const colluder = parseInt(document.getElementById('poolColluder').value, 10) || 0;
+  const live = !!document.getElementById('poolLive')?.checked;
   const btn = document.getElementById('reseedBtn');
+
+  // Live pool: typed-confirm gate before any HTTP fires. Mirrors the
+  // sidecar's server-side gate (which would 412 anyway), but the prompt
+  // gives the operator a chance to back out without seeing a stack trace.
+  let confirmLivePool;
+  if (live) {
+    const total = honest + quality + rogue + whale + colluder;
+    const typed = window.prompt(
+      '🔴 LIVE AGENT POOL\n\n' +
+      'About to seed ' + total + ' live agents on Base mainnet. Each will be assigned\n' +
+      'an on-chain EOA you must fund from your treasury before any\n' +
+      'live scenario can transact.\n\n' +
+      'Test pool (tokens.json) stays untouched.\n\n' +
+      'Type LIVE to confirm. Anything else cancels.',
+    );
+    if (typed !== 'LIVE') {
+      addFeedItem('error', 'Live seed cancelled — confirmation phrase not entered.', 'rejected');
+      return;
+    }
+    confirmLivePool = 'CONFIRM_LIVE_POOL';
+  }
+
   btn.disabled = true;
-  btn.textContent = '⟳ Seeding...';
+  btn.textContent = live ? '⟳ Seeding LIVE...' : '⟳ Seeding...';
   const extras = [];
   if (whale > 0) extras.push(whale + ' whale');
   if (colluder > 0) extras.push(colluder + ' colluder');
   const extrasNote = extras.length > 0 ? ' + ' + extras.join(' + ') : '';
-  addFeedItem('system', 'Re-seeding pool: ' + honest + ' honest + ' + quality + ' quality + ' + rogue + ' rogue' + extrasNote + '...', 'created');
+  addFeedItem(
+    live ? 'alert' : 'system',
+    (live ? '🔴 Seeding LIVE pool: ' : 'Re-seeding pool: ') +
+      honest + ' honest + ' + quality + ' quality + ' + rogue + ' rogue' + extrasNote + '...',
+    live ? 'disputed' : 'created',
+  );
   try {
+    const body = live
+      ? { honest, quality, rogue, whale, colluder, environment: 'live', confirmLivePool }
+      : { honest, quality, rogue, whale, colluder };
     const r = await fetch(url + '/admin/round/sim/seed', {
       method: 'POST', headers,
-      body: JSON.stringify({ honest, quality, rogue, whale, colluder }),
+      body: JSON.stringify(body),
     });
     const j = await r.json();
     if (!r.ok) {
-      addFeedItem('error', 'Re-seed failed: ' + (j?.error || JSON.stringify(j).slice(0, 100)), 'rejected');
+      addFeedItem('error', 'Seed failed: ' + (j?.error || JSON.stringify(j).slice(0, 200)), 'rejected');
     } else {
       const total = j?.data?.total ?? '?';
-      addFeedItem('check', 'Pool re-seeded: ' + total + ' agents', 'completed');
+      const env = j?.data?.environment ?? (live ? 'live' : 'test');
+      addFeedItem('check', 'Pool seeded (' + env + '): ' + total + ' agents', 'completed');
+      // For live pools, list the EOA addresses the operator needs to
+      // fund. Each is logged as its own findings entry so it shows up
+      // in the round report — gives them a copyable list.
+      if (live && Array.isArray(j?.data?.agents)) {
+        const eoas = j.data.agents.filter(function (a) { return a && a.agentEoaAddress; });
+        if (eoas.length > 0) {
+          addFeedItem('alert', '⚠ Fund these ' + eoas.length + ' EOA(s) from your Base mainnet treasury before running live scenarios:', 'disputed');
+          for (const a of eoas) {
+            addFeedItem('alert', '  ' + a.name + ' → ' + a.agentEoaAddress, 'disputed');
+          }
+        } else {
+          addFeedItem('alert', 'Live pool seeded but no EOA addresses returned — check sim sidecar logs for /v1/agents/:id/evm-keys errors.', 'disputed');
+        }
+      }
       await refreshPool();
       // Auto-close the popover after a successful re-seed
       const pop = document.getElementById('poolPopover');
@@ -1005,7 +1080,7 @@ async function reseedPool() {
     addFeedItem('error', 'Re-seed crashed: ' + err.message, 'rejected');
   } finally {
     btn.disabled = false;
-    btn.textContent = '⟳ Re-seed';
+    btn.textContent = live ? '⟳ Seed LIVE pool (real USDC)' : '⟳ Re-seed';
   }
 }
 
@@ -1100,6 +1175,30 @@ async function executeScenario(scenario) {
       }
       const simMode = document.getElementById('modeSelect').value || 'openrouter';
       const isBaseline = document.getElementById('baselineToggle')?.checked || false;
+      // Live-money scenarios pay real USDC on Base mainnet. Gate behind a
+      // typed confirmation so a misclick can't drain a treasury wallet.
+      // Phrase matches what the sim sidecar's /run gate expects.
+      const LIVE_MONEY_SCENARIOS = new Set(['resale_chain_x402_external', 'external_marketplace_x402']);
+      let confirmLiveSpend;
+      if (LIVE_MONEY_SCENARIOS.has(scenario.id)) {
+        const cap = (params && (params.maxRoundSpendUsdc || params.maxPricePerCallUsdc)) || '?';
+        const typed = window.prompt(
+          '⚠ LIVE MONEY SCENARIO\n\n' +
+          scenario.name + ' will spend real USDC on Base mainnet against agentic.market endpoints.\n' +
+          'Round cap: $' + cap + '\n\n' +
+          'Type LIVE to confirm. Anything else cancels.',
+        );
+        if (typed !== 'LIVE') {
+          addFeedItem('error', 'Live-money scenario cancelled — confirmation phrase not entered.', 'rejected');
+          scenarioRunning = false;
+          document.getElementById('stopBtn').style.display = 'none';
+          document.getElementById('runBtn').disabled = false;
+          document.getElementById('scenarioSelect').disabled = false;
+          return;
+        }
+        confirmLiveSpend = 'I_UNDERSTAND_REAL_USDC_WILL_BE_SPENT';
+        addFeedItem('alert', '⚠ Live spend confirmed by operator — proceeding to fire on Base mainnet.', 'disputed');
+      }
       endpoint = url + '/admin/round/sim/run';
       body = {
         scenarioId: scenario.id,
@@ -1108,6 +1207,7 @@ async function executeScenario(scenario) {
         baseline: isBaseline,
         params,
         ...(styles ? { styles } : {}),
+        ...(confirmLiveSpend ? { confirmLiveSpend } : {}),
       };
     } else {
       endpoint = url + '/admin/round/execute';

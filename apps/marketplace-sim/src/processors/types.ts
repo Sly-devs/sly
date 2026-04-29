@@ -84,6 +84,13 @@ export interface SimAgent {
   ed25519KeyId?: string;
   walletId?: string;
   balance: number;
+  /** Platform environment binding. 'test' agents sign Base Sepolia only;
+   *  'live' agents sign Base mainnet only. Real-money scenarios filter
+   *  to environment='live' before running. */
+  environment?: 'test' | 'live';
+  /** On-chain agent EOA address — populated after the seeder calls
+   *  /v1/agents/:id/evm-keys. Required for the x402_external flows. */
+  agentEoaAddress?: string;
 }
 
 /**

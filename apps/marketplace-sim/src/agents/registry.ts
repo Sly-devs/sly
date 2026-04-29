@@ -35,21 +35,39 @@ export interface SeededAgentRecord {
   walletId?: string;
   balance: number;
   kyaTier: number;
+  /** On-chain agent EOA address — provisioned via /v1/agents/:id/evm-keys.
+   *  Required for x402FetchExternal flows (external_marketplace_x402, resale
+   *  x402_external). Empty until the agent is reseeded with EOA enabled. */
+  agentEoaAddress?: string;
+  /** EOA chain — 'base-sepolia' for test agents, 'base' for live. */
+  agentEoaChain?: 'base' | 'base-sepolia';
+  /** Platform environment the agent is bound to. Test agents can only sign
+   *  Base Sepolia; live agents can only sign Base mainnet (enforced server-
+   *  side at /v1/agents/:id/x402-sign). Live-pool agents are the only ones
+   *  scenarios with real-money sourceProtocols (x402_external) will pick. */
+  environment?: 'test' | 'live';
   seededAt: string;
 }
 
 export type SeededAgentBook = Record<string, SeededAgentRecord[]>;
 
 const TOKENS_PATH = resolve(process.cwd(), 'tokens.json');
+const TOKENS_LIVE_PATH = resolve(process.cwd(), 'tokens.live.json');
 
-/** Raw read of tokens.json. Throws if not seeded. */
-export function loadSeededBook(): SeededAgentBook {
-  if (!existsSync(TOKENS_PATH)) {
+/** Raw read of tokens.json. Throws if not seeded. Pass `live: true` to load
+ *  the live pool from tokens.live.json — that's what real-money scenarios
+ *  (resale_chain_x402_external, external_marketplace_x402) draw from. */
+export function loadSeededBook(opts: { live?: boolean } = {}): SeededAgentBook {
+  const path = opts.live ? TOKENS_LIVE_PATH : TOKENS_PATH;
+  if (!existsSync(path)) {
+    const cmd = opts.live
+      ? 'pnpm seed-personas --live'
+      : 'pnpm seed-personas';
     throw new Error(
-      `tokens.json not found at ${TOKENS_PATH}. Run \`pnpm seed-personas\` first.`,
+      `${opts.live ? 'tokens.live.json' : 'tokens.json'} not found at ${path}. Run \`${cmd}\` first.`,
     );
   }
-  const raw = JSON.parse(readFileSync(TOKENS_PATH, 'utf-8'));
+  const raw = JSON.parse(readFileSync(path, 'utf-8'));
 
   // Backwards compat: legacy shape was Record<personaId, SeededAgent>.
   // Detect by checking if the first value looks like a single agent (has agentId).
@@ -66,12 +84,13 @@ export function loadSeededBook(): SeededAgentBook {
 }
 
 /**
- * Materialize the full pool of SimAgents from tokens.json.
+ * Materialize the full pool of SimAgents from tokens.json (or
+ * tokens.live.json when `live: true`).
  * Each record is enriched with its template's behavioral fields (role,
  * prompt, style) so scenarios + processors get one self-contained object.
  */
-export function loadSimAgents(): SimAgent[] {
-  const book = loadSeededBook();
+export function loadSimAgents(opts: { live?: boolean } = {}): SimAgent[] {
+  const book = loadSeededBook(opts);
   const out: SimAgent[] = [];
   for (const [templateId, records] of Object.entries(book)) {
     const template = PERSONA_TEMPLATES[templateId];
@@ -98,6 +117,8 @@ export function loadSimAgents(): SimAgent[] {
         ed25519KeyId: r.ed25519KeyId,
         walletId: r.walletId,
         balance: r.balance,
+        environment: r.environment,
+        agentEoaAddress: r.agentEoaAddress,
       });
     }
   }

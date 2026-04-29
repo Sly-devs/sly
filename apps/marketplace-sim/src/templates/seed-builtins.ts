@@ -1369,6 +1369,86 @@ Prerequisite: \`pnpm --filter @sly/api tsx scripts/seed-sim-commerce.ts\` must h
 exist in the sim tenant with overlapping sku fields.
 `;
 
+const RESALE_CHAIN_X402_EXTERNAL = `---
+id: resale_chain_x402_external
+name: Resale Arbitrage (agentic.market x402 → A2A peer)
+buildingBlock: resale_chain
+requires: [whale, mm, honest]
+pool: { whale: 1, mm: 2, honest: 3 }
+params:
+  - { key: cycleSleepMs, type: int, label: Sleep between cycles (ms), default: 4000, min: 1000, max: 10000, step: 500 }
+  - { key: maxRoundSpendUsdc, type: float, label: Max upstream spend per round (USDC), default: 1.0, min: 0.10, max: 10.0, step: 0.10 }
+  - { key: maxPricePerCallUsdc, type: float, label: Max per-call upstream price (USDC), default: 0.10, min: 0.001, max: 5.0, step: 0.01 }
+analyzerHints: |
+  Reseller agents source REAL x402 endpoints from agentic.market (Base + USDC), repackage at a 25% markup,
+  and deliver to peer agents via A2A with an AP2 mandate funding the marked-up price. The A2A leg + mandate
+  flow is identical to resale_chain_acp; only the source-of-supply changes.
+
+  REQUIRES: reseller agents must have a provisioned + funded agent_eoa wallet. Re-seed via the marketplace-sim
+  seeder to auto-provision EOAs (POST /v1/agents/:id/evm-keys), then fund the resulting addresses (faucet for
+  test agents on Base Sepolia, treasury for live agents on Base mainnet). Without a funded EOA, every cycle
+  surfaces an alert at the upstream-pay step and skips before the A2A resale fires.
+
+  EXPECTED: every cycle that finds an affordable + reachable agentic.market endpoint settles upstream on-chain,
+  then completes the standard resale flow. Round caps at maxRoundSpendUsdc total upstream spend.
+blockConfig:
+  sourceProtocol: x402_external
+  markup: 1.25
+  maxRoundSpendUsdc: 1.0
+  maxPricePerCallUsdc: 0.10
+  defaults:
+    cycleSleepMs: 4000
+    resellerStyles: [whale, mm]
+    buyerStyles: [honest]
+---
+
+# Resale Arbitrage (x402 external → A2A peer)
+
+Drives reseller agents to source real x402 endpoints from agentic.market and repackage them to peer agents
+at a markup. Settles upstream on Base USDC; downstream A2A resale uses the existing AP2 mandate flow.
+
+Mainnet by default. Set both \`maxRoundSpendUsdc\` and \`maxPricePerCallUsdc\` to small values
+($0.10 / $0.01) for the first run — and confirm the reseller's agent_eoa is funded before clicking Start.
+`;
+
+const EXTERNAL_MARKETPLACE_X402 = `---
+id: external_marketplace_x402
+name: External x402 Marketplace (agentic.market)
+buildingBlock: external_marketplace_x402
+requires: [whale, mm, honest]
+pool: { whale: 1, mm: 2, honest: 3, opportunist: 2 }
+params:
+  - { key: cycleSleepMs, type: int, label: Sleep between cycles (ms), default: 4000, min: 1000, max: 10000, step: 500 }
+  - { key: maxRoundSpendUsdc, type: float, label: Max total round spend (USDC), default: 1.0, min: 0.10, max: 10.0, step: 0.10 }
+  - { key: maxPricePerCallUsdc, type: float, label: Max per-call price (USDC), default: 0.10, min: 0.001, max: 5.0, step: 0.01 }
+analyzerHints: |
+  Sim agents transact against REAL external x402 endpoints listed on agentic.market. Each cycle picks an active
+  buyer + a random affordable endpoint, runs the full 402 → /v1/agents/:id/x402-sign → X-PAYMENT retry loop
+  against the external URL, settles on Base via USDC. Endpoints are sourced live from
+  \`https://api.agentic.market/v1/services\` (no internal merchant seeding needed). Failures are surfaced as
+  alert comments — typical causes are vendor 5xx, sign rejected by KYA limits, or facilitator timeouts.
+
+  EXPECTED: real on-chain settlement of small-dollar payments (typically <$0.01/call). The viewer will draw
+  buyer→ext:agentic-market:<host> edges per successful purchase. Round terminates early once
+  \`maxRoundSpendUsdc\` is reached.
+blockConfig:
+  defaults:
+    cycleSleepMs: 4000
+    buyerStyles: [whale, mm, honest, opportunist]
+  maxRoundSpendUsdc: 1.0
+  maxPricePerCallUsdc: 0.10
+---
+
+# External x402 Marketplace (agentic.market)
+
+Drives sim agents through real x402 purchases against agentic.market endpoints. The catalog is fetched live at
+round start and filtered to Base+USDC reachability. Each cycle: a buyer picks an affordable endpoint, signs an
+authorization through the platform's x402-sign endpoint, retries the request with X-PAYMENT, settles on-chain.
+
+Round-budget cap (\`maxRoundSpendUsdc\`) and per-call cap (\`maxPricePerCallUsdc\`) keep the spend bounded.
+Mainnet by default — set \`SLY_API_URL\` to a sandbox + Base Sepolia config to dry-run.
+`;
+
 export const BUILT_INS: BuiltInTemplate[] = [
   {
     template_id: 'competitive_review_real',
@@ -1537,6 +1617,18 @@ export const BUILT_INS: BuiltInTemplate[] = [
     name: 'Merchant Comparison (agents shop competing SKUs)',
     building_block: 'merchant_comparison',
     markdown: MERCHANT_COMPARISON,
+  },
+  {
+    template_id: 'external_marketplace_x402',
+    name: 'External x402 Marketplace (agentic.market)',
+    building_block: 'external_marketplace_x402',
+    markdown: EXTERNAL_MARKETPLACE_X402,
+  },
+  {
+    template_id: 'resale_chain_x402_external',
+    name: 'Resale Arbitrage (agentic.market x402 → A2A peer)',
+    building_block: 'resale_chain',
+    markdown: RESALE_CHAIN_X402_EXTERNAL,
   },
 ];
 

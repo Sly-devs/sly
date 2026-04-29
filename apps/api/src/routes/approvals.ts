@@ -56,6 +56,7 @@ function mapApprovalToResponse(approval: any) {
     amount: approval.amount,
     currency: approval.currency,
     recipient: approval.recipient,
+    paymentContext: approval.paymentContext,
     status: approval.status,
     expiresAt: approval.expiresAt,
     decidedBy: approval.decidedBy,

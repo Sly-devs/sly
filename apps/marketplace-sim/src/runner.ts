@@ -18,7 +18,7 @@ import { loadSimAgents, filterByStyle } from './agents/registry.js';
 import type { ScenarioDefinition, ScenarioResult, PoolConfig } from './scenarios/types.js';
 import { resolveParams } from './scenarios/types.js';
 import { list as listTemplates, getByTemplateId, markRun } from './templates/store.js';
-import { buildScenarioFromTemplate } from './scenarios/markdown-engine.js';
+import { buildScenarioFromTemplate, parseFrontmatter } from './scenarios/markdown-engine.js';
 import { isSupabaseConfigured } from './db.js';
 import { seedPersonas } from './seeder.js';
 
@@ -112,10 +112,31 @@ export async function startRun(opts: RunOptions): Promise<RunHandle> {
   // Reach the API up-front so we fail fast if it's down.
   await sly.health();
 
+  // Live-money scenarios draw from the live pool (tokens.live.json); all
+  // other scenarios use the test pool (tokens.json). Detected by reloading
+  // the template's buildingBlock + blockConfig.sourceProtocol so a single
+  // resale_chain template variant flips between pools without code changes.
+  let usesLivePool = false;
+  try {
+    const tpl = await getByTemplateId(opts.scenarioId);
+    if (tpl) {
+      const { frontmatter } = parseFrontmatter(tpl.markdown || '');
+      const bb = (frontmatter.buildingBlock as string | undefined) || tpl.building_block || '';
+      const bc = (frontmatter.blockConfig as Record<string, unknown> | undefined) || {};
+      usesLivePool =
+        bb === 'external_marketplace_x402' ||
+        (bb === 'resale_chain' && (bc as any)?.sourceProtocol === 'x402_external');
+    }
+  } catch { /* fall back to test pool — better than crashing on a parse blip */ }
+
   // Load the seeded SimAgent pool. Optionally filter by style.
-  let agents = loadSimAgents();
+  let agents = loadSimAgents({ live: usesLivePool });
   if (agents.length === 0) {
-    throw new Error('No seeded agents found in tokens.json — run `pnpm seed-personas` first.');
+    throw new Error(
+      usesLivePool
+        ? 'No seeded LIVE agents found in tokens.live.json — POST /seed with environment=live first.'
+        : 'No seeded agents found in tokens.json — run `pnpm seed-personas` first.',
+    );
   }
   if (opts.styles && opts.styles.length > 0) {
     agents = filterByStyle(agents, opts.styles);

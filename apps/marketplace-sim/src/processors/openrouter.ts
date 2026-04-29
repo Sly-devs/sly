@@ -34,22 +34,26 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 /**
  * Default model assignments per persona style. Override via
  * OPENROUTER_MODEL_<STYLE> env vars (e.g. OPENROUTER_MODEL_HONEST=...).
+ *
+ * All entries are paid models with stable upstreams so the sim doesn't
+ * stall on shared-key rate limits. We previously routed 'honest' (and the
+ * 4 personas that share its style) through `google/gemini-2.0-flash-001`,
+ * which is dirt-cheap but goes through OpenRouter's shared upstream Google
+ * key — that pool gets 429'd regularly and credits don't help (the error
+ * even tells you "add your own key"). Switched to claude-3.5-haiku, which
+ * is a paid Anthropic route with predictable QPS headroom.
  */
 const DEFAULT_MODELS: Record<string, string> = {
   'quality-reviewer': 'anthropic/claude-sonnet-4',
   'whale': 'anthropic/claude-sonnet-4',
-  'honest': 'google/gemini-2.0-flash-001',
+  // honest absorbs honest-trader / budget-trader / newcomer / opportunist —
+  // a single paid Anthropic route keeps the sim's largest persona cohort
+  // unblocked when free-tier upstreams (Gemini) saturate.
+  'honest': 'anthropic/claude-3.5-haiku',
   'rogue-disputer': 'openai/gpt-4o-mini',
   'rogue-spam': 'deepseek/deepseek-chat-v3-0324',
   'colluder': 'mistralai/mistral-small-3.1-24b-instruct',
   'mm': 'qwen/qwen-2.5-72b-instruct',
-  // New personas — each gets a distinct model for genuine capability diversity
-  // budget-trader uses 'honest' style → Gemini Flash (cheapest)
-  // specialist uses 'quality-reviewer' style → Sonnet (premium)
-  // newcomer uses 'honest' style → Gemini Flash
-  // conservative-buyer uses 'quality-reviewer' style → Sonnet
-  // opportunist uses 'honest' style → Gemini Flash
-  // researcher uses 'quality-reviewer' style → Sonnet
 };
 
 // Rough pricing per million tokens (from OpenRouter pricing page).

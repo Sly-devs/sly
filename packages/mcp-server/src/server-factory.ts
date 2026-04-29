@@ -1344,6 +1344,85 @@ export function createMcpServer(
         };
       }
 
+      case 'x402_validate_endpoint': {
+        const { endpointId } = args as { endpointId: string };
+        const result = await ctx.sly.request(
+          `/v1/x402/endpoints/${endpointId}/validate`,
+          {
+            method: 'POST',
+            body: JSON.stringify({}),
+          },
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'x402_publish_endpoint': {
+        const { endpointId, metadataOverride, force } = args as {
+          endpointId: string;
+          metadataOverride?: Record<string, unknown>;
+          force?: boolean;
+        };
+        const body: Record<string, unknown> = {};
+        if (metadataOverride !== undefined) body.metadataOverride = metadataOverride;
+        if (force !== undefined) body.force = force;
+        const result = await ctx.sly.request(
+          `/v1/x402/endpoints/${endpointId}/publish`,
+          {
+            method: 'POST',
+            body: JSON.stringify(body),
+          },
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'x402_unpublish_endpoint': {
+        const { endpointId } = args as { endpointId: string };
+        const result = await ctx.sly.request(
+          `/v1/x402/endpoints/${endpointId}/unpublish`,
+          {
+            method: 'POST',
+            body: JSON.stringify({}),
+          },
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'x402_get_publish_status': {
+        const { endpointId } = args as { endpointId: string };
+        const result = await ctx.sly.request(
+          `/v1/x402/endpoints/${endpointId}/publish-status`,
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
       case 'x402_list_endpoints': {
         const params = new URLSearchParams();
         if (args && (args as any).status) params.set('status', (args as any).status);

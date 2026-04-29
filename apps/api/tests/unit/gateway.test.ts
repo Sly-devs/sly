@@ -221,7 +221,7 @@ describe('buildAcceptsArray', () => {
     expect(accepts).toHaveLength(1);
     const a = accepts[0] as any;
     expect(a.scheme).toBe('exact');
-    expect(a.network).toBe('base'); // CAIP-2/short normalized
+    expect(a.network).toBe('eip155:8453'); // CAIP-2 (buyer derives chainId from this)
     expect(a.payTo).toBe('0xPayoutWallet');
     expect(a.amount).toBe('10000'); // 0.01 USDC at 6 decimals
     expect(a.asset).toBe('0xUSDC');

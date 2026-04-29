@@ -805,9 +805,43 @@ async function dispatchGatewayRequest(
     // PaymentRequired). Without this header, x402-fetch throws "Invalid
     // payment required response" because the body-fallback path only
     // accepts v1.
+    //
+    // @x402/core's safeBase64Encode uses `btoa`, which only accepts Latin-1
+    // characters and throws on multi-byte UTF-8 (em dash, smart quotes,
+    // etc. — common in human-written descriptions). The buyer's decoder
+    // uses `atob` symmetrically, so even if we forced UTF-8 encoding here
+    // the decoder would produce mojibake. Sanitize to ASCII-safe before
+    // encoding so the round-trip survives.
+    const ascii = (s: string): string =>
+      s
+        .replace(/[—–]/g, '-') // em/en dashes → hyphen
+        .replace(/[‘’]/g, "'") // smart single quotes
+        .replace(/[“”]/g, '"') // smart double quotes
+        .replace(/[…]/g, '...')      // horizontal ellipsis
+        .replace(/[^\x00-\x7F]/g, '');    // strip remaining non-ASCII
+    const sanitizedBody = {
+      ...body,
+      error: ascii(body.error || ''),
+      resource: {
+        ...body.resource,
+        description: ascii(body.resource.description),
+        mimeType: ascii(body.resource.mimeType),
+      },
+      extensions: body.extensions
+        ? {
+            bazaar: body.extensions.bazaar
+              ? {
+                  ...(body.extensions.bazaar as any),
+                  description: ascii(((body.extensions.bazaar as any).description) || ''),
+                }
+              : body.extensions.bazaar,
+          }
+        : undefined,
+    };
+
     let paymentRequiredHeader = '';
     try {
-      paymentRequiredHeader = encodePaymentRequiredHeader(body as any);
+      paymentRequiredHeader = encodePaymentRequiredHeader(sanitizedBody as any);
     } catch (err: any) {
       console.error('[gateway] encodePaymentRequiredHeader failed:', err?.message || err);
     }

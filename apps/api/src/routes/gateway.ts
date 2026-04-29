@@ -1217,22 +1217,47 @@ async function dispatchGatewayRequest(
     });
   }
 
-  // Stream response back, preserving status + content-type, attaching the
-  // x402 receipt headers.
+  // Buffer the backend body so we can return a fixed content-length.
+  // Streaming via `new Response(backendRes.body, ...)` was leaving buyers
+  // hanging waiting for body-end (transfer-encoding handling through
+  // Hono/Railway's edge wasn't terminating cleanly). Buffering trades a
+  // little memory (capped at 8 MB to avoid abuse) for a clean,
+  // deterministic response.
+  const MAX_PROXY_BODY_BYTES = 8 * 1024 * 1024;
+  let responseBytes: Uint8Array;
+  try {
+    const ab = await backendRes.arrayBuffer();
+    responseBytes = new Uint8Array(ab);
+  } catch (err: any) {
+    return jsonResponse(502, {
+      error: 'backend_body_read_failed',
+      detail: err?.message || 'unknown',
+    });
+  }
+  if (responseBytes.byteLength > MAX_PROXY_BODY_BYTES) {
+    return jsonResponse(502, {
+      error: 'backend_body_too_large',
+      detail: `body exceeded ${MAX_PROXY_BODY_BYTES} bytes`,
+    });
+  }
+
+  // Build response headers — preserve content-type etc., drop hop-by-hop
+  // and tenant-leaky headers, and set our own content-length from the
+  // buffered body.
   const respHeaders = new Headers();
   backendRes.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
-    // Drop hop-by-hop headers and anything tenant-leaky.
     if (
       lower === 'transfer-encoding' ||
       lower === 'connection' ||
-      lower === 'content-length' || // node will recompute
+      lower === 'content-length' || // we set our own below
       lower === 'set-cookie' // never proxy tenant cookies to buyers
     ) {
       return;
     }
     respHeaders.set(key, value);
   });
+  respHeaders.set('content-length', String(responseBytes.byteLength));
   if (settle.txHash) {
     respHeaders.set('X-Payment-Receipt', settle.txHash);
   }
@@ -1245,7 +1270,7 @@ async function dispatchGatewayRequest(
     'EXTENSION-RESPONSES, X-Payment-Receipt, x402-version',
   );
 
-  return new Response(backendRes.body, {
+  return new Response(responseBytes as unknown as BodyInit, {
     status: backendRes.status,
     headers: respHeaders,
   });

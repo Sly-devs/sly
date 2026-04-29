@@ -347,49 +347,22 @@ describe('publishEndpoint — idempotency', () => {
   });
 });
 
-describe('publishEndpoint — CDP extension responses', () => {
+describe('publishEndpoint — first-settle probe', () => {
   beforeEach(() => {
-    process.env.CDP_API_KEY_ID = 'test-id';
-    process.env.CDP_API_KEY_SECRET = 'test-secret';
-    process.env.SLY_PUBLISH_PROBE_WALLET_ID = 'probe-w';
+    delete process.env.CDP_API_KEY_ID;
+    delete process.env.CDP_API_KEY_SECRET;
+    delete process.env.CDP_WALLET_SECRET;
+    delete process.env.SLY_PUBLISH_PROBE_WALLET_ID;
   });
 
-  it('marks endpoint failed when CDP returns EXTENSION-RESPONSES: rejected', async () => {
+  it('moves to processing when probe creds are missing (best-effort skip)', async () => {
+    // No CDP env vars: the probe is skipped and the endpoint transitions
+    // to `processing` optimistically — the gateway will overwrite when an
+    // organic settle lands.
     const db = makeDb();
     seedEndpoint(db);
     seedWallet(db);
     const supabase: any = makeSupabase(db);
-
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response('{}', {
-        status: 200,
-        headers: { 'extension-responses': 'rejected:bad-input-schema' },
-      }) as any
-    );
-
-    const result = await publishEndpoint(supabase, ctx, 'ep-1');
-
-    expect(result.status).toBe('failed');
-    expect(result.publishError).toMatch(/rejected/);
-    const ep = db.endpoints.get('ep-1')!;
-    expect(ep.publish_status).toBe('failed');
-    const events = db.events.map((e) => e.event);
-    expect(events).toContain('extension_rejected');
-    fetchSpy.mockRestore();
-  });
-
-  it('moves to processing when CDP returns EXTENSION-RESPONSES: processing', async () => {
-    const db = makeDb();
-    seedEndpoint(db);
-    seedWallet(db);
-    const supabase: any = makeSupabase(db);
-
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response('{}', {
-        status: 200,
-        headers: { 'extension-responses': 'processing' },
-      }) as any
-    );
 
     const result = await publishEndpoint(supabase, ctx, 'ep-1');
 
@@ -397,7 +370,31 @@ describe('publishEndpoint — CDP extension responses', () => {
     expect(result.publishStatus).toBe('processing');
     const events = db.events.map((e) => e.event);
     expect(events).toContain('first_settle');
-    fetchSpy.mockRestore();
+  });
+
+  it('marks endpoint failed when probe creds present but the buyer signer fails', async () => {
+    // With creds set to bogus values, loading the CDP signer will throw
+    // (invalid PEM, unknown wallet, etc.). The function reports `rejected`
+    // with `probe-signer-failed:` prefix and the publish lifecycle
+    // transitions to `failed`.
+    process.env.CDP_API_KEY_ID = 'test-id';
+    process.env.CDP_API_KEY_SECRET = 'test-secret';
+    process.env.CDP_WALLET_SECRET = 'test-wallet-secret';
+    process.env.SLY_PUBLISH_PROBE_WALLET_ID = '0x0000000000000000000000000000000000000000';
+
+    const db = makeDb();
+    seedEndpoint(db);
+    seedWallet(db);
+    const supabase: any = makeSupabase(db);
+
+    const result = await publishEndpoint(supabase, ctx, 'ep-1');
+
+    expect(result.status).toBe('failed');
+    expect(result.publishError).toMatch(/probe-signer-failed|sdk-load-failed|gateway-/);
+    const ep = db.endpoints.get('ep-1')!;
+    expect(ep.publish_status).toBe('failed');
+    const events = db.events.map((e) => e.event);
+    expect(events).toContain('extension_rejected');
   });
 });
 

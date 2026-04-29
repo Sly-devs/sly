@@ -118,108 +118,148 @@ async function appendEvent(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// CDP synthetic first-settle
+// Real first-buy via Sly's probe wallet
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Trigger the first settle from Sly's probe wallet so the user gets
- * immediate feedback ("processing" or "rejected") rather than waiting
- * for an organic buyer. Returns the EXTENSION-RESPONSES status that the
- * CDP Facilitator echoed back.
+ * Trigger the first paid call to the gateway URL using Sly's probe wallet
+ * as a real buyer. This is what produces the actual on-chain USDC transfer
+ * that causes Coinbase to index the bazaar extension on agentic.market.
  *
- * Best-effort: when CDP creds or probe wallet are missing we treat the
- * endpoint as "processing" optimistically — the gateway will overwrite
- * publish_status when the next real settle lands.
+ *   probe wallet ──HTTP GET──▶ gateway URL
+ *                                │
+ *                                │  402 + bazaar extension + accepts[]
+ *                                ▼
+ *   probe wallet ──signs EIP-712 payment payload──▶ gateway URL with X-PAYMENT
+ *                                                           │
+ *                                                           ▼
+ *                                            gateway ──verify+settle──▶ CDP Facilitator
+ *                                                           │
+ *                                                           │ EXTENSION-RESPONSES: processing
+ *                                                           ▼
+ *                                            gateway ──proxy──▶ tenant backend
+ *                                                           ◀──response
+ *   probe wallet ◀──response + receipt header── gateway
+ *
+ * Cost: endpoint.base_price USDC + on-chain gas. Lower base_price for
+ * cheaper probes (CHECK constraint floors at 0.0001 USDC).
+ *
+ * Best-effort: when CDP creds, probe wallet, tenant slug, or service slug
+ * are missing we treat the endpoint as "processing" optimistically — the
+ * gateway will overwrite publish_status when an organic settle lands.
  */
 async function triggerFirstSettle(
-  endpoint: EndpointRow,
-  payoutAddress: string
-): Promise<{ extensionResponse: 'processing' | 'rejected' | 'unknown'; reason?: string }> {
+  supabase: SupabaseClient,
+  endpoint: EndpointRow
+): Promise<{ extensionResponse: 'processing' | 'rejected' | 'unknown'; reason?: string; txHash?: string }> {
   const creds = getCdpCredentials();
-  const probeWalletId = process.env.SLY_PUBLISH_PROBE_WALLET_ID;
+  const probeWalletAddress = process.env.SLY_PUBLISH_PROBE_WALLET_ID;
 
-  if (!creds || !probeWalletId) {
+  if (!creds || !creds.walletSecret || !probeWalletAddress) {
     return {
       extensionResponse: 'processing',
       reason: 'probe-skipped:cdp-credentials-missing',
     };
   }
-  const { apiKeyId, apiKeySecret } = creds;
-
-  const cdpUrl =
-    process.env.CDP_FACILITATOR_URL || 'https://api.cdp.coinbase.com/platform/v2/x402';
-
-  // CDP Facilitator authenticates with a Bearer JWT signed with the API
-  // key (ES256). @coinbase/x402's createAuthHeader generates it for us
-  // — same scheme the official SDK uses internally. JWT generation can
-  // fail in test environments where CDP_API_KEY_SECRET isn't a real PEM;
-  // we soft-fail and let the fetch proceed (in tests, the mock fetch
-  // returns the expected response anyway; in prod, CDP would 401 and our
-  // non-2xx handler below surfaces it as `rejected:cdp-401:...`).
-  let authHeader: string | undefined;
-  try {
-    const { createAuthHeader } = await import('@coinbase/x402');
-    const cdpHost = new URL(cdpUrl).host;
-    authHeader = await createAuthHeader(
-      apiKeyId,
-      apiKeySecret,
-      'POST',
-      cdpHost,
-      `${new URL(cdpUrl).pathname}/settle`.replace(/\/+/g, '/')
-    );
-  } catch (err: any) {
-    console.warn('[publish-x402] JWT generation failed, proceeding unsigned:', err?.message);
+  if (!endpoint.service_slug) {
+    return {
+      extensionResponse: 'rejected',
+      reason: 'service_slug missing',
+    };
   }
 
-  try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'X-Sly-Probe-Wallet': probeWalletId,
+  // tenant.slug drives the gateway URL.
+  const { data: tenantRow, error: tenantErr } = await supabase
+    .from('tenants')
+    .select('slug')
+    .eq('id', endpoint.tenant_id)
+    .single();
+  if (tenantErr || !(tenantRow as any)?.slug) {
+    return {
+      extensionResponse: 'rejected',
+      reason: 'tenant.slug not set — backfill required before publish',
     };
-    if (authHeader) headers.Authorization = authHeader;
+  }
+  const tenantSlug = (tenantRow as any).slug as string;
 
-    const res = await fetch(`${cdpUrl}/settle`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        scheme: 'exact-evm',
-        network: mapSlyNetworkToCAIP2(endpoint.network),
-        amount: String(endpoint.base_price),
-        token: process.env.X402_USDC_ADDRESS || '',
-        from: probeWalletId,
-        to: payoutAddress,
-        extension: { source: 'sly-publish-probe' },
-      }),
-      signal: AbortSignal.timeout(15000),
+  // Path-based gateway URL until wildcard DNS for *.x402.getsly.ai lands.
+  // SLY_GATEWAY_BASE_URL lets ops override per environment.
+  const gatewayBase = (process.env.SLY_GATEWAY_BASE_URL || 'https://api.getsly.ai/x402').replace(/\/+$/, '');
+  const gatewayUrl = `${gatewayBase}/${tenantSlug}/${endpoint.service_slug}`;
+
+  let CdpClient: any;
+  let wrapFetchWithPayment: any;
+  let X402Client: any;
+  let ExactEvmScheme: any;
+  try {
+    const cdpMod: any = await import('@coinbase/cdp-sdk');
+    const fetchMod: any = await import('@x402/fetch');
+    const evmMod: any = await import('@x402/evm');
+    CdpClient = cdpMod.CdpClient;
+    wrapFetchWithPayment = fetchMod.wrapFetchWithPayment;
+    X402Client = fetchMod.x402Client;
+    ExactEvmScheme = evmMod.ExactEvmScheme;
+  } catch (err: any) {
+    return {
+      extensionResponse: 'processing',
+      reason: `probe-skipped:sdk-load-failed:${err?.message || 'unknown'}`,
+    };
+  }
+
+  // CDP-managed signer — signTypedData delegates to CDP, no raw key in our
+  // process.
+  let signer: { address: `0x${string}`; signTypedData: (msg: any) => Promise<`0x${string}`> };
+  try {
+    const cdp = new CdpClient({
+      apiKeyId: creds.apiKeyId,
+      apiKeySecret: creds.apiKeySecret,
+      walletSecret: creds.walletSecret,
+    });
+    const account: any = await cdp.evm.getAccount({ address: probeWalletAddress as `0x${string}` });
+    signer = {
+      address: probeWalletAddress as `0x${string}`,
+      signTypedData: async (msg: any) => account.signTypedData(msg),
+    };
+  } catch (err: any) {
+    return {
+      extensionResponse: 'rejected',
+      reason: `probe-signer-failed:${err?.message || 'unknown'}`,
+    };
+  }
+
+  const network = mapSlyNetworkToCAIP2(endpoint.network);
+  const client = new X402Client().register(network, new ExactEvmScheme(signer));
+  const fetchWithPay = wrapFetchWithPayment(globalThis.fetch, client);
+
+  try {
+    const res = await fetchWithPay(gatewayUrl, {
+      method: 'GET',
+      // 60s — CDP settle + on-chain confirmation can take several seconds.
+      signal: AbortSignal.timeout(60_000),
     });
 
-    const headerName = Object.keys(Object.fromEntries(res.headers)).find(
-      (h) => h.toLowerCase() === 'extension-responses'
-    );
-    const raw = headerName ? res.headers.get(headerName) : null;
-    const lower = (raw || '').toLowerCase();
-
-    if (lower.includes('reject')) {
-      const reason = raw ?? 'rejected';
-      return { extensionResponse: 'rejected', reason };
-    }
-    if (lower.includes('processing')) {
-      return { extensionResponse: 'processing' };
-    }
-    // Non-2xx without an explicit EXTENSION-RESPONSES header — surface the
-    // upstream body so a 401/403/etc. doesn't get audit-logged as "unknown".
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       return {
         extensionResponse: 'rejected',
-        reason: `cdp-${res.status}:${body.slice(0, 200) || 'no-body'}`,
+        reason: `gateway-${res.status}:${body.slice(0, 300) || 'no-body'}`,
       };
     }
-    return { extensionResponse: 'unknown', reason: raw ?? `${res.status}` };
+
+    const txHash = res.headers.get('x-payment-receipt') || undefined;
+    const extensionResponses = (res.headers.get('extension-responses') || '').toLowerCase();
+    if (extensionResponses.includes('reject')) {
+      return {
+        extensionResponse: 'rejected',
+        reason: res.headers.get('extension-responses') || 'rejected',
+        txHash,
+      };
+    }
+    return { extensionResponse: 'processing', txHash };
   } catch (err: any) {
     return {
-      extensionResponse: 'processing',
-      reason: `probe-warn:${err?.message || 'unknown'}`,
+      extensionResponse: 'rejected',
+      reason: `probe-error:${err?.message || 'unknown'}`,
     };
   }
 }
@@ -369,11 +409,11 @@ export async function publishEndpoint(
     payment_address: wallet.address,
   });
 
-  // 6. Trigger first settle.
+  // 6. Trigger first settle — real x402 buy by the probe wallet.
   if (!opts.skipFirstSettle) {
     const firstSettle = await triggerFirstSettle(
-      { ...ep, payment_address: wallet.address },
-      wallet.address
+      supabase,
+      { ...ep, payment_address: wallet.address }
     );
 
     if (firstSettle.extensionResponse === 'rejected') {

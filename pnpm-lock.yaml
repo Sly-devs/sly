@@ -103,6 +103,12 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.47.10
         version: 2.87.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      '@x402/evm':
+        specifier: ^2.1.0
+        version: 2.1.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@x402/fetch':
+        specifier: ^2.1.0
+        version: 2.1.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
       ajv:
         specifier: ^8.17.1
         version: 8.17.1
@@ -16659,7 +16665,7 @@ snapshots:
   '@x402/evm@2.1.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)':
     dependencies:
       '@x402/core': 2.1.0
-      viem: 2.43.5(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
+      viem: 2.47.5(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
       zod: 3.25.76
     transitivePeerDependencies:
       - bufferutil

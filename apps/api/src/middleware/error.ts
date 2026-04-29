@@ -138,6 +138,72 @@ export class QuoteExpiredError extends ApiError {
   }
 }
 
+/**
+ * Bazaar extension validation failure (One-click Publish).
+ *
+ * Thrown by `apps/api/src/services/bazaar-extension.ts` when the extension
+ * payload would be rejected by Coinbase's Bazaar indexer (description too
+ * short/long, schema invalid, example doesn't match schema, etc.).
+ *
+ * `details` carries `{ field, reason }[]` so the publish dialog can render
+ * a per-field error list without re-running the validators in the UI.
+ */
+export class BazaarValidationError extends ApiError {
+  constructor(
+    message: string,
+    details: Array<{ field: string; reason: string }>
+  ) {
+    super(message, 400, details, {
+      code: 'BAZAAR_VALIDATION_ERROR',
+      suggestion: 'Fix the listed metadata fields and re-run validation before publishing.',
+      docsUrl: 'https://docs.cdp.coinbase.com/x402/bazaar',
+    });
+    this.name = 'BazaarValidationError';
+  }
+}
+
+/**
+ * No on-chain payout wallet bound for a (tenant, account, network) tuple.
+ *
+ * Published x402 endpoints need a real EVM payTo address — Sly's default
+ * `internal://payos/...` placeholder isn't usable on agentic.market. Either
+ * the caller must bind one (`POST /v1/x402/wallets`) or auto-provision must
+ * be enabled at the tenant level.
+ */
+export class WalletRequiredError extends ApiError {
+  constructor(network: string, accountId: string) {
+    super(`No payout wallet bound for account ${accountId} on ${network}`, 400, {
+      network,
+      accountId,
+    }, {
+      code: 'WALLET_REQUIRED',
+      suggestion: 'Bind an on-chain wallet for this account+network or enable auto-provisioning before publishing.',
+      docsUrl: 'https://docs.payos.ai/x402/publish',
+      relatedEndpoints: [
+        { method: 'POST', path: '/v1/x402/wallets', description: 'Bind a payout wallet' },
+      ],
+    });
+    this.name = 'WalletRequiredError';
+  }
+}
+
+/**
+ * Slug already used by another endpoint in the same tenant.
+ *
+ * Service slugs are the path component of the gateway URL
+ * (`{tenant.slug}.x402.getsly.ai/{service_slug}`) and must be unique per
+ * tenant — see the `idx_x402_endpoints_tenant_service_slug` partial index.
+ */
+export class SlugConflictError extends ApiError {
+  constructor(slug: string) {
+    super(`Service slug '${slug}' is already in use by another endpoint`, 409, { slug }, {
+      code: 'SLUG_CONFLICT',
+      suggestion: 'Pick a different service_slug — it must be unique within your tenant.',
+    });
+    this.name = 'SlugConflictError';
+  }
+}
+
 export class LimitExceededError extends ApiError {
   constructor(
     limitType: string,

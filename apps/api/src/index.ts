@@ -25,6 +25,7 @@ import { taskEventBus } from './services/a2a/task-event-bus.js';
 import { startSmartWalletSyncWorker, stopSmartWalletSyncWorker } from './workers/smart-wallet-sync.js';
 import { startConnectionCleanupWorker, stopConnectionCleanupWorker } from './workers/agent-connection-cleanup.js';
 import { startTaskBridge, stopTaskBridge } from './services/agent-auth/task-bridge.js';
+import { getX402PublishPoller } from './workers/x402-publish-poller.js';
 
 // Railway uses PORT, fallback to API_PORT for local dev
 const port = parseInt(process.env.PORT || process.env.API_PORT || '4000');
@@ -41,6 +42,7 @@ const enableAsyncSettlement = process.env.ENABLE_ASYNC_SETTLEMENT !== 'false'; /
 const enableBatchSettlement = process.env.ENABLE_BATCH_SETTLEMENT !== 'false'; // Enabled by default
 const enableReviewTimeout = process.env.ENABLE_REVIEW_TIMEOUT !== 'false'; // Enabled by default
 const enableAutoRefill = process.env.ENABLE_AGENT_AUTO_REFILL !== 'false'; // Enabled by default
+const enableX402PublishPoller = process.env.ENABLE_X402_PUBLISH_POLLER !== 'false'; // Enabled by default
 
 console.log(`
 ╔══════════════════════════════════════════════════╗
@@ -186,6 +188,15 @@ if (enableAutoRefill) {
   stopAutoRefill = startAutoRefillWorker(refillInterval);
 }
 
+// Start x402 publish-status poller (One-Click Publish epic) — confirms
+// catalog visibility on agentic.market for endpoints whose first settle landed.
+let x402PublishPoller: ReturnType<typeof getX402PublishPoller> | null = null;
+if (enableX402PublishPoller) {
+  const pollerInterval = parseInt(process.env.X402_PUBLISH_POLLER_INTERVAL_MS || '60000');
+  x402PublishPoller = getX402PublishPoller();
+  x402PublishPoller.start(pollerInterval);
+}
+
 // Graceful shutdown
 const shutdown = async (signal: string) => {
   console.log(`${signal} received, shutting down gracefully...`);
@@ -219,6 +230,9 @@ const shutdown = async (signal: string) => {
   }
   if (stopAutoRefill) {
     stopAutoRefill();
+  }
+  if (x402PublishPoller) {
+    x402PublishPoller.stop();
   }
   // Drain ops buffers before exit (Epic 65)
   await stopOpTracker();

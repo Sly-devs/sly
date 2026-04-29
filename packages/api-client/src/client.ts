@@ -927,7 +927,7 @@ export class SlyClient {
      * lets the user edit before publishing.
      */
     validate: (id: string) =>
-      this.post<X402ValidateResponse>(`/x402/endpoints/${id}/validate`, {}),
+      this.post<{ data: X402ValidateResponse }>(`/x402/endpoints/${id}/validate`, {}).then(r => r.data),
 
     /**
      * Publish an x402 endpoint to agentic.market.
@@ -938,7 +938,7 @@ export class SlyClient {
      * `getPublishStatus` until terminal state.
      */
     publish: (id: string, input: X402PublishInput = {}) =>
-      this.post<X402PublishResponse>(`/x402/endpoints/${id}/publish`, input),
+      this.post<{ data: X402PublishResponse }>(`/x402/endpoints/${id}/publish`, input).then(r => r.data),
 
     /**
      * Unpublish an x402 endpoint. Sets `visibility='private'` and reverts
@@ -946,13 +946,13 @@ export class SlyClient {
      * persist until pruned upstream.
      */
     unpublish: (id: string) =>
-      this.post<X402PublishResponse>(`/x402/endpoints/${id}/unpublish`, {}),
+      this.post<{ data: X402PublishResponse }>(`/x402/endpoints/${id}/unpublish`, {}).then(r => r.data),
 
     /**
      * Get the publish lifecycle status + event timeline for an endpoint.
      */
     getPublishStatus: (id: string) =>
-      this.get<X402PublishStatusResponse>(`/x402/endpoints/${id}/publish-status`),
+      this.get<{ data: X402PublishStatusResponse }>(`/x402/endpoints/${id}/publish-status`).then(r => r.data),
   };
 
   // ============================================

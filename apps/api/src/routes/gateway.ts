@@ -743,6 +743,13 @@ async function recordSettleEvent(input: {
   payToAddress?: string | null;
   accountId?: string | null;
   environment?: string | null;
+  /**
+   * Where the buyer came from: 'agentic.market', 'a2a', 'x402-fetch',
+   * 'direct', or a custom value supplied via X-Sly-Source. Stored in
+   * transfers.initiated_by_name for the dashboard's From/Source column
+   * and mirrored into protocol_metadata for full audit.
+   */
+  discoverySource?: string | null;
 }): Promise<void> {
   const supabase: any = createClient();
   const now = new Date().toISOString();
@@ -805,7 +812,10 @@ async function recordSettleEvent(input: {
       to_account_name: null,
       initiated_by_type: 'agent',
       initiated_by_id: input.payerAddress ?? 'external-buyer',
-      initiated_by_name: input.payerAddress ?? null,
+      // initiated_by_name carries the discovery source for the dashboard
+      // From/Source column. Falls back to the wallet address when no
+      // source could be derived.
+      initiated_by_name: input.discoverySource ?? input.payerAddress ?? null,
       amount: input.amountMajor,
       currency: input.currency ?? 'USDC',
       tx_hash: input.txHash ?? null,
@@ -815,13 +825,17 @@ async function recordSettleEvent(input: {
       completed_at: now,
       processing_at: now,
       environment: input.environment ?? 'live',
-      description: 'x402 gateway settle',
+      description: input.discoverySource
+        ? `x402 settle via ${input.discoverySource}`
+        : 'x402 gateway settle',
       protocol_metadata: {
         protocol: 'x402',
         endpoint_id: input.endpointId,
         pay_to: input.payToAddress ?? null,
         extension_responses: input.extensionResponses ?? null,
         via: 'gateway',
+        discovery_source: input.discoverySource ?? null,
+        payer_wallet: input.payerAddress ?? null,
       },
     });
   }
@@ -1102,6 +1116,34 @@ async function dispatchGatewayRequest(
     // analytics tracking matches what was actually paid (not a separately
     // computed value that could drift).
     const matched = (accepts as any[])[0] || {};
+
+    // Derive the discovery source — where did this buyer come from?
+    // Buyer can supply X-Sly-Source explicitly; otherwise infer from
+    // Referer (catalog/marketplace pages) and User-Agent (known clients).
+    // Defaults to 'direct' so the column is never empty.
+    const slySource = c.req.header('x-sly-source');
+    const referer = c.req.header('referer') || c.req.header('referrer');
+    const userAgent = c.req.header('user-agent') || '';
+    const discoverySource = (() => {
+      if (slySource) return slySource.slice(0, 64);
+      if (referer) {
+        try {
+          const host = new URL(referer).host.toLowerCase();
+          if (host.includes('agentic.market')) return 'agentic.market';
+          if (host.includes('paysponge')) return 'paysponge';
+          return host;
+        } catch {
+          /* fall through */
+        }
+      }
+      // x402-fetch + similar buyer libraries often identify themselves.
+      const ua = userAgent.toLowerCase();
+      if (ua.includes('x402-fetch')) return 'x402-fetch';
+      if (ua.includes('a2a-agent') || ua.includes('sly-a2a')) return 'a2a';
+      if (ua.startsWith('node/')) return 'direct (node)';
+      return 'direct';
+    })();
+
     await recordSettleEvent({
       tenantId: tenant.id,
       endpointId: endpoint.id,
@@ -1118,6 +1160,7 @@ async function dispatchGatewayRequest(
       payToAddress: wallet.address,
       accountId: endpoint.account_id,
       environment: (endpoint as any).environment ?? null,
+      discoverySource,
     });
   } catch (e) {
     // Audit failures must not break the proxy path.

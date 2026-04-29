@@ -275,8 +275,8 @@ const response = await client.fetch('https://your-api.com${endpoint?.path || '/a
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <StatCard
             title="Revenue"
-            value={`$${(analytics?.metrics?.revenue || analytics?.revenue || analytics?.total_revenue || 0).toFixed(2)}`}
-            description={`Net: $${(analytics?.metrics?.netRevenue || analytics?.metrics?.net_revenue || analytics?.net_revenue || analytics?.netRevenue || 0).toFixed(2)}`}
+            value={`$${(analytics?.metrics?.revenue || analytics?.revenue || analytics?.total_revenue || 0).toFixed(4)}`}
+            description={`Net: $${(analytics?.metrics?.netRevenue || analytics?.metrics?.net_revenue || analytics?.net_revenue || analytics?.netRevenue || 0).toFixed(4)}`}
             icon={<DollarSign className="h-5 w-5" />}
             trend={analytics?.metrics?.revenue > 0 ? { value: analytics.metrics.revenue } : undefined}
           />
@@ -360,19 +360,19 @@ const response = await client.fetch('https://your-api.com${endpoint?.path || '/a
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600 dark:text-gray-400">Gross Revenue</span>
-                  <span className="font-medium">${(analytics?.metrics?.revenue || analytics?.revenue || analytics?.total_revenue || 0).toFixed(2)}</span>
+                  <span className="font-medium">${(analytics?.metrics?.revenue || analytics?.revenue || analytics?.total_revenue || 0).toFixed(4)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600 dark:text-gray-400">Platform Fees</span>
                   <span className="font-medium text-red-600 dark:text-red-400">
-                    -${(analytics?.metrics?.fees || analytics?.fees || 0).toFixed(2)}
+                    -${(analytics?.metrics?.fees || analytics?.fees || 0).toFixed(4)}
                   </span>
                 </div>
                 <div className="h-px bg-gray-200 dark:bg-gray-800" />
                 <div className="flex items-center justify-between">
                   <span className="font-medium">Net Revenue</span>
                   <span className="text-lg font-bold text-green-600 dark:text-green-400">
-                    ${(analytics?.metrics?.netRevenue || analytics?.netRevenue || analytics?.net_revenue || 0).toFixed(2)}
+                    ${(analytics?.metrics?.netRevenue || analytics?.netRevenue || analytics?.net_revenue || 0).toFixed(4)}
                   </span>
                 </div>
               </CardContent>
@@ -406,38 +406,79 @@ const response = await client.fetch('https://your-api.com${endpoint?.path || '/a
                     <thead>
                       <tr className="border-b">
                         <th className="text-left p-3 font-medium">Date</th>
-                        <th className="text-left p-3 font-medium">From</th>
+                        <th className="text-left p-3 font-medium">Source</th>
+                        <th className="text-left p-3 font-medium">Payer</th>
                         <th className="text-right p-3 font-medium">Amount</th>
-                        <th className="text-right p-3 font-medium">Fee</th>
+                        <th className="text-left p-3 font-medium">Tx</th>
                         <th className="text-left p-3 font-medium">Status</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {transactions.map((tx: any) => (
-                        <tr
-                          key={tx.id}
-                          className="border-b hover:bg-gray-50 dark:hover:bg-gray-900 cursor-pointer"
-                          onClick={() => router.push(`/dashboard/transfers/${tx.id}`)}
-                        >
-                          <td className="p-3 text-sm">
-                            {new Date(tx.createdAt).toLocaleString()}
-                          </td>
-                          <td className="p-3 text-sm font-mono">
-                            {tx.from?.accountId?.slice(0, 8) || 'N/A'}...
-                          </td>
-                          <td className="p-3 text-right font-medium">
-                            {parseFloat(tx.amount).toFixed(4)} {tx.currency}
-                          </td>
-                          <td className="p-3 text-right text-sm text-red-600 dark:text-red-400">
-                            -{parseFloat(tx.x402Metadata?.settlement_fee || '0').toFixed(4)}
-                          </td>
-                          <td className="p-3">
-                            <Badge variant={tx.status === 'completed' ? 'default' : 'secondary'}>
-                              {tx.status}
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))}
+                      {transactions.map((tx: any) => {
+                        // Source comes from initiatedByName (agentic.market,
+                        // a2a, x402-fetch, direct, …). Falls back to the
+                        // wallet address when no source was derivable.
+                        const source =
+                          tx.protocolMetadata?.discovery_source ||
+                          tx.protocol_metadata?.discovery_source ||
+                          tx.initiatedByName ||
+                          tx.initiated_by_name ||
+                          'direct';
+                        const payer =
+                          tx.protocolMetadata?.payer_wallet ||
+                          tx.protocol_metadata?.payer_wallet ||
+                          tx.initiatedById ||
+                          tx.initiated_by_id ||
+                          tx.from?.accountId ||
+                          '';
+                        const txHash = tx.txHash || tx.tx_hash || tx.externalTxHash || tx.external_tx_hash;
+                        const network = tx.settlementNetwork || tx.settlement_network || '';
+                        const explorerUrl =
+                          txHash && network.includes('8453')
+                            ? `https://basescan.org/tx/${txHash}`
+                            : null;
+                        return (
+                          <tr
+                            key={tx.id}
+                            className="border-b hover:bg-gray-50 dark:hover:bg-gray-900"
+                          >
+                            <td className="p-3 text-sm">
+                              {new Date(tx.createdAt).toLocaleString()}
+                            </td>
+                            <td className="p-3 text-sm">
+                              <Badge variant="secondary">{source}</Badge>
+                            </td>
+                            <td className="p-3 text-sm font-mono">
+                              {payer ? `${payer.slice(0, 6)}…${payer.slice(-4)}` : 'N/A'}
+                            </td>
+                            <td className="p-3 text-right font-medium">
+                              {parseFloat(tx.amount).toFixed(4)} {tx.currency}
+                            </td>
+                            <td className="p-3 text-sm font-mono">
+                              {explorerUrl ? (
+                                <a
+                                  href={explorerUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-blue-600 hover:underline dark:text-blue-400"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {txHash.slice(0, 6)}…{txHash.slice(-4)}
+                                </a>
+                              ) : txHash ? (
+                                <span>{txHash.slice(0, 6)}…{txHash.slice(-4)}</span>
+                              ) : (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              <Badge variant={tx.status === 'completed' ? 'default' : 'secondary'}>
+                                {tx.status}
+                              </Badge>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

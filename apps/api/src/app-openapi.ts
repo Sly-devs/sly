@@ -47,6 +47,14 @@ import settlementWindowsOpenAPIRouter from './routes/openapi/settlement-windows.
 import reconciliationOpenAPIRouter from './routes/openapi/reconciliation.js';
 import treasuryOpenAPIRouter from './routes/openapi/treasury.js';
 import scheduledTransfersOpenAPIRouter from './routes/openapi/scheduled-transfers.js';
+import portalTokensOpenAPIRouter from './routes/openapi/portal-tokens.js';
+import tierLimitsOpenAPIRouter from './routes/openapi/tier-limits.js';
+import approvalsOpenAPIRouter from './routes/openapi/approvals.js';
+import cardsOpenAPIRouter from './routes/openapi/cards.js';
+import cardsVaultOpenAPIRouter from './routes/openapi/cards-vault.js';
+import cardTransactionsOpenAPIRouter from './routes/openapi/card-transactions.js';
+import reputationOpenAPIRouter from './routes/openapi/reputation.js';
+import capabilitiesOpenAPIRouter from './routes/openapi/capabilities.js';
 
 export function buildOpenAPIApp(): OpenAPIHono {
   const app = new OpenAPIHono();
@@ -90,6 +98,14 @@ export function buildOpenAPIApp(): OpenAPIHono {
   app.route('/v1/reconciliation', reconciliationOpenAPIRouter);
   app.route('/v1/treasury', treasuryOpenAPIRouter);
   app.route('/v1/scheduled-transfers', scheduledTransfersOpenAPIRouter);
+  app.route('/v1/portal-tokens', portalTokensOpenAPIRouter);
+  app.route('/v1/tier-limits', tierLimitsOpenAPIRouter);
+  app.route('/v1/approvals', approvalsOpenAPIRouter);
+  app.route('/v1/cards', cardsOpenAPIRouter);
+  app.route('/v1/cards/vault', cardsVaultOpenAPIRouter);
+  app.route('/v1/card-transactions', cardTransactionsOpenAPIRouter);
+  app.route('/v1/reputation', reputationOpenAPIRouter);
+  app.route('/v1/capabilities', capabilitiesOpenAPIRouter);
 
   return app;
 }

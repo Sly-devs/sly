@@ -38,13 +38,39 @@ describe('inferSchema', () => {
     expect(schema).toEqual({ type: 'array', items: { type: 'integer' } });
   });
 
-  it('infers a heterogeneous array with oneOf', () => {
+  it('infers a heterogeneous array with anyOf', () => {
     const schema = inferSchema([1, 'two']);
     expect((schema as any).type).toBe('array');
-    expect((schema as any).items.oneOf).toEqual([
+    expect((schema as any).items.anyOf).toEqual([
       { type: 'integer' },
       { type: 'string' },
     ]);
+  });
+
+  it('deduplicates identical inferred shapes when arrays repeat them', () => {
+    // Two slides with the same structure should collapse to a single items
+    // schema rather than `anyOf: [shape, shape]`.
+    const schema = inferSchema([
+      { title: 'A', type: 'all' },
+      { title: 'B', type: 'all' },
+    ]);
+    expect((schema as any).type).toBe('array');
+    // dedup → only one branch → no anyOf wrapper
+    expect((schema as any).items.anyOf).toBeUndefined();
+    expect((schema as any).items.type).toBe('object');
+  });
+
+  it('uses anyOf (not oneOf) for objects with additionalProperties:true so permissive shapes do not become ambiguous', () => {
+    // Regression: the httpbin /json shape — slide #1 lacks `items`, slide #2
+    // has it. With additionalProperties:true and oneOf, slide #2 matches both
+    // branches and AJV correctly rejects (must match exactly one). anyOf is
+    // the correct semantic for permissive heterogeneous arrays.
+    const schema = inferSchema([
+      { title: 'a', type: 'all' },
+      { title: 'b', type: 'all', items: ['x'] },
+    ]);
+    expect((schema as any).items.anyOf).toBeDefined();
+    expect((schema as any).items.oneOf).toBeUndefined();
   });
 
   it('infers an empty array as a typed array with no items', () => {

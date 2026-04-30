@@ -83,6 +83,11 @@ export function checkGatewayRateLimit(input: {
 
   const remaining = Math.max(0, limit - entry.count);
   const resetSeconds = Math.ceil(entry.resetAt / 1000);
+  // Diagnostic: surface the bucket every call so prod logs can prove the
+  // limiter is wired in. Cheap (one log line); strip after we trust it.
+  console.log(
+    `[gateway-rate-limit] key=${key} count=${entry.count}/${limit} remaining=${remaining}`,
+  );
   if (entry.count > limit) {
     return {
       ok: false,

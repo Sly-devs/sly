@@ -132,6 +132,7 @@ Every story must meet these criteria before completion:
 - [Epic 80: AgentKit Proof-of-Humanity for x402](./epic-80-agentkit-proof-of-humanity.md) 🧑‍🔬 - World ID / Worldcoin-anchored human-proof signatures for services that require dual auth (Exa + future); extends Epic 78 with `human_attested` custody mode
 - [Epic 81: x402 Vendor Reliability Observatory](./epic-81-x402-vendor-reliability.md) 📈 - Rolling per-vendor reliability scores from already-captured response/classification data. Pure aggregation, no new schema. MCP reputation tool + dashboard + probe/discover enrichment.
 - [Epic 83: Wallet Token Swap via DEX Aggregator](./epic-83-token-swap-aggregator.md) 🔄 - USDC↔ETH swaps from the wallet via 0x Aggregator (1inch fallback). Sly-signed via existing CDP path, affiliate-fee revenue, no Coinbase Swap dependency. Dashboard tab + MCP tools + worker.
+- [Epic 84: Cross-Marketplace Publishing for x402 Endpoints](./epic-84-cross-marketplace-publishing.md) 🌐 - Generalize the Bazaar-only publish flow into a pluggable, multi-marketplace fanout. v1 adapters: Coinbase Bazaar (refactored), Sly A2A registry, Smithery (with MCP shim). Tenant publishes once → Sly fans out to every catalog they've opted into.
 
 ### API Monetization ⭐ NEW
 - [Epic 79: API Monetization Gateway](./epic-79-api-monetization-gateway.md) 🚪 - Thin proxy that wraps any REST API in x402 (MPP later) + OpenAPI ingest CLI + dashboard. Closes Sponge Gateway parity gap.

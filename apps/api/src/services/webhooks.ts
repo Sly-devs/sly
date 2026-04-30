@@ -54,6 +54,10 @@ export const WEBHOOK_EVENT_TYPES = {
   // x402 events
   'x402.payment.completed': 'An x402 payment was processed',
   'x402.endpoint.created': 'A new x402 endpoint was registered',
+  'x402.publish.processing': 'An x402 endpoint was submitted to Coinbase Bazaar (CDP returned processing)',
+  'x402.publish.published': 'An x402 endpoint was successfully indexed on agentic.market',
+  'x402.publish.failed': 'An x402 endpoint failed to index (validation or SLA timeout)',
+  'x402.publish.unpublished': 'An x402 endpoint was withdrawn (Sly returns 404; agentic.market listing may persist until pruned)',
   
   // AP2 events
   'ap2.mandate.created': 'A new AP2 mandate was created',

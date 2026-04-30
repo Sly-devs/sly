@@ -23,6 +23,7 @@ import type {
 import type { RequestContext } from '../middleware/auth.js';
 import { buildBazaarExtension, validateBazaarExtension } from './bazaar-extension.js';
 import { getCdpCredentials } from './coinbase/cdp-client.js';
+import { firePublishWebhook } from './publish-webhooks.js';
 import { probeEndpoint } from './endpoint-probe.js';
 import { getOrProvision, mapSlyNetworkToCAIP2 } from './payout-wallet.js';
 import { BazaarValidationError } from '../middleware/error.js';
@@ -115,6 +116,12 @@ async function appendEvent(
     // Audit failures must never break the publish flow itself.
     console.error('[publish-x402] failed to append event:', error.message);
   }
+
+  // Fire tenant webhooks for user-facing transitions only. Internal
+  // events (publish_requested, validated, republish_requested,
+  // unpublish_requested, extension_rejected) stay quiet to avoid
+  // noisy delivery for in-flight bookkeeping.
+  await firePublishWebhook(endpoint.tenant_id, endpoint.id, event, details);
 }
 
 // ────────────────────────────────────────────────────────────────────────────

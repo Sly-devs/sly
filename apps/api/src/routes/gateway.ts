@@ -463,7 +463,19 @@ function buildBazaarExtension(
     required: ['input'],
   };
   if (metadata.output?.schema) {
-    schema.properties.output = metadata.output.schema as any;
+    // Coinbase's bazaar indexer silently drops resources whose
+    // schema.properties.output isn't `{type: "object", ...}`. Empirically:
+    // across ~2,000 sampled entries from CDP's /discovery/resources catalog
+    // (33k entries), zero use `type: "array"` (or any non-object root) —
+    // 461/500 are object, 39/500 omit output entirely. Settle returns
+    // `processing` either way, so the rejection is invisible from our side.
+    // Resources whose underlying response is an array (e.g. poetrydb returns
+    // `[poem]`) get omitted from the schema rather than coerced. The
+    // `info.output.example` field still carries the actual response shape.
+    const outSchema = metadata.output.schema as any;
+    if (outSchema && outSchema.type === 'object') {
+      schema.properties.output = outSchema;
+    }
   }
 
   return {

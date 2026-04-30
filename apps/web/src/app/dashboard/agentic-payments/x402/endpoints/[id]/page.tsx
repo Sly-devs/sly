@@ -43,6 +43,7 @@ import {
 import { PublishStatusBadge } from '@/components/x402/publish-status-badge';
 import { PublicationTimeline } from '@/components/x402/publication-timeline';
 import { PublishToMarketDialog } from '@/components/x402/publish-to-market-dialog';
+import { UnpublishDialog } from '@/components/x402/unpublish-dialog';
 import { EditEndpointDialog } from '@/components/x402/edit-endpoint-dialog';
 import type { X402Endpoint, X402PublishEvent, X402PublishStatusResponse } from '@sly/api-client';
 
@@ -55,6 +56,7 @@ export default function X402EndpointDetailPage() {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedGateway, setCopiedGateway] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [unpublishDialogOpen, setUnpublishDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
 
   // Fetch endpoint details
@@ -219,6 +221,15 @@ const response = await client.fetch('https://your-api.com${endpoint?.path || '/a
             <Rocket className="h-4 w-4 mr-2" />
             {isPublished ? 'Manage publication' : 'Publish to Agentic.Market'}
           </Button>
+          {isPublished && (
+            <Button
+              variant="outline"
+              onClick={() => setUnpublishDialogOpen(true)}
+              className="text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950/30"
+            >
+              Unpublish
+            </Button>
+          )}
         </div>
       </div>
 
@@ -592,6 +603,15 @@ const response = await client.fetch('https://your-api.com${endpoint?.path || '/a
           endpoint={endpoint as X402Endpoint}
           open={editDialogOpen}
           onOpenChange={setEditDialogOpen}
+        />
+      )}
+
+      {/* Unpublish confirmation dialog */}
+      {endpoint && (
+        <UnpublishDialog
+          endpoint={endpoint as X402Endpoint}
+          open={unpublishDialogOpen}
+          onOpenChange={setUnpublishDialogOpen}
         />
       )}
     </div>

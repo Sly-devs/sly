@@ -11,7 +11,11 @@
  *     traffic on the same IP through the control plane.
  *
  * Implementation: simple fixed-window counter in a Map. Acceptable for
- * single-instance API; revisit with Redis when we go multi-replica.
+ * single-instance API. NOTE: Railway production currently runs with ≥2
+ * replicas (each with its own in-memory store), so the effective ceiling
+ * is `limit × replica_count` per (endpoint, ip). For tighter guarantees
+ * — especially per-tenant abuse policies — switch this to a Redis-backed
+ * counter (Upstash, etc.) so all replicas share one bucket.
  *
  * Tunable via env (`GATEWAY_RPM_PER_IP`, default 60). Disable globally
  * with `DISABLE_GATEWAY_RATE_LIMIT=true` (test/dev). The counter is
@@ -83,11 +87,6 @@ export function checkGatewayRateLimit(input: {
 
   const remaining = Math.max(0, limit - entry.count);
   const resetSeconds = Math.ceil(entry.resetAt / 1000);
-  // Diagnostic: surface the bucket every call so prod logs can prove the
-  // limiter is wired in. Cheap (one log line); strip after we trust it.
-  console.log(
-    `[gateway-rate-limit] key=${key} count=${entry.count}/${limit} remaining=${remaining}`,
-  );
   if (entry.count > limit) {
     return {
       ok: false,

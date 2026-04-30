@@ -1215,16 +1215,27 @@ async function dispatchGatewayRequest(
     hmacSecret: endpoint.backend_auth?.hmac_secret,
   });
 
+  // Timeout slightly under the maxTimeoutSeconds we advertise to buyers (60s)
+  // so the buyer doesn't see their own client timeout fire mid-flight — they
+  // get a 504 from us instead. Configurable via env for slow tenant backends.
+  const backendTimeoutMs = parseInt(
+    process.env.GATEWAY_BACKEND_TIMEOUT_MS || '50000',
+    10,
+  );
+
   let backendRes: Response;
   try {
     backendRes = await fetchImpl(backendTarget, {
       method: buyerMethod,
       headers: proxyHeaders,
       body: bodyBuf as any, // undici accepts Buffer
+      signal: AbortSignal.timeout(backendTimeoutMs),
     });
   } catch (err: any) {
-    return jsonResponse(502, {
-      error: 'backend_unreachable',
+    const isTimeout =
+      err?.name === 'TimeoutError' || err?.code === 'UND_ERR_HEADERS_TIMEOUT';
+    return jsonResponse(isTimeout ? 504 : 502, {
+      error: isTimeout ? 'backend_timeout' : 'backend_unreachable',
       detail: err?.message || String(err),
     });
   }

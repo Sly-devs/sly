@@ -28,6 +28,7 @@
     "seed:demo": "tsx scripts/seed-demo-scenarios.ts",
     "update:corridor-ids": "tsx scripts/update-transfers-corridor-id.ts",
     "check:rls": "tsx scripts/check-rls-in-migrations.ts",
+    "check:publish-status": "tsx scripts/check-publish-status.ts",
     "cleanup:simulations": "tsx scripts/cleanup-simulations.ts",
     "demo:agent-checkout": "tsx scripts/demo-agent-checkout.ts",
     "seed:zindigi": "tsx scripts/seed-zindigi-demo.ts",

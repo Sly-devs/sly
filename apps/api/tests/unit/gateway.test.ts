@@ -826,4 +826,72 @@ describe('handlePathBasedGatewayRequest — DNS-fallback shape', () => {
     expect(res.status).toBe(200);
     expect(calledWith).toBe('https://backend.acme.test/today?units=metric');
   });
+
+  it('returns 504 backend_timeout when the backend fetch aborts', async () => {
+    (mockedCreateClient as any).mockReturnValue(
+      buildSupabaseMock({
+        tenant: TENANT,
+        endpoint: PUBLIC_ENDPOINT,
+        wallet: PAYOUT_WALLET,
+      }),
+    );
+    const timeoutFetch: any = async () => {
+      const err: any = new Error('The operation was aborted due to timeout');
+      err.name = 'TimeoutError';
+      throw err;
+    };
+
+    const res = await handlePathBasedGatewayRequest(
+      makePathContext({
+        tenant: 'acme',
+        service: 'weather',
+        paymentHeader: 'eyTIMEOUT',
+      }),
+      {
+        callFacilitator: async () => ({
+          ok: true,
+          txHash: '0xabc',
+          extensionResponses: 'processing',
+        }),
+        fetchBackend: timeoutFetch,
+      },
+    );
+
+    expect(res.status).toBe(504);
+    const body = await res.json();
+    expect(body.error).toBe('backend_timeout');
+  });
+
+  it('returns 502 backend_unreachable for non-timeout fetch errors', async () => {
+    (mockedCreateClient as any).mockReturnValue(
+      buildSupabaseMock({
+        tenant: TENANT,
+        endpoint: PUBLIC_ENDPOINT,
+        wallet: PAYOUT_WALLET,
+      }),
+    );
+    const errorFetch: any = async () => {
+      throw new Error('connect ECONNREFUSED');
+    };
+
+    const res = await handlePathBasedGatewayRequest(
+      makePathContext({
+        tenant: 'acme',
+        service: 'weather',
+        paymentHeader: 'eyUNREACHABLE',
+      }),
+      {
+        callFacilitator: async () => ({
+          ok: true,
+          txHash: '0xabc',
+          extensionResponses: 'processing',
+        }),
+        fetchBackend: errorFetch,
+      },
+    );
+
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toBe('backend_unreachable');
+  });
 });

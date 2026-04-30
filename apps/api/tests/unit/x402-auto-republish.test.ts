@@ -1,20 +1,45 @@
 /**
  * Auto-republish hook tests.
  *
- * Pin two facts:
- *  1. PATCH on a discovery-relevant field on a public endpoint marks
- *     `metadata_dirty=true` (and would schedule a republish).
- *  2. PATCH on `status` (or webhookUrl) does NOT touch metadata_dirty
- *     and does NOT schedule a republish.
+ * Pin three facts:
+ *  1. `patchTouchesDiscovery` distinguishes discovery fields from status
+ *     flips and config-only fields.
+ *  2. PATCH on a discovery-relevant field on a public endpoint marks
+ *     `metadata_dirty=true` and arms the 5s debounce timer.
+ *  3. The debounce timer eventually calls `publishEndpoint(force: true)`.
  *
- * We test the pure helper `patchTouchesDiscovery` directly — that's the
- * exact predicate the route uses to decide whether to mark dirty + arm
- * the debounce timer. No need to spin up the full Hono app to verify it.
+ * The first uses the pure predicate. The second and third drive
+ * `scheduleAutoRepublish` directly with fake timers and a mocked
+ * publishEndpoint to verify the debounce → republish chain end-to-end
+ * without spinning up the full Hono app.
  */
-import { describe, it, expect } from 'vitest';
-import { __testing } from '../../src/routes/x402-endpoints.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { patchTouchesDiscovery } = __testing;
+vi.mock('../../src/db/client.js', () => ({
+  createClient: () => ({}),
+}));
+
+const publishEndpointMock = vi.fn(async () => ({ ok: true }));
+vi.mock('../../src/services/publish-x402.js', () => ({
+  publishEndpoint: publishEndpointMock,
+  unpublishEndpoint: vi.fn(),
+  validateEndpointForPublish: vi.fn(),
+  DISCOVERY_FIELDS: [
+    'name',
+    'description',
+    'serviceSlug',
+    'backendUrl',
+    'method',
+    'basePrice',
+    'currency',
+    'network',
+    'volumeDiscounts',
+    'category',
+  ],
+}));
+
+const { __testing } = await import('../../src/routes/x402-endpoints.js');
+const { patchTouchesDiscovery, scheduleAutoRepublish } = __testing;
 
 describe('patchTouchesDiscovery', () => {
   it('returns true for description changes', () => {
@@ -55,5 +80,47 @@ describe('patchTouchesDiscovery', () => {
 
   it('returns true when any single discovery field is set among non-discovery fields', () => {
     expect(patchTouchesDiscovery({ status: 'active', name: 'New name' })).toBe(true);
+  });
+});
+
+describe('scheduleAutoRepublish (debounce → publishEndpoint chain)', () => {
+  beforeEach(() => {
+    publishEndpointMock.mockClear();
+    vi.useFakeTimers();
+  });
+
+  it('calls publishEndpoint(force=true) after the debounce window elapses', async () => {
+    scheduleAutoRepublish({ tenantId: 't' }, 'endpoint-1');
+    expect(publishEndpointMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(publishEndpointMock).toHaveBeenCalledTimes(1);
+    expect(publishEndpointMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tenantId: 't' }),
+      'endpoint-1',
+      { force: true },
+    );
+    vi.useRealTimers();
+  });
+
+  it('coalesces multiple PATCHes within the debounce window into one publish call', async () => {
+    scheduleAutoRepublish({ tenantId: 't' }, 'endpoint-2');
+    await vi.advanceTimersByTimeAsync(2000);
+    scheduleAutoRepublish({ tenantId: 't' }, 'endpoint-2'); // resets timer
+    await vi.advanceTimersByTimeAsync(2000);
+    scheduleAutoRepublish({ tenantId: 't' }, 'endpoint-2'); // resets again
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(publishEndpointMock).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('schedules independent timers per endpoint id', async () => {
+    scheduleAutoRepublish({ tenantId: 't' }, 'endpoint-A');
+    scheduleAutoRepublish({ tenantId: 't' }, 'endpoint-B');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(publishEndpointMock).toHaveBeenCalledTimes(2);
+    const calls = publishEndpointMock.mock.calls.map((c: any[]) => c[2]);
+    expect(calls.sort()).toEqual(['endpoint-A', 'endpoint-B']);
+    vi.useRealTimers();
   });
 });

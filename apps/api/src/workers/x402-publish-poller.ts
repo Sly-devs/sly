@@ -22,7 +22,7 @@ const DEFAULT_INTERVAL_MS = parseInt(
   10
 );
 const SLA_MINUTES = parseInt(
-  process.env.X402_PUBLISH_INDEX_SLA_MINUTES || '30',
+  process.env.X402_PUBLISH_INDEX_SLA_MINUTES || '240',
   10
 );
 
@@ -79,7 +79,7 @@ export class X402PublishPoller {
     const { data: rows, error } = await supabase
       .from('x402_endpoints')
       .select(
-        'id, tenant_id, service_slug, name, path, last_settle_at, publish_status, catalog_service_id'
+        'id, tenant_id, service_slug, name, path, last_settle_at, publish_status, catalog_service_id, tenants!inner(slug)'
       )
       .eq('publish_status', 'processing')
       .limit(50);
@@ -117,12 +117,20 @@ export class X402PublishPoller {
 
   /**
    * Hit the agentic.market public catalog and try to find this endpoint.
-   * Returns the catalog service id when found.
+   *
+   * Coinbase groups by domain — every Sly-published endpoint lives under
+   * one service whose id is the gateway host with `.` → `-` (e.g.
+   * `api.getsly.ai` → `api-getsly-ai`). The endpoint we care about is
+   * inside `service.endpoints[].url`.
+   *
+   * Returns the catalog service id when the specific endpoint URL is
+   * present in that service's endpoints array.
    */
   private async lookupCatalog(row: {
     service_slug: string | null;
     name: string;
     path: string;
+    tenants?: { slug: string } | null;
   }): Promise<{ id: string } | null> {
     if (this.mockMode) {
       // Mock mode: pretend everything indexes after one tick — keeps the
@@ -130,8 +138,23 @@ export class X402PublishPoller {
       return { id: `mock-svc-${row.service_slug || 'unknown'}` };
     }
 
-    const q = encodeURIComponent(row.service_slug || row.name || row.path);
-    const url = `${CATALOG_BASE_URL}/search?q=${q}`;
+    const tenantSlug = row.tenants?.slug;
+    const serviceSlug = row.service_slug;
+    if (!tenantSlug || !serviceSlug) return null;
+
+    const gatewayBase = (process.env.SLY_GATEWAY_BASE_URL || 'https://api.getsly.ai/x402').replace(/\/+$/, '');
+    let host: string;
+    let gatewayUrl: string;
+    try {
+      const baseUrl = new URL(gatewayBase);
+      host = baseUrl.host.toLowerCase();
+      gatewayUrl = `${gatewayBase}/${tenantSlug}/${serviceSlug}`;
+    } catch {
+      return null;
+    }
+
+    const catalogId = host.replace(/\./g, '-');
+    const url = `${CATALOG_BASE_URL}/${encodeURIComponent(catalogId)}`;
 
     let res: Response;
     try {
@@ -144,35 +167,19 @@ export class X402PublishPoller {
       return null;
     }
 
-    if (!res.ok) {
-      // 5xx upstream — try again next tick rather than failing the row.
-      return null;
-    }
+    // 404 = service not yet in catalog; 5xx = upstream blip — try again next tick.
+    if (!res.ok) return null;
 
-    const body = await res.json().catch(() => null);
-    if (!body) return null;
+    const body: any = await res.json().catch(() => null);
+    if (!body || !Array.isArray(body.endpoints)) return null;
 
-    // We accept a few common response shapes:
-    //   { services: [{ id, slug }] }       — Bazaar's documented shape
-    //   { data: [{ id, slug }] }           — common API convention
-    //   [{ id, slug }]                     — bare list
-    const list: any[] = Array.isArray(body)
-      ? body
-      : Array.isArray(body.services)
-      ? body.services
-      : Array.isArray(body.data)
-      ? body.data
-      : [];
+    const target = gatewayUrl.toLowerCase();
+    const hit = body.endpoints.find(
+      (e: any) => typeof e?.url === 'string' && e.url.toLowerCase() === target
+    );
+    if (!hit) return null;
 
-    const slug = (row.service_slug || '').toLowerCase();
-    const match = list.find((s: any) => {
-      const fields = [s?.slug, s?.serviceSlug, s?.path, s?.name];
-      return fields.some(
-        (f) => typeof f === 'string' && f.toLowerCase() === slug
-      );
-    });
-    if (match && match.id) return { id: String(match.id) };
-    return null;
+    return { id: String(body.id || catalogId) };
   }
 
   private async markPublished(

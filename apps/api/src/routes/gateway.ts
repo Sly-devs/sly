@@ -29,6 +29,10 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { createClient } from '../db/client.js';
 import { getCdpCredentials } from '../services/coinbase/cdp-client.js';
 import {
+  checkGatewayRateLimit,
+  getClientIp,
+} from '../services/gateway-rate-limit.js';
+import {
   encodePaymentRequiredHeader,
   decodePaymentSignatureHeader,
   HTTPFacilitatorClient,
@@ -993,6 +997,34 @@ async function dispatchGatewayRequest(
   // Visibility check — gateway only serves public endpoints.
   if (endpoint.visibility !== 'public') {
     return jsonResponse(404, { error: 'endpoint_not_public' });
+  }
+
+  // Per-endpoint rate limit (independent of the global control-plane limiter).
+  // Bucket is keyed on (endpoint_id, ip) so scrapers can't drain one paid
+  // endpoint into another. Default 60 rpm; tunable via env / per-endpoint
+  // override (column to be added in a follow-up).
+  const clientIp = getClientIp((c.req as any)?.raw?.headers ?? new Headers());
+  const rl = checkGatewayRateLimit({
+    endpointId: endpoint.id,
+    clientIp,
+    limitOverride: (endpoint as any).rate_limit_rpm,
+  });
+  if (!rl.ok) {
+    const headers = new Headers({
+      'content-type': 'application/json',
+      'X-RateLimit-Limit': String(rl.limit),
+      'X-RateLimit-Remaining': '0',
+      'X-RateLimit-Reset': String(rl.resetSeconds),
+      'Retry-After': String(rl.retryAfter ?? 60),
+    });
+    return new Response(
+      JSON.stringify({
+        error: 'rate_limited',
+        detail: `endpoint=${endpoint.id} ip=${clientIp}`,
+        retryAfter: rl.retryAfter ?? 60,
+      }),
+      { status: 429, headers },
+    );
   }
 
   // discovery_metadata must be present — Worktree B's publish flow populates

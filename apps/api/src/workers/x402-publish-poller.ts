@@ -16,6 +16,7 @@
  * (default 30) flip to 'failed' so the dashboard surfaces the stuck listing.
  */
 import { createClient } from '../db/client.js';
+import { firePublishWebhook } from '../services/publish-webhooks.js';
 
 const DEFAULT_INTERVAL_MS = parseInt(
   process.env.X402_PUBLISH_POLLER_INTERVAL_MS || '60000',
@@ -212,6 +213,11 @@ export class X402PublishPoller {
       event: 'indexed',
       details: { catalog_service_id: match.id },
     });
+
+    // Notify the tenant — best-effort, never blocks the worker.
+    await firePublishWebhook(row.tenant_id, row.id, 'indexed', {
+      catalog_service_id: match.id,
+    });
   }
 
   private async failExpired(
@@ -231,18 +237,20 @@ export class X402PublishPoller {
       console.error(`[x402-publish-poller] failExpired update: ${updateErr.message}`);
       return;
     }
+    const failDetails = {
+      reason: 'not_indexed_within_sla',
+      sla_minutes: SLA_MINUTES,
+      last_settle_at: row.last_settle_at,
+    };
     await supabase.from('x402_publish_events').insert({
       tenant_id: row.tenant_id,
       endpoint_id: row.id,
       actor_type: 'system',
       actor_id: null,
       event: 'failed',
-      details: {
-        reason: 'not_indexed_within_sla',
-        sla_minutes: SLA_MINUTES,
-        last_settle_at: row.last_settle_at,
-      },
+      details: failDetails,
     });
+    await firePublishWebhook(row.tenant_id, row.id, 'failed', failDetails);
   }
 }
 

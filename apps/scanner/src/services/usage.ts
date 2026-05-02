@@ -88,10 +88,14 @@ export async function flushUsage(): Promise<number> {
       credits_consumed: e.creditsConsumed,
     }));
 
-    const { error } = await (supabase.from('scanner_usage_events') as any).upsert(rows, {
-      onConflict:
-        'tenant_id,scanner_key_id,minute_bucket,method,path_template,status_code,actor_type',
-      ignoreDuplicates: false,
+    // Use the atomic-increment RPC instead of supabase-js .upsert(). The
+    // .upsert() path used ON CONFLICT DO UPDATE that REPLACES values, which
+    // silently dropped data when two Vercel function instances both flushed
+    // a row for the same (tenant, minute, endpoint) tuple. The RPC does
+    // ON CONFLICT DO UPDATE SET count = count + EXCLUDED.count so concurrent
+    // flushes sum correctly. See migration 20260502_scanner_usage_atomic_upsert.
+    const { error } = await (supabase.rpc as any)('scanner_usage_upsert', {
+      p_rows: rows,
     });
 
     if (error) {

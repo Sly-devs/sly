@@ -28,6 +28,7 @@ scanRouter.post('/scan', async (c) => {
   }
 
   const { tenantId } = c.get('ctx');
+  const requestId = c.get('requestId');
 
   const result = await scanDomain({
     tenantId,
@@ -37,6 +38,7 @@ scanRouter.post('/scan', async (c) => {
     country_code: parsed.data.country_code,
     region: parsed.data.region,
     skipIfFresh: parsed.data.skip_if_fresh,
+    requestId,
   });
 
   return c.json(result);

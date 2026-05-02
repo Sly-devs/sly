@@ -18,6 +18,9 @@ export interface ScanOptions {
   config?: Partial<ScanConfig>;
   skipIfFresh?: boolean;
   freshnessWindowMs?: number;
+  // Stamped onto merchant_scans so the credit ledger row
+  // (source = "request:<requestId>") can be joined back to the result.
+  requestId?: string;
 }
 
 const DEFAULT_FRESHNESS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -58,6 +61,7 @@ export async function scanDomain(options: ScanOptions): Promise<MerchantScan> {
     country_code: options.country_code,
     region: options.region,
     scan_status: 'scanning',
+    request_id: options.requestId,
   });
 
   try {

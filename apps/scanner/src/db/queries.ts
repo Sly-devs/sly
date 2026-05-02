@@ -24,6 +24,7 @@ export async function upsertMerchantScan(
     country_code?: string;
     region?: string;
     scan_status: string;
+    request_id?: string;
   },
 ): Promise<MerchantScan> {
   const { data: scan, error } = await db()

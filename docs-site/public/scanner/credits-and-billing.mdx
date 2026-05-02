@@ -7,36 +7,48 @@ Scanner uses a prepaid credit model. You're granted credits when your key is iss
 
 ## Pricing
 
-**List price: $0.05 per credit.** One scan is a nickel; a synthetic shopping test is a quarter. Reads cost nothing.
+Sly Scanner is available through two channels:
+
+- **Partner channel (this page)** — prepaid credits with a `psk_live_*` key. List price **$0.025/credit**, scaling down to **~$0.007/credit** at Enterprise volume. Use this when you're integrating directly.
+- **Agentic.market / x402** — pay-per-call in USDC, no key, no commitment. **$0.05/scan** at the marketplace. See the [x402 marketplace page](/scanner/x402) for full details. Partners are **always at least 50% cheaper** than the same call on x402.
+
+### Partner per-call rates
+
+**List price: $0.025 per credit.** Reads cost nothing for partners.
 
 | Action                           | Credits | Price       |
 | -------------------------------- | ------- | ----------- |
-| Single scan                      | 1       | **$0.05**   |
-| Batch of 100 domains             | 50      | $2.50       |
-| Batch of 500 domains             | 250     | $12.50      |
-| Batch of 5,000 domains           | 2,500   | $125        |
-| Synthetic shopping test          | 5       | $0.25       |
+| Single scan                      | 1       | **$0.025**  |
+| Batch of 100 domains             | 50      | $1.25       |
+| Batch of 500 domains             | 250     | $6.25       |
+| Batch of 5,000 domains           | 2,500   | $62.50      |
+| Synthetic shopping test          | 5       | $0.125      |
 | All reads (shared corpus)        | 0       | Free        |
 
 ### Credit packs
 
 Buy in bulk for a per-credit discount. Packs **don't expire** — unused credits sit on your tenant until consumed.
 
-| Pack         | Credits  | Price      | Effective $/credit |
-| ------------ | -------- | ---------- | ------------------ |
-| **Starter**  | 5,000    | $200       | $0.040             |
-| **Growth**   | 25,000   | $750       | $0.030             |
-| **Scale**    | 100,000  | $2,000     | $0.020             |
-| **Enterprise** | 500,000+ | Custom   | ~$0.015            |
+| Pack         | Credits  | Price      | Effective $/credit | vs x402 ($0.05/call) |
+| ------------ | -------- | ---------- | ------------------ | -------------------- |
+| **List** (no commit) | per-call | $0.025/credit | $0.025          | **50% off** |
+| **Starter**  | 10,000   | $200       | $0.020             | **60% off** |
+| **Growth**   | 50,000   | $750       | $0.015             | **70% off** |
+| **Scale**    | 200,000  | $2,000     | $0.010             | **80% off** |
+| **Enterprise** | 500,000+ | Custom   | ~$0.007            | **86% off** |
 
 Contact [partners@getsly.ai](mailto:partners@getsly.ai) to purchase a pack or discuss enterprise pricing.
+
+### Why partners always pay less than x402
+
+The x402 marketplace serves on-demand AI agents that pay per call without an account. That convenience earns a premium price — **$0.05/scan**. Partners commit to volume up front, so they pay **$0.025/scan list**, dropping to **$0.007/scan at Enterprise**. The savings recover the integration effort within a few hundred scans.
 
 ### Design-partner program (free beta)
 
 We're onboarding the first 3–5 partners as **design partners** in exchange for product feedback and a case study. You get:
 
-- **2,500 free credits** up front (enough for ~3 months of typical usage at a small shop).
-- **Scale pricing** ($0.020/credit) locked in for 12 months after the free credits exhaust.
+- **5,000 free credits** up front (enough for ~3 months of typical usage at a small shop).
+- **Scale pricing** ($0.010/credit) locked in for 12 months after the free credits exhaust.
 - **First-right-of-refusal** on new scanner features before public launch.
 
 What we ask in return:

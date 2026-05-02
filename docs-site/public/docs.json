@@ -226,6 +226,7 @@
               "scanner/sdk",
               "scanner/authentication",
               "scanner/credits-and-billing",
+              "scanner/x402",
               "scanner/data-model",
               "scanner/rate-limits"
             ]

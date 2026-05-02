@@ -1,30 +1,38 @@
 ---
 title: "Quickstart"
-description: "Five-minute walkthrough: get a key, run a scan, read the score."
+description: "Five-minute walkthrough: install the SDK, run a scan, read the score."
 ---
+
+The fastest path is the **TypeScript SDK** — six lines from install to first result. Raw HTTP works too if you're integrating from a runtime where the SDK isn't a fit; both are documented below.
 
 ## 1. Get an API key
 
-Scanner keys are issued by Sly to partner tenants. Contact your account manager (or email partners@getsly.ai) with:
+Scanner keys are issued by Sly to partner tenants. Two ways to get one:
 
-- Your tenant ID
-- The scopes you need (`scan`, `batch`, `read`, `tests`)
-- Expected request volume
+- **Self-serve** (recommended) — log in to **app.getsly.ai → Developers → API Keys → Scanner API Keys** and click "Create key". Tina/test keys can be created by any user; live keys require `owner` or `admin` role.
+- **Email** — contact [partners@getsly.ai](mailto:partners@getsly.ai) with your tenant ID, the scopes you need (`scan`, `batch`, `read`, `tests`), and expected request volume.
 
-You'll receive a key of the form `psk_live_...` (or `psk_test_...` for sandbox) and an initial credit grant.
+You'll get a key of the form `psk_live_…` (or `psk_test_…` for sandbox) and an initial credit grant.
 
-## 2. Check your balance
+## 2. Install + scan (TypeScript / JavaScript)
 
 ```bash
-curl -H "Authorization: Bearer $SCANNER_KEY" \
-  https://scanner.getsly.ai/v1/scanner/credits/balance
+npm install @sly_ai/scanner
 ```
 
-```json
-{ "balance": 10000, "grantedTotal": 10000, "consumedTotal": 0 }
+```ts
+import { Scanner } from '@sly_ai/scanner';
+
+const scanner = new Scanner({ apiKey: process.env.SCANNER_KEY! });
+const result = await scanner.scan({ domain: 'shopify.com' });
+
+console.log(result.readiness_score);   // 0–100
+console.log(scanner.balance);           // remaining credits, auto-tracked
 ```
 
-## 3. Run your first scan
+That's the integration. See the [SDK reference](/scanner/sdk) for batch helpers, typed errors, and pagination.
+
+## 2b. Scan via raw HTTP (any language)
 
 ```bash
 curl -X POST https://scanner.getsly.ai/v1/scanner/scan \
@@ -37,7 +45,8 @@ Response (truncated):
 
 ```json
 {
-  "id": "c5e4f1...",
+  "id": "c5e4f1…",
+  "request_id": "2fb64db5-…",
   "domain": "shopify.com",
   "readiness_score": 72,
   "protocol_score": 80,
@@ -53,28 +62,92 @@ Response (truncated):
 }
 ```
 
-See [data model](/scanner/data-model) for every field.
+The response also includes an **`X-Credits-Remaining`** header so you can track your balance without an extra call. See [data model](/scanner/data-model) for every field.
+
+## 3. Check your balance
+
+**SDK:**
+
+```ts
+const summary = await scanner.getBalance();
+// { balance: 96, grantedTotal: 100, consumedTotal: 4 }
+```
+
+**HTTP:**
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  https://scanner.getsly.ai/v1/scanner/credits/balance
+```
+
+```json
+{ "balance": 96, "grantedTotal": 100, "consumedTotal": 4 }
+```
 
 ## 4. Batch-score a merchant list
+
+**SDK** — bounded-concurrency stream (recommended for 10–500 domains):
+
+```ts
+const domains = ['shopify.com', 'nike.com', 'adidas.com'];
+
+for await (const { input, result, error } of scanner.scanMany(domains, { concurrency: 10 })) {
+  if (error) console.error(`${input.domain} failed:`, error.message);
+  else console.log(`${input.domain}: score ${result!.readiness_score}`);
+}
+```
+
+**SDK** — server-side batch (recommended for 500+ or when you want a polling handle):
+
+```ts
+const batch = await scanner.createBatch({
+  domains: domains.map((d) => ({ domain: d })),
+  name: 'Q2 audit',
+});
+const finished = await scanner.waitForBatch(batch.id, {
+  pollIntervalMs: 5_000,
+  onProgress: (b) => console.log(`${b.completed_targets}/${b.total_targets}`),
+});
+```
+
+**HTTP:**
 
 ```bash
 curl -X POST https://scanner.getsly.ai/v1/scanner/scan/batch \
   -H "Authorization: Bearer $SCANNER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
+    "name": "Q2 audit",
     "domains": [
-      { "domain": "shopify.com", "merchant_category": "saas" },
-      { "domain": "amazon.com",  "merchant_category": "marketplace" },
-      { "domain": "mercadolibre.com", "region": "latam" }
+      { "domain": "shopify.com" },
+      { "domain": "amazon.com" },
+      { "domain": "mercadolibre.com" }
     ]
   }'
 ```
 
-Returns `{ batch_id, status: "pending", total_targets: 3, credits_charged: 2 }`.
+Returns a `batch_id`. Poll `/v1/scanner/scan/batch/:id` every few seconds for progress.
 
-Poll `/v1/scanner/scan/batch/:id` every few seconds for progress, then query `/v1/scanner/scans?min_score=0` to pull results.
+## 5. Audit your charges
 
-## 5. Find best prospects
+Every consume row in the ledger links to the scan it paid for via `?expand=scan`:
+
+```ts
+for await (const entry of scanner.iterateLedger({ expandScan: true })) {
+  if (entry.reason === 'consume' && entry.scan) {
+    console.log(entry.created_at, entry.scan.domain, entry.scan.readiness_score);
+  }
+}
+```
+
+Or via HTTP:
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/credits/ledger?expand=scan&limit=50"
+```
+
+## 6. Find best prospects
 
 ```bash
 curl -H "Authorization: Bearer $SCANNER_KEY" \
@@ -85,6 +158,7 @@ Each returned prospect combines demand signals + readiness gap into an `opportun
 
 ## What's next
 
-- [Authentication](/scanner/authentication) — SSO via your Sly account or dedicated API keys.
-- [Credits & billing](/scanner/credits-and-billing) — usage reporting and top-up flow.
-- [Endpoint reference](/scanner/endpoints/scan).
+- [SDK reference](/scanner/sdk) — typed methods, errors, retries
+- [Authentication](/scanner/authentication) — keys vs JWT
+- [Credits & billing](/scanner/credits-and-billing) — pricing, auto-refunds, top-ups
+- [Endpoint reference](/scanner/endpoints/scan)

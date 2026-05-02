@@ -32,9 +32,22 @@ Request fields:
 | `merchant_category`| enum     | `retail`, `saas`, `marketplace`, `restaurant`, `b2b`, `travel`, `fintech`, `healthcare`, `media`, `other`. |
 | `country_code`     | string   | ISO 3166-1 alpha-2.                                      |
 | `region`           | enum     | `latam`, `north_america`, `europe`, `apac`, `africa`, `mena`. |
-| `skip_if_fresh`    | boolean  | If true, returns the cached scan when it's under 24h old (still costs 0 credits). |
+| `skip_if_fresh`    | boolean  | If true, returns the cached scan when it's under 7 days old (still costs 0 credits). |
 
-Response is a full [`MerchantScan`](/scanner/data-model) object.
+Response is a full [`MerchantScan`](/scanner/data-model) object. The response includes a **`request_id`** field (also echoed in the `X-Request-ID` response header) — the same id appears as `source: "request:<uuid>"` on the credit ledger row that paid for the scan, so you can join consume rows back to scan results. See [audit trail](/scanner/credits-and-billing#ledger).
+
+The response also includes an **`X-Credits-Remaining`** header so you can track your balance without an extra call. The TypeScript SDK reads it automatically — see the [SDK reference](/scanner/sdk).
+
+### Errors
+
+Validation typos and server errors are **automatically refunded** — see [auto-refund on 4xx and 5xx](/scanner/credits-and-billing#auto-refund-on-4xx-and-5xx). Common errors:
+
+| Status | Meaning | Body shape |
+| ------ | ------- | ---------- |
+| 400    | Validation error | `{ error: "Validation error", details: { fieldErrors: { domain: ["Required"] } } }` |
+| 401    | Bad / expired key | `{ error: "unauthorized" }` |
+| 402    | Insufficient credits (not debited) | `{ error: "insufficient_credits", balance, required, docs }` |
+| 429    | Rate limited (not debited; honors `Retry-After`) | `{ error: "rate_limit_exceeded", limit, reset_seconds }` |
 
 ## GET /v1/scanner/scan/:id
 

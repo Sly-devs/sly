@@ -1,0 +1,182 @@
+---
+title: "Credits & Usage Endpoints"
+description: "Balance, ledger, daily activity, and aggregated usage — read-only and free."
+---
+
+All endpoints below are **`GET`** and **cost zero credits**. Authentication is the same as every other scanner call (`Authorization: Bearer <psk_*>` or `<JWT>`).
+
+The TypeScript SDK exposes each one as a typed method — see the [SDK reference](/scanner/sdk).
+
+## `GET /v1/scanner/credits/balance`
+
+Authoritative current balance plus lifetime totals.
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  https://scanner.getsly.ai/v1/scanner/credits/balance
+```
+
+```json
+{
+  "balance": 96,
+  "grantedTotal": 100,
+  "consumedTotal": 4
+}
+```
+
+| Field           | Notes |
+| --------------- | ----- |
+| `balance`       | Current spendable credits. |
+| `grantedTotal`  | Lifetime sum of `grant`-reason rows in the ledger. |
+| `consumedTotal` | Lifetime sum of `consume` rows minus `refund` rows (net of auto-refunds on 4xx/5xx). |
+
+For most integrations you don't need to call this directly — every billed response includes an [`X-Credits-Remaining`](/scanner/credits-and-billing#x-credits-remaining-header) header, and the SDK tracks it automatically.
+
+## `GET /v1/scanner/credits/activity`
+
+Day-bucketed billable scan counts sourced **directly from the credit ledger**. Use this for usage charts and billing reconciliation — it never undercounts because the ledger is written synchronously inside the credits middleware.
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/credits/activity?from=2026-04-01T00:00:00Z"
+```
+
+```json
+{
+  "data": [
+    { "day": "2026-05-02", "scans": 17, "credits": 17 }
+  ]
+}
+```
+
+Query params:
+
+| Param | Type   | Notes |
+| ----- | ------ | ----- |
+| `from`| string | ISO-8601 timestamp. Optional — defaults to start of all-time. |
+| `to`  | string | ISO-8601 timestamp. Optional — defaults to now. |
+
+Each `day` row reports **net** activity: a refunded validation error is subtracted from `scans` and `credits` so the count matches what the partner actually paid for.
+
+## `GET /v1/scanner/credits/ledger`
+
+Per-row ledger of every grant, consume, refund, and adjustment. Paginated, with optional scan-result join.
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/credits/ledger?limit=50&page=1&expand=scan"
+```
+
+```json
+{
+  "data": [
+    {
+      "id": "1ee1d779-…",
+      "delta": -1,
+      "reason": "consume",
+      "source": "request:2fb64db5-…",
+      "balance_after": 82,
+      "metadata": {
+        "endpoint": "POST /v1/scanner/scan",
+        "key_id": "708674e2-…"
+      },
+      "created_at": "2026-05-02T20:26:33.321799+00:00",
+      "scan": {
+        "id": "b16d213c-…",
+        "request_id": "2fb64db5-…",
+        "domain": "reddit.com",
+        "readiness_score": 15,
+        "scan_status": "completed"
+      }
+    }
+  ],
+  "pagination": { "page": 1, "limit": 50, "total": 23, "totalPages": 1 }
+}
+```
+
+Query params:
+
+| Param   | Type    | Notes |
+| ------- | ------- | ----- |
+| `from`  | string  | ISO-8601 timestamp. Optional. |
+| `to`    | string  | ISO-8601 timestamp. Optional. |
+| `limit` | integer | 1–500. Default 100. |
+| `page`  | integer | 1-based. Default 1. (Legacy `?offset=N` also accepted.) |
+| `expand`| string  | Comma-separated list. Currently only `scan` is supported — joins consume rows to their `merchant_scans` row via `request_id`. |
+
+Row fields:
+
+| Field           | Notes |
+| --------------- | ----- |
+| `delta`         | Signed integer. Negative for consume, positive for grant/refund. |
+| `reason`        | `grant` &#124; `consume` &#124; `refund` &#124; `adjustment`. |
+| `source`        | For consumes: `"request:<uuid>"`. For grants: invoice id, pack id, or free-form. For refunds: `"refund:<uuid>"` referencing the original consume's request_id. |
+| `metadata.endpoint` | Which API call caused the consume (e.g. `POST /v1/scanner/scan`). |
+| `metadata.key_id`   | Which scanner key was used. |
+| `metadata.status_code` (refunds) | The HTTP status that triggered the refund. |
+| `metadata.reason` (refunds) | `"client_error"` (4xx) or `"server_error"` (5xx). |
+| `scan` (with `expand=scan`) | Joined merchant_scans summary. Present only on consume rows whose request_id matches a scan. |
+
+### Audit-trail use case
+
+`expand=scan` answers *"what did I get for this charge?"* without a second call. Pre-fix consumes (before the `request_id` join shipped on 2026-05-02) won't have the `scan` field — the row will just show `source` as before.
+
+## `GET /v1/scanner/usage`
+
+Aggregated request counts and credit consumption, grouped by endpoint or day. Aggregation runs server-side (no row caps).
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/usage?group_by=endpoint"
+```
+
+Query params:
+
+| Param      | Type   | Notes |
+| ---------- | ------ | ----- |
+| `group_by` | string | `endpoint` (default) or `day`. |
+| `from`     | string | ISO-8601. Optional. |
+| `to`       | string | ISO-8601. Optional. |
+
+Endpoint grouping:
+
+```json
+{
+  "group_by": "endpoint",
+  "data": [
+    {
+      "endpoint": "POST /v1/scanner/scan",
+      "requests": 24,
+      "credits": 24,
+      "errors": 1,
+      "total_duration_ms": 91842
+    },
+    {
+      "endpoint": "GET /v1/scanner/credits/balance",
+      "requests": 18,
+      "credits": 0,
+      "errors": 0,
+      "total_duration_ms": 2156
+    }
+  ]
+}
+```
+
+Day grouping:
+
+```json
+{
+  "group_by": "day",
+  "data": [
+    {
+      "day": "2026-05-02",
+      "requests": 408,
+      "credits": 24,
+      "errors": 1,
+      "total_duration_ms": 55425
+    }
+  ]
+}
+```
+
+For billable-activity charts, prefer `/credits/activity` — it sources from the ledger and is never affected by best-effort telemetry. `/usage` is the right call when you also want read traffic + per-endpoint latency breakdowns.

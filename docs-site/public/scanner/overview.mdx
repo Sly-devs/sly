@@ -22,14 +22,15 @@ The **Sly Scanner** analyzes merchant websites and returns a structured readines
 
 ## How to integrate
 
-Four supported access modes — pick the one that fits your stack:
+Five supported access modes — pick the one that fits your stack:
 
-| Mode | Best for | Docs |
-| --- | --- | --- |
-| **TypeScript SDK** (`@sly_ai/scanner`) | Node.js / browser / edge integrations — typed methods, auto-retry, balance tracking | [SDK reference](/scanner/sdk) |
-| **REST API** | Any language; simple integrations | [Endpoint reference](/scanner/endpoints/scan) |
-| **MCP over HTTP** | AI agents (Claude, Cursor, custom) calling scanner tools remotely | `POST /v1/scanner/mcp` (Streamable HTTP, stateless) |
-| **MCP server (stdio)** | Local AI clients via `mcp.json` (Claude Desktop, Cursor) | `pnpm dlx @sly_ai/scanner-mcp` |
+| Mode | Best for | Per-scan price | Docs |
+| --- | --- | --- | --- |
+| **TypeScript SDK** (`@sly_ai/scanner`) | Node.js / browser / edge integrations — typed methods, auto-retry, balance tracking | $0.025 list, down to **$0.007** at Enterprise | [SDK reference](/scanner/sdk) |
+| **REST API** | Any language; simple integrations | $0.025 list (partner) | [Endpoint reference](/scanner/endpoints/scan) |
+| **x402 marketplace** | AI agents discovering Sly via [agentic.market](https://agentic.market) — pay per call in USDC, no key | **$0.05** | [x402 page](/scanner/x402) |
+| **MCP over HTTP** | AI agents (Claude, Cursor, custom) calling scanner tools remotely | partner pricing | `POST /v1/scanner/mcp` (Streamable HTTP, stateless) |
+| **MCP server (stdio)** | Local AI clients via `mcp.json` (Claude Desktop, Cursor) | partner pricing | `pnpm dlx @sly_ai/scanner-mcp` |
 
 ## Pricing model
 

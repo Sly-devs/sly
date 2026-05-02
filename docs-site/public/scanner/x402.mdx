@@ -1,0 +1,104 @@
+---
+title: "x402 / Agentic.Market"
+description: "Per-call USDC pricing for AI agents discovering Sly Scanner via Coinbase's agentic marketplace."
+---
+
+Sly Scanner is listed on **[agentic.market](https://agentic.market)** so AI agents can discover and call it without an account, key, or signup. Payment settles per call in USDC on Base via the [x402 protocol](https://www.x402.org/).
+
+> **Listing one-liner:** Sly Scanner — agentic-commerce readiness across 8 protocols (UCP, ACP, AP2, x402, MCP, NLWeb, Visa VIC, Mastercard) plus structured-data, accessibility, and checkout sub-scores. Per-call audit trail. **$0.05 USDC/scan — half the price of competing audits, with deeper coverage.**
+
+## When to use the x402 channel
+
+| You want… | Use |
+| --- | --- |
+| Pay-per-call, no account, no commitment | **x402** (this page) |
+| < 1,000 scans/month, occasional use | **x402** |
+| > 5,000 scans/month, predictable volume | **[Partner channel](/scanner/credits-and-billing)** (50–86% cheaper) |
+| Typed SDK, batch helpers, dashboard, audit UI | **[Partner channel](/scanner/sdk)** |
+| AI agent runtime calling on its own from a wallet | **x402** |
+
+## Pricing
+
+All endpoints undercut comparable services on the marketplace by **at least 50%**.
+
+| Endpoint | x402 price | Comparable | Savings vs comparable |
+| --- | --- | --- | --- |
+| `POST /v1/scanner/scan` | **$0.05 USDC** | `x402.agoragentic.com` readiness audit — $0.10 | **50%** |
+| `POST /v1/scanner/tests` | **$0.25 USDC** | `defi.shield` API audit — $0.50 | **50%** |
+| `GET /v1/scanner/scans/by-domain/:domain` | **$0.005 USDC** | OrbisAPI ecommerce reads — $0.005 | matches floor |
+| `GET /v1/scanner/prospects` | **$0.025 USDC** | Dentro merchant directory — $0.005 (less data) | richer data, ~5× the value |
+
+Cached reads (`scans/by-domain`) intentionally sit at the marketplace floor so well-behaved agents can re-check a result cheaply within a 24-hour cache window without burning a fresh-scan credit.
+
+## Calling Sly Scanner via x402
+
+Agents call the same HTTP endpoints documented in the [endpoint reference](/scanner/endpoints/scan), but include an x402 payment header instead of an `Authorization` header.
+
+The minimal flow:
+
+1. Agent sends an unauthenticated request → receives **HTTP 402** with the payment requirements
+2. Agent signs a USDC payment (Base) for the requested amount
+3. Resends the request with `X-PAYMENT: <signed envelope>`
+4. Gateway verifies + settles → proxies to scanner → returns the result
+
+Coinbase's `@x402/fetch` wrapper handles all four steps in one call:
+
+```ts
+import { wrapFetchWithPayment } from '@x402/fetch';
+import { privateKeyToAccount } from 'viem/accounts';
+
+const account = privateKeyToAccount(process.env.AGENT_PRIVATE_KEY!);
+const fetch = wrapFetchWithPayment(globalThis.fetch, account);
+
+const res = await fetch('https://scanner.getsly.ai/v1/scanner/scan', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ domain: 'shopify.com' }),
+});
+const result = await res.json();   // typed-equivalent to /scanner/sdk
+```
+
+The agent's wallet is debited $0.05 USDC; the result is identical to what a `psk_live_*` partner gets.
+
+## Idempotency
+
+Each x402 request includes a UUID in the payment header. The gateway dedupes within a **5-minute window** — if your agent retries on a transient error, the second attempt is recognized and **doesn't double-charge**. Outside that window, treat retries as new charges.
+
+## Caching
+
+`scans/by-domain` responses include a `Cache-Control: max-age=86400` header. Well-behaved agents that cache by URL won't re-pay for a day. The underlying scan corpus updates whenever any partner triggers a fresh `POST /scan` for the same domain.
+
+## Auto-refund on errors
+
+The gateway debits credits only after schema validation succeeds. Validation errors (400) **never charge**. Server errors (5xx) trigger an on-chain refund within ~30s of the failure.
+
+## Convert to a partner: instant 50% savings
+
+Any agent operator running > ~1,000 scans/month should sign up for a partner key:
+
+| Monthly volume | Cost on x402 | Cost as partner | Savings |
+| --- | --- | --- | --- |
+| 1,000 | $50 | $25 (List) | **50%** |
+| 5,000 | $250 | $200 (Starter pack) | 20% + 5K credits banked |
+| 25,000 | $1,250 | $750 (Growth pack) | 40% + 25K credits banked |
+| 100,000 | $5,000 | $2,000 (Scale pack) | **60%** |
+| 1,000,000 | $50,000 | ~$7,000 (Enterprise) | **86%** |
+
+Sign-up at **app.getsly.ai → Developers → API Keys → Scanner API Keys**. Self-serve key creation; live keys require the `owner` or `admin` role.
+
+## What you get on either channel
+
+- The same scan engine: 8 protocol probes, 4 analyzers, 5 sub-scores, 2–5s response
+- The same audit trail: every charge links to a scan result via `request_id`
+- The same shared scan corpus: reads benefit from every other tenant's writes
+- Server-side aggregation: usage and ledger queries scale to millions of rows
+- Auto-refund on 4xx/5xx — no quota burned on errors
+
+The partner channel adds: typed SDK with batch helpers, dashboard with chart + ledger, server-side batch API, prepaid credits with no per-call settlement gas.
+
+## Source + listing
+
+- Live at [agentic.market/services/api-getsly-ai](https://agentic.market) (search "scanner")
+- Direct API base for x402: `https://scanner.getsly.ai/v1/scanner/*`
+- Status: [scanner.getsly.ai/health](https://scanner.getsly.ai/health)
+- Support: [partners@getsly.ai](mailto:partners@getsly.ai)

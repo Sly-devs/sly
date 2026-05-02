@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
+import { ScanDetailModal } from './scan-detail-modal';
 import {
   Bar,
   BarChart,
@@ -21,6 +22,7 @@ import { useScannerApi } from '@/lib/scanner-api';
  */
 export function ScannerSection() {
   const scanner = useScannerApi();
+  const [openScanId, setOpenScanId] = useState<string | null>(null);
 
   const balanceQuery = useQuery({
     queryKey: ['scanner', 'balance'],
@@ -391,9 +393,9 @@ export function ScannerSection() {
                       {row.scan ? (
                         <button
                           type="button"
-                          onClick={() => navigator.clipboard?.writeText(row.scan!.id)}
+                          onClick={() => setOpenScanId(row.scan!.id)}
                           className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
-                          title={`Click to copy scan id: ${row.scan.id}\nFetch the full payload with: GET /v1/scanner/scan/${row.scan.id}`}
+                          title="View full scan result"
                         >
                           <span className="font-mono">{row.scan.domain}</span>
                           {row.scan.readiness_score != null && (
@@ -411,6 +413,8 @@ export function ScannerSection() {
           </div>
         )}
       </div>
+
+      <ScanDetailModal scanId={openScanId} onClose={() => setOpenScanId(null)} />
     </div>
   );
 }

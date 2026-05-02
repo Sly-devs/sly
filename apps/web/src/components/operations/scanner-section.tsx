@@ -85,6 +85,27 @@ export function ScannerSection() {
     staleTime: 60_000,
   });
 
+  // Ground-truth scan counts come from the credit LEDGER, not the
+  // usage-events buffer. The ledger is written synchronously inside the
+  // credits middleware so it never drops a billed event; usage_events
+  // can lose rows under concurrent flush race conditions across Vercel
+  // function instances. We use this for the "Scans (30d)" KPI and the
+  // chart's billable bar.
+  const activityQuery = useQuery({
+    queryKey: ['scanner', 'activity', 'day', fromDay],
+    queryFn: async () => {
+      const res = await scanner.get(
+        `/v1/scanner/credits/activity?from=${encodeURIComponent(fromIso)}`,
+      );
+      if (!res.ok) throw new Error('activity-failed');
+      const json = (await res.json()) as {
+        data: Array<{ day: string; scans: number; credits: number }>;
+      };
+      return json.data ?? [];
+    },
+    staleTime: 30_000,
+  });
+
   const ledgerQuery = useQuery({
     queryKey: ['scanner', 'ledger'],
     queryFn: async () => {
@@ -109,25 +130,34 @@ export function ScannerSection() {
   const balance = balanceQuery.data?.balance ?? 0;
   const needsTopup = balanceQuery.isSuccess && balance < 500;
 
-  // "Scans" = billable activity. Credits map 1:1 to scan-style operations
-  // (1 credit / scan, 0.5 / batch domain, 5 / agent test); summing credits
-  // gives the partner's actual workload, not dashboard polling noise.
+  // "Scans (30d)" comes from the ledger (ground truth) — counts billed
+  // consume rows, not the usage-events derived value which can undercount.
   const monthScans =
-    usageByDayQuery.data
+    activityQuery.data
       ?.filter((d) => d.day >= fromDay)
-      .reduce((sum, d) => sum + d.credits, 0) ?? 0;
+      .reduce((sum, d) => sum + d.scans, 0) ?? 0;
 
-  // Split each day into billable (= credits) and free (reads, polling),
-  // then keep a sparse view: only days with any activity. Stops the chart
-  // from drowning under 30 mostly-zero buckets when usage is light.
-  const chartData = (usageByDayQuery.data ?? [])
-    .map((d) => ({
-      day: d.day,
-      scans: d.credits,
-      reads: Math.max(0, d.requests - d.credits),
-      errors: d.errors,
-    }))
-    .filter((d) => d.scans > 0 || d.reads > 0 || d.errors > 0);
+  // Chart joins ledger truth (scans) with usage-events (reads + errors) per
+  // day. Sparse view — only days with any activity. The merge is on `day`
+  // string; days that exist in only one source are still included.
+  const chartData = (() => {
+    const byDay: Record<string, { day: string; scans: number; reads: number; errors: number }> = {};
+    for (const d of activityQuery.data ?? []) {
+      byDay[d.day] = { day: d.day, scans: d.scans, reads: 0, errors: 0 };
+    }
+    for (const d of usageByDayQuery.data ?? []) {
+      const row = byDay[d.day] ?? { day: d.day, scans: 0, reads: 0, errors: 0 };
+      // d.requests is the total of all request types in usage_events; subtract
+      // credits to get reads. We deliberately don't trust usage_events for
+      // scan counts, so we don't update row.scans here.
+      row.reads = Math.max(0, d.requests - d.credits);
+      row.errors = d.errors;
+      byDay[d.day] = row;
+    }
+    return Object.values(byDay)
+      .filter((d) => d.scans > 0 || d.reads > 0 || d.errors > 0)
+      .sort((a, b) => a.day.localeCompare(b.day));
+  })();
 
   return (
     <div id="scanner" className="space-y-6 pt-8 mt-8 border-t border-gray-200 dark:border-gray-700">
@@ -166,7 +196,7 @@ export function ScannerSection() {
         />
         <Kpi
           label="Scans (30d)"
-          value={usageByDayQuery.isLoading ? '—' : monthScans.toLocaleString()}
+          value={activityQuery.isLoading ? '—' : monthScans.toLocaleString()}
           icon={<Radar className="h-4 w-4 text-indigo-500" />}
         />
       </div>
@@ -238,7 +268,7 @@ export function ScannerSection() {
             </p>
           </div>
         </div>
-        {usageByDayQuery.isLoading ? (
+        {usageByDayQuery.isLoading || activityQuery.isLoading ? (
           <div className="h-56 flex items-center justify-center text-sm text-gray-500">Loading…</div>
         ) : chartData.length === 0 ? (
           <div className="h-56 flex items-center justify-center text-sm text-gray-500">

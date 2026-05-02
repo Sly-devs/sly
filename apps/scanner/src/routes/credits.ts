@@ -11,6 +11,55 @@ creditsRouter.get('/credits/balance', async (c) => {
   return c.json(summary);
 });
 
+// GET /v1/scanner/credits/activity?from=&to=
+// Day-bucketed scan + credit aggregates from the credit LEDGER (not the
+// usage events buffer). Use this anywhere you need a ground-truth count of
+// what the partner actually paid for — the ledger is written synchronously
+// inside the credits middleware, so it never drops a billed event.
+//
+// The chart and "Scans (30d)" KPI on the dashboard read from here for
+// scan counts; usage_events stays the source for read-traffic + per-endpoint
+// breakdown where best-effort aggregation is acceptable.
+creditsRouter.get('/credits/activity', async (c) => {
+  const { tenantId } = c.get('ctx');
+  const from = c.req.query('from');
+  const to = c.req.query('to');
+
+  const supabase = createClient();
+  // Pull both consume and refund rows so we can net them per day. A 4xx
+  // validation error consumes then refunds in the same request — both rows
+  // land within milliseconds of each other and almost always on the same
+  // calendar day. Reporting "Scans" as net (consume − refund) matches what
+  // the partner actually paid for.
+  let q = (supabase.from('scanner_credit_ledger') as any)
+    .select('delta, created_at, reason')
+    .eq('tenant_id', tenantId)
+    .in('reason', ['consume', 'refund']);
+  if (from) q = q.gte('created_at', from);
+  if (to) q = q.lte('created_at', to);
+
+  const { data, error } = await q;
+  if (error) return c.json({ error: error.message }, 500);
+
+  const byDay: Record<string, { day: string; scans: number; credits: number }> = {};
+  for (const row of (data as Array<{ delta: number; created_at: string; reason: string }>) ?? []) {
+    const day = row.created_at.slice(0, 10);
+    if (!byDay[day]) byDay[day] = { day, scans: 0, credits: 0 };
+    if (row.reason === 'consume') {
+      byDay[day].scans += 1;
+      byDay[day].credits += -row.delta;
+    } else {
+      // refund — reverses a same-day consume
+      byDay[day].scans -= 1;
+      byDay[day].credits -= row.delta;
+    }
+  }
+  const days = Object.values(byDay)
+    .map((d) => ({ ...d, scans: Math.max(0, d.scans), credits: Math.max(0, d.credits) }))
+    .sort((a, b) => a.day.localeCompare(b.day));
+  return c.json({ data: days });
+});
+
 // GET /v1/scanner/credits/ledger?from=&to=&limit=&offset=
 creditsRouter.get('/credits/ledger', async (c) => {
   const { tenantId } = c.get('ctx');

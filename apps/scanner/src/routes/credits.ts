@@ -71,23 +71,28 @@ creditsRouter.get('/credits/ledger', async (c) => {
   const from = c.req.query('from') || undefined;
   const to = c.req.query('to') || undefined;
   const limit = Math.min(parseInt(c.req.query('limit') || '100'), 500);
-  const offset = parseInt(c.req.query('offset') || '0');
+  const page = Math.max(1, parseInt(c.req.query('page') || '1'));
+  // Accept either `?page=N` (preferred, matches the operations event-log API)
+  // or legacy `?offset=N` for backwards-compat with anyone curling it.
+  const offset = c.req.query('offset')
+    ? parseInt(c.req.query('offset')!)
+    : (page - 1) * limit;
   const expand = (c.req.query('expand') || '').split(',').map((s) => s.trim());
 
-  const entries = await listLedger(tenantId, { from, to, limit, offset });
+  const { entries, total } = await listLedger(tenantId, { from, to, limit, offset });
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const pagination = { page, limit, total, totalPages };
 
-  if (!expand.includes('scan')) {
-    return c.json({ data: entries, limit, offset });
-  }
+  const respond = (data: any[]) => c.json({ data, pagination });
+
+  if (!expand.includes('scan')) return respond(entries);
 
   // Pull request_ids out of source = "request:<uuid>" on consume rows.
   const requestIds = entries
     .filter((e) => e.reason === 'consume' && e.source?.startsWith('request:'))
     .map((e) => e.source!.slice('request:'.length));
 
-  if (requestIds.length === 0) {
-    return c.json({ data: entries, limit, offset });
-  }
+  if (requestIds.length === 0) return respond(entries);
 
   const supabase = createClient();
   const { data: scans } = await (supabase.from('merchant_scans') as any)
@@ -107,7 +112,7 @@ creditsRouter.get('/credits/ledger', async (c) => {
     return scan ? { ...e, scan } : e;
   });
 
-  return c.json({ data: expanded, limit, offset });
+  return respond(expanded);
 });
 
 // GET /v1/scanner/usage?from=&to=&group_by=endpoint|day

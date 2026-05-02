@@ -39,6 +39,7 @@ import {
   MessageSquare,
   Webhook,
   TrendingUp,
+  Radar,
 } from 'lucide-react';
 import { useSidebar } from './sidebar-context';
 import { useSidebarData } from './use-sidebar-data';
@@ -223,7 +224,7 @@ export function Sidebar() {
     '/dashboard/treasury', '/dashboard/reports', '/dashboard/compliance', '/dashboard/workflows',
     '/dashboard/fx',
   ].some((p) => pathname.startsWith(p));
-  const devPathMatch = ['/dashboard/developers', '/dashboard/operations', '/dashboard/api-keys', '/dashboard/webhooks', '/dashboard/logs',
+  const devPathMatch = ['/dashboard/developers', '/dashboard/operations', '/dashboard/scanner', '/dashboard/api-keys', '/dashboard/webhooks', '/dashboard/logs',
   ].some((p) => pathname.startsWith(p));
   const [opsExpanded, setOpsExpanded] = useState(opsPathMatch);
   const [devExpanded, setDevExpanded] = useState(devPathMatch);
@@ -299,6 +300,7 @@ export function Sidebar() {
   const developersNav: NavItemDef[] = [
     { href: '/dashboard/developers', label: 'Portal', icon: Terminal },
     { href: '/dashboard/operations', label: 'Operations', icon: Activity },
+    { href: '/dashboard/scanner', label: 'Scanner', icon: Radar },
     { href: '/dashboard/logs', label: 'Logs', icon: ScrollText },
     { href: '/dashboard/api-keys', label: 'API Keys', icon: Key },
     { href: '/dashboard/webhooks', label: 'Webhooks', icon: Webhook },

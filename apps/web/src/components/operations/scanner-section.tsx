@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import {
@@ -35,13 +36,20 @@ export function ScannerSection() {
     staleTime: 30_000,
   });
 
-  // Last 30 days of day-buckets
-  const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  // Last 30 days of day-buckets. Bucket the cutoff at day-precision so the
+  // queryKey stays stable across renders within the same day — previously it
+  // used Date.now() at full ms precision, which gave a fresh key every render
+  // and kept the chart stuck in the loading state.
+  const fromDay = useMemo(
+    () => new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    [],
+  );
+  const fromIso = `${fromDay}T00:00:00Z`;
   const usageByDayQuery = useQuery({
-    queryKey: ['scanner', 'usage', 'day', from],
+    queryKey: ['scanner', 'usage', 'day', fromDay],
     queryFn: async () => {
       const res = await scanner.get(
-        `/v1/scanner/usage?group_by=day&from=${encodeURIComponent(from)}`,
+        `/v1/scanner/usage?group_by=day&from=${encodeURIComponent(fromIso)}`,
       );
       if (!res.ok) throw new Error('usage-day-failed');
       const json = (await res.json()) as {
@@ -103,7 +111,7 @@ export function ScannerSection() {
 
   const monthRequests =
     usageByDayQuery.data
-      ?.filter((d) => d.day >= new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
+      ?.filter((d) => d.day >= fromDay)
       .reduce((sum, d) => sum + d.requests, 0) ?? 0;
 
   return (

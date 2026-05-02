@@ -60,77 +60,122 @@ creditsRouter.get('/credits/activity', async (c) => {
   return c.json({ data: days });
 });
 
-// GET /v1/scanner/credits/ledger?from=&to=&limit=&offset=
+// GET /v1/scanner/credits/ledger?from=&to=&limit=&offset=&expand=scan
+//
+// expand=scan joins each consume row to the merchant_scans row that paid for
+// it (via the new merchant_scans.request_id column) so partners can audit
+// "what did I get for this charge?". Each consume row gets a `scan` field:
+// { id, domain, readiness_score, scan_status } if the join finds a match.
 creditsRouter.get('/credits/ledger', async (c) => {
   const { tenantId } = c.get('ctx');
   const from = c.req.query('from') || undefined;
   const to = c.req.query('to') || undefined;
   const limit = Math.min(parseInt(c.req.query('limit') || '100'), 500);
   const offset = parseInt(c.req.query('offset') || '0');
+  const expand = (c.req.query('expand') || '').split(',').map((s) => s.trim());
 
   const entries = await listLedger(tenantId, { from, to, limit, offset });
-  return c.json({ data: entries, limit, offset });
+
+  if (!expand.includes('scan')) {
+    return c.json({ data: entries, limit, offset });
+  }
+
+  // Pull request_ids out of source = "request:<uuid>" on consume rows.
+  const requestIds = entries
+    .filter((e) => e.reason === 'consume' && e.source?.startsWith('request:'))
+    .map((e) => e.source!.slice('request:'.length));
+
+  if (requestIds.length === 0) {
+    return c.json({ data: entries, limit, offset });
+  }
+
+  const supabase = createClient();
+  const { data: scans } = await (supabase.from('merchant_scans') as any)
+    .select('id, request_id, domain, readiness_score, scan_status')
+    .eq('tenant_id', tenantId)
+    .in('request_id', requestIds);
+
+  const byRequestId = new Map<string, any>();
+  for (const s of (scans as any[]) ?? []) {
+    if (s.request_id) byRequestId.set(s.request_id, s);
+  }
+
+  const expanded = entries.map((e) => {
+    if (e.reason !== 'consume' || !e.source?.startsWith('request:')) return e;
+    const rid = e.source.slice('request:'.length);
+    const scan = byRequestId.get(rid);
+    return scan ? { ...e, scan } : e;
+  });
+
+  return c.json({ data: expanded, limit, offset });
 });
 
 // GET /v1/scanner/usage?from=&to=&group_by=endpoint|day
-// Aggregates scanner_usage_events for the calling tenant.
+//
+// Server-side aggregation via the scanner_usage_aggregate Postgres function —
+// the previous code path fetched all rows into Node and was silently
+// truncated at supabase-js's default 1000-row cap, so tenants with lots of
+// activity saw their newest events dropped from the dashboard.
+//
+// The credits column on the endpoint view comes from the scanner_credit_ledger
+// (via scanner_credits_by_endpoint) instead of usage_events, because pre-fix
+// data loss in usage_events made billed credits look smaller than they were.
+// usage_events still backs requests/errors/latency where best-effort
+// aggregation is acceptable.
 creditsRouter.get('/usage', async (c) => {
   const { tenantId } = c.get('ctx');
-  const from = c.req.query('from');
-  const to = c.req.query('to');
+  const from = c.req.query('from') || null;
+  const to = c.req.query('to') || null;
   const groupBy = c.req.query('group_by') === 'day' ? 'day' : 'endpoint';
 
   const supabase = createClient();
-  let q = (supabase.from('scanner_usage_events') as any)
-    .select('method, path_template, minute_bucket, status_code, count, total_duration_ms, credits_consumed')
-    .eq('tenant_id', tenantId);
-  if (from) q = q.gte('minute_bucket', from);
-  if (to) q = q.lte('minute_bucket', to);
-
-  const { data, error } = await q;
+  const { data, error } = await (supabase.rpc as any)('scanner_usage_aggregate', {
+    p_tenant_id: tenantId,
+    p_from: from,
+    p_to: to,
+    p_group_by: groupBy,
+  });
   if (error) return c.json({ error: error.message }, 500);
 
   const rows = (data as any[]) ?? [];
 
   if (groupBy === 'day') {
-    const byDay: Record<string, {
-      requests: number;
-      credits: number;
-      errors: number;
-      total_duration_ms: number;
-    }> = {};
-    for (const r of rows) {
-      const day = r.minute_bucket.slice(0, 10);
-      if (!byDay[day]) byDay[day] = { requests: 0, credits: 0, errors: 0, total_duration_ms: 0 };
-      byDay[day].requests += r.count;
-      byDay[day].credits += r.credits_consumed;
-      byDay[day].total_duration_ms += r.total_duration_ms;
-      if (r.status_code >= 400) byDay[day].errors += r.count;
-    }
-    const byDayData = Object.entries(byDay)
-      .map(([day, v]) => ({ day, ...v }))
-      .sort((a, b) => a.day.localeCompare(b.day));
+    const byDayData = rows.map((r) => ({
+      day: r.bucket as string,
+      requests: Number(r.requests),
+      credits: Number(r.credits),
+      errors: Number(r.errors),
+      total_duration_ms: Number(r.total_duration_ms),
+    }));
     return c.json({ group_by: 'day', data: byDayData });
   }
 
-  // group_by = endpoint
-  const byEndpoint: Record<string, {
-    endpoint: string;
-    requests: number;
-    credits: number;
-    errors: number;
-    total_duration_ms: number;
-  }> = {};
-  for (const r of rows) {
-    const key = `${r.method} ${r.path_template}`;
-    if (!byEndpoint[key]) {
-      byEndpoint[key] = { endpoint: key, requests: 0, credits: 0, errors: 0, total_duration_ms: 0 };
-    }
-    byEndpoint[key].requests += r.count;
-    byEndpoint[key].credits += r.credits_consumed;
-    byEndpoint[key].total_duration_ms += r.total_duration_ms;
-    if (r.status_code >= 400) byEndpoint[key].errors += r.count;
+  // For the endpoint view, overlay billable credits from the ledger.
+  const { data: ledgerCredits, error: lcErr } = await (supabase.rpc as any)(
+    'scanner_credits_by_endpoint',
+    { p_tenant_id: tenantId, p_from: from, p_to: to },
+  );
+  if (lcErr) return c.json({ error: lcErr.message }, 500);
+
+  const truthByEndpoint = new Map<string, { scans: number; credits: number }>();
+  for (const r of (ledgerCredits as any[]) ?? []) {
+    truthByEndpoint.set(r.endpoint, { scans: Number(r.scans), credits: Number(r.credits) });
   }
-  const byEndpointData = Object.values(byEndpoint).sort((a, b) => b.requests - a.requests);
+
+  const byEndpointData = rows.map((r) => {
+    const endpoint = `${r.method} ${r.path_template}`;
+    const truth = truthByEndpoint.get(endpoint);
+    return {
+      endpoint,
+      requests: Number(r.requests),
+      // Ground-truth credits from the ledger when available (billable
+      // endpoints); fall back to usage_events for free-read endpoints
+      // where there is no ledger row.
+      credits: truth ? truth.credits : Number(r.credits),
+      errors: Number(r.errors),
+      total_duration_ms: Number(r.total_duration_ms),
+    };
+  });
+
   return c.json({ group_by: 'endpoint', data: byEndpointData });
 });

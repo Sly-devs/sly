@@ -107,9 +107,9 @@ export function ScannerSection() {
   });
 
   const ledgerQuery = useQuery({
-    queryKey: ['scanner', 'ledger'],
+    queryKey: ['scanner', 'ledger', 'expand-scan'],
     queryFn: async () => {
-      const res = await scanner.get('/v1/scanner/credits/ledger?limit=20');
+      const res = await scanner.get('/v1/scanner/credits/ledger?limit=20&expand=scan');
       if (!res.ok) throw new Error('ledger-failed');
       const json = (await res.json()) as {
         data: Array<{
@@ -120,6 +120,12 @@ export function ScannerSection() {
           balance_after: number;
           metadata: Record<string, unknown>;
           created_at: string;
+          scan?: {
+            id: string;
+            domain: string;
+            readiness_score: number | null;
+            scan_status: string;
+          };
         }>;
       };
       return json.data ?? [];
@@ -346,7 +352,7 @@ export function ScannerSection() {
                   <th className="text-left py-2 font-medium text-gray-500">Reason</th>
                   <th className="text-right py-2 font-medium text-gray-500">Δ</th>
                   <th className="text-right py-2 font-medium text-gray-500">Balance after</th>
-                  <th className="text-left py-2 font-medium text-gray-500">Source</th>
+                  <th className="text-left py-2 font-medium text-gray-500">Scan / Source</th>
                 </tr>
               </thead>
               <tbody>
@@ -381,8 +387,22 @@ export function ScannerSection() {
                       {row.delta}
                     </td>
                     <td className="py-2 text-right text-gray-900 dark:text-white">{row.balance_after}</td>
-                    <td className="py-2 text-gray-500 font-mono text-xs truncate max-w-xs">
-                      {row.source ?? '—'}
+                    <td className="py-2 text-gray-500 font-mono text-xs">
+                      {row.scan ? (
+                        <button
+                          type="button"
+                          onClick={() => navigator.clipboard?.writeText(row.scan!.id)}
+                          className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                          title={`Click to copy scan id: ${row.scan.id}\nFetch the full payload with: GET /v1/scanner/scan/${row.scan.id}`}
+                        >
+                          <span className="font-mono">{row.scan.domain}</span>
+                          {row.scan.readiness_score != null && (
+                            <span className="text-[10px] text-gray-400">· score {row.scan.readiness_score}</span>
+                          )}
+                        </button>
+                      ) : (
+                        <span className="truncate max-w-xs inline-block">{row.source ?? '—'}</span>
+                      )}
                     </td>
                   </tr>
                 ))}

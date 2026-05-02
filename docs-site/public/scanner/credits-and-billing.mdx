@@ -1,9 +1,9 @@
 ---
 title: "Credits & Billing"
-description: "Pricing, per-endpoint credit costs, balance API, usage reporting, and top-up flow."
+description: "Pricing, per-endpoint credit costs, X-Credits-Remaining header, auto-refund on errors, balance API, usage reporting, and top-up flow."
 ---
 
-Scanner uses a prepaid credit model. You're granted credits when your key is issued (free tier or invoiced), and each scan/batch/test debits your balance. Reads are always free.
+Scanner uses a prepaid credit model. You're granted credits when your key is issued (free tier or invoiced), and each scan/batch/test debits your balance. Reads are always free. Validation errors and server errors are **automatically refunded** — you never burn credits on a 4xx or 5xx.
 
 ## Pricing
 
@@ -75,6 +75,19 @@ curl -H "Authorization: Bearer $SCANNER_KEY" \
 }
 ```
 
+## `X-Credits-Remaining` header
+
+Every billed response includes an **`X-Credits-Remaining`** header so you can track your balance without an extra round-trip. Available on success responses **and** on auto-refunded 4xx/5xx responses.
+
+```
+HTTP/2 200
+content-type: application/json
+x-credits-remaining: 96
+x-request-id: 2fb64db5-…
+```
+
+The TypeScript SDK reads this header automatically and exposes it as `scanner.balance` — see the [SDK reference](/scanner/sdk#auto-tracked-balance).
+
 ## Insufficient-credit errors
 
 When your balance is below the cost of a requested operation, the endpoint returns:
@@ -89,7 +102,63 @@ When your balance is below the cost of a requested operation, the endpoint retur
 }
 ```
 
-Handle this in your integration by falling back to cached data, queueing for later, or notifying the operator.
+Handle this in your integration by falling back to cached data, queueing for later, or notifying the operator. The 402 path is **never** debited — it's the gate that prevents work from starting.
+
+## Auto-refund on 4xx and 5xx
+
+The credits middleware debits your balance **before** the route handler runs (so we can return 402 cleanly when funds are short). If the handler then returns any 4xx or 5xx **other than** 402 / 429, the debit is **automatically reversed**:
+
+| Status     | Refunded? |
+| ---------- | --------- |
+| 200–299    | No (you got the work) |
+| 400 (Validation) | **Yes** |
+| 401 (Unauthorized) | n/a — auth runs before credits, never debited |
+| 402 (Insufficient credits) | n/a — never debited |
+| 403 (Forbidden) | **Yes** |
+| 404 (Not found) | **Yes** |
+| 422 (Unprocessable) | **Yes** |
+| 429 (Rate limited) | n/a — rate limit runs before credits, never debited |
+| 5xx (Server error) | **Yes** |
+
+The original consume row stays in the ledger for audit, paired with a matching `refund` row. Net `consumedTotal` reflects the refund — you can tell what was charged vs returned by inspecting the ledger directly.
+
+## Ledger
+
+Every grant, consume, refund, and adjustment is recorded in an append-only ledger. Retrieve history with optional pagination + scan-result join:
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/credits/ledger?from=2026-04-01&limit=50&page=1&expand=scan"
+```
+
+Response:
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "delta": -1,
+      "reason": "consume",
+      "source": "request:e4f2…",
+      "balance_after": 8432,
+      "metadata": { "endpoint": "POST /v1/scanner/scan", "key_id": "uuid" },
+      "created_at": "2026-04-22T10:15:03Z",
+      "scan": {
+        "id": "scan-uuid",
+        "domain": "shopify.com",
+        "readiness_score": 72,
+        "scan_status": "completed"
+      }
+    }
+  ],
+  "pagination": { "page": 1, "limit": 50, "total": 23, "totalPages": 1 }
+}
+```
+
+`reason` is one of `grant`, `consume`, `refund`, `adjustment`. With `expand=scan` (recommended) each consume row joins to the merchant_scans row that paid for it via `request_id` — perfect for audit trails. Scans created before 2026-05-02 don't have the join; their rows still appear, just without the `scan` field.
+
+See [Credits & Usage Endpoints](/scanner/endpoints/credits) for the full param list and other ledger calls (`/credits/balance`, `/credits/activity`).
 
 ## Ledger
 
@@ -118,14 +187,27 @@ Each entry:
 
 ## Usage reporting
 
-Aggregated per-endpoint or per-day usage is available at `/v1/scanner/usage`:
+Two flavors:
+
+**`/v1/scanner/credits/activity`** — day-bucketed billable scan counts sourced from the credit ledger (ground truth, never undercounts). Use this for usage charts and billing reconciliation.
+
+```bash
+curl -H "Authorization: Bearer $SCANNER_KEY" \
+  "https://scanner.getsly.ai/v1/scanner/credits/activity?from=2026-04-01"
+```
+
+```json
+{ "data": [{ "day": "2026-05-02", "scans": 17, "credits": 17 }] }
+```
+
+**`/v1/scanner/usage`** — aggregated request counts per endpoint or per day (includes free reads, errors, latency). Use this when you also want read-traffic + per-endpoint breakdowns.
 
 ```bash
 curl -H "Authorization: Bearer $SCANNER_KEY" \
   "https://scanner.getsly.ai/v1/scanner/usage?group_by=day&from=2026-04-01"
 ```
 
-Returns request counts, credits consumed, error counts, and total request duration per bucket. Useful for chargeback reports and tracking which endpoints dominate your spend.
+See [Credits & Usage Endpoints](/scanner/endpoints/credits) for the full reference.
 
 ## Topping up
 

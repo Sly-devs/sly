@@ -1,0 +1,263 @@
+---
+title: "TypeScript SDK"
+description: "Official @sly_ai/scanner client — typed methods, automatic retries, in-process balance tracking, dependency-free."
+---
+
+The **`@sly_ai/scanner`** package is the recommended way to integrate the scanner from any TypeScript or JavaScript runtime. It mirrors every public API endpoint with typed methods, handles transient errors automatically, and tracks remaining credits without an extra round-trip.
+
+## Install
+
+```bash
+npm install @sly_ai/scanner
+# or
+pnpm add @sly_ai/scanner
+# or
+yarn add @sly_ai/scanner
+```
+
+Requires Node.js **18+** (uses native `fetch`). Works in browsers, Edge runtimes, and Bun. Zero runtime dependencies.
+
+## Quickstart
+
+```ts
+import { Scanner } from '@sly_ai/scanner';
+
+const scanner = new Scanner({ apiKey: process.env.SCANNER_KEY! });
+
+const result = await scanner.scan({ domain: 'shopify.com' });
+
+console.log(result.readiness_score);   // 0–100
+console.log(result.protocol_results);   // per-protocol detection
+console.log(scanner.balance);           // remaining credits, auto-tracked
+```
+
+That's the whole integration for most use cases.
+
+## Configuration
+
+```ts
+const scanner = new Scanner({
+  apiKey: process.env.SCANNER_KEY!,           // required
+  baseUrl: 'https://scanner.getsly.ai',       // override for staging
+  environment: 'live',                         // inferred from key prefix by default
+  retry: {
+    maxAttempts: 3,
+    baseDelayMs: 500,
+    maxDelayMs: 30_000,
+  },
+  fetch: customFetch,                          // bring your own (tests, proxies, edge)
+  defaultHeaders: { 'X-Trace-Id': requestId }, // attached to every call
+});
+```
+
+`environment` is inferred from the key prefix: `psk_live_*` → `'live'`, `psk_test_*` → `'test'`. Pass it explicitly when using JWT auth.
+
+## Typed errors
+
+Catch the specific subclass for actionable handling:
+
+```ts
+import {
+  Scanner,
+  InsufficientCreditsError,
+  RateLimitError,
+  ValidationError,
+  AuthenticationError,
+} from '@sly_ai/scanner';
+
+try {
+  await scanner.scan({ domain: 'shopify.com' });
+} catch (err) {
+  if (err instanceof InsufficientCreditsError) {
+    console.log(`Need ${err.required}, have ${err.balance}`);
+    console.log(`Top up: ${err.docs}`);
+  } else if (err instanceof RateLimitError) {
+    console.log(`Retry in ${err.retryAfterSeconds}s`);
+  } else if (err instanceof ValidationError) {
+    console.log('Field errors:', err.fieldErrors);
+  } else if (err instanceof AuthenticationError) {
+    console.log('Bad or expired key');
+  } else {
+    throw err;
+  }
+}
+```
+
+Every error has `.status`, `.requestId`, and `.body` — pull them straight into your support tickets and observability stack.
+
+| Error class                  | HTTP | Retried? |
+| ---------------------------- | ---- | -------- |
+| `ValidationError`            | 400  | No       |
+| `AuthenticationError`        | 401  | No       |
+| `InsufficientCreditsError`   | 402  | No       |
+| `ForbiddenError`             | 403  | No       |
+| `NotFoundError`              | 404  | No       |
+| `RateLimitError`             | 429  | Yes (honors `Retry-After`) |
+| `ServerError`                | 5xx  | Yes (exponential backoff with jitter) |
+| `ScannerError` (base)        | any  | depends on subclass |
+
+The retry policy is conservative on purpose — we never burn a partner's quota on a deterministic 4xx.
+
+## Auto-tracked balance
+
+Every billed response includes an `X-Credits-Remaining` header. The SDK reads it and updates `scanner.balance` so you don't need a follow-up `/credits/balance` call:
+
+```ts
+console.log(scanner.balance);                  // null on first construct
+await scanner.scan({ domain: 'shopify.com' });
+console.log(scanner.balance);                  // 99
+
+// authoritative read (uses /credits/balance):
+const summary = await scanner.getBalance();   // { balance, grantedTotal, consumedTotal }
+```
+
+## Single scans
+
+```ts
+const result = await scanner.scan({
+  domain: 'shopify.com',
+  merchant_name: 'Shopify',
+  merchant_category: 'saas',
+  region: 'north_america',
+  skip_if_fresh: true,         // returns cached scan if < 7 days old
+});
+```
+
+`result` is a fully-typed `MerchantScan` — IntelliSense gives you every score, protocol result, and metadata field.
+
+The response includes a `request_id` (UUID) that ties the scan to its credit-ledger row and is echoed in the `X-Request-ID` response header. Use it for audit + support correlation.
+
+## Bounded-concurrency stream — `scanMany`
+
+For a moderate number of domains (~10–500) where you want results as they complete:
+
+```ts
+const domains = ['shopify.com', 'nike.com', 'adidas.com', /* … */];
+
+for await (const { input, result, error } of scanner.scanMany(domains, { concurrency: 10 })) {
+  if (error) console.error(`${input.domain} failed:`, error.message);
+  else console.log(`${input.domain}: score ${result!.readiness_score}`);
+}
+```
+
+Per-domain errors are caught and yielded — one failure doesn't abort the run. Default concurrency is 5; rate limits suggest staying under 10 unless you've negotiated a higher cap.
+
+## Server-side batches — `createBatch` + `waitForBatch`
+
+For large lists (500+) or when you want the server to manage the queue:
+
+```ts
+const batch = await scanner.createBatch({
+  name: 'Q2 2026 retail audit',
+  domains: domains.map((d) => ({ domain: d })),
+});
+
+const finished = await scanner.waitForBatch(batch.id, {
+  pollIntervalMs: 5_000,
+  timeoutMs: 30 * 60_000,         // optional 30-min cap
+  onProgress: (b) => console.log(`${b.completed_targets}/${b.total_targets}`),
+});
+
+console.log(`Done: ${finished.completed_targets} ok, ${finished.failed_targets} failed`);
+```
+
+Batch costs **0.5 credit per target**, charged at enqueue time. Cancel before completion (`scanner.cancelBatch(id)`) to refund the unprocessed credits.
+
+### CSV upload
+
+```ts
+const file = new File([csvBytes], 'merchants.csv', { type: 'text/csv' });
+const batch = await scanner.uploadBatchCsv(file, { name: 'imported-list' });
+```
+
+The CSV must include a `domain` column. Optional columns: `merchant_name`, `merchant_category`, `country_code`, `region`.
+
+## Credits, ledger, and activity
+
+```ts
+// Authoritative balance + lifetime totals
+const summary = await scanner.getBalance();
+// { balance: 96, grantedTotal: 100, consumedTotal: 4 }
+
+// Day-bucketed billable scan counts (from the credit ledger — never undercounts)
+const days = await scanner.listActivity({ from: '2026-04-01T00:00:00Z' });
+// [{ day: '2026-05-02', scans: 17, credits: 17 }, …]
+
+// Single page of ledger entries
+const { data, pagination } = await scanner.listLedger({
+  page: 1,
+  limit: 50,
+  expandScan: true,    // joins consume rows to scan results
+});
+
+// Auto-paginated ledger walk
+for await (const entry of scanner.iterateLedger({ expandScan: true })) {
+  if (entry.reason === 'consume' && entry.scan) {
+    console.log(entry.created_at, entry.scan.domain, entry.scan.readiness_score);
+  }
+}
+```
+
+`expandScan: true` is the audit-trail unlock — every consume row comes back with the linked scan summary, so you can answer *"what did I get for this charge?"* without a second call.
+
+## Key management
+
+```ts
+// List
+const keys = await scanner.listKeys();
+
+// Create — plaintext returned ONCE in `.key`; persist immediately
+const created = await scanner.createKey({
+  name: 'CI scanner',
+  environment: 'live',
+  scopes: ['scan', 'batch', 'read'],
+  rate_limit_per_min: 60,
+});
+console.log('Save this:', created.key);   // psk_live_...
+
+// Revoke
+await scanner.revokeKey(created.id);
+```
+
+Live keys can only be created by users with `owner`/`admin` roles when authenticated via JWT. API-key callers have no role gate.
+
+## Trace propagation
+
+Pass a `requestId` per call so your distributed-trace IDs flow into our request logs:
+
+```ts
+await scanner.scan({ domain: 'shopify.com' }, { requestId: 'job-abc-123' });
+```
+
+The id rides as `X-Request-ID` and is echoed in error objects (`err.requestId`). Cross-references in support tickets cost zero engineering time.
+
+## Testing
+
+The SDK accepts a custom `fetch` — easy to mock without spinning up a network:
+
+```ts
+import { Scanner } from '@sly_ai/scanner';
+
+const fakeFetch = async () =>
+  new Response(JSON.stringify({ readiness_score: 50 }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+
+const scanner = new Scanner({ apiKey: 'psk_test_x', fetch: fakeFetch });
+```
+
+The package itself ships with 13 vitest tests covering construction, environment inference, error mapping, retry, balance tracking, and ledger pagination — see the source for fixture patterns.
+
+## Source + issues
+
+- npm: `@sly_ai/scanner`
+- Source: [github.com/Sly-devs/sly/tree/main/packages/scanner-sdk](https://github.com/Sly-devs/sly/tree/main/packages/scanner-sdk)
+- Issues / requests: [github.com/Sly-devs/sly/issues](https://github.com/Sly-devs/sly/issues) (label `scanner-sdk`)
+- Support: [partners@getsly.ai](mailto:partners@getsly.ai)
+
+## What's next
+
+- [Quickstart](/scanner/quickstart) — the same flow without the SDK
+- [Endpoint reference](/scanner/endpoints/scan)
+- [Credits & billing](/scanner/credits-and-billing)

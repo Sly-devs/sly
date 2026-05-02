@@ -30,6 +30,7 @@ interface MerchantScan {
   scan_duration_ms: number;
   last_scanned_at: string;       // ISO 8601
   error_message?: string;
+  request_id?: string;           // X-Request-ID echo; joins to credit_ledger.source = "request:<id>"
   created_at: string;
   updated_at: string;
 

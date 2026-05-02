@@ -223,6 +223,7 @@
             "pages": [
               "scanner/overview",
               "scanner/quickstart",
+              "scanner/sdk",
               "scanner/authentication",
               "scanner/credits-and-billing",
               "scanner/data-model",
@@ -234,6 +235,7 @@
             "pages": [
               "scanner/endpoints/scan",
               "scanner/endpoints/batch",
+              "scanner/endpoints/credits",
               "scanner/endpoints/prospects",
               "scanner/endpoints/tests"
             ]

@@ -1,5 +1,5 @@
 import type { Context, Next } from 'hono';
-import { debit, getBalance } from '../billing/ledger.js';
+import { debit, getBalance, refund } from '../billing/ledger.js';
 import { getCreditCost } from '../billing/credit-costs.js';
 import { normalizePath } from '../services/usage.js';
 
@@ -8,6 +8,10 @@ import { normalizePath } from '../services/usage.js';
  * a dedicated helper (charged at enqueue time with target count).
  *
  * Sets c.var.creditsCharged so the usage-counter records it.
+ *
+ * Auto-refunds the debit if the handler returns 4xx/5xx so partners don't
+ * burn credits on validation typos or our own server errors. The route
+ * still gets the work it needs done; we just reverse the bookkeeping.
  */
 export async function creditsMiddleware(c: Context, next: Next) {
   const ctx = c.get('ctx');
@@ -55,7 +59,35 @@ export async function creditsMiddleware(c: Context, next: Next) {
   console.log(
     `[scanner-billing] debit tenant=${ctx.tenantId} cost=${cost} balance_after=${newBalance} endpoint="${method} ${pathTemplate}"`,
   );
-  return next();
+
+  await next();
+
+  const status = c.res.status;
+  if (status >= 400) {
+    const refundedBalance = await refund(
+      ctx.tenantId,
+      cost,
+      `refund:${requestId}`,
+      {
+        endpoint: `${method} ${pathTemplate}`,
+        key_id: ctx.scannerKeyId ?? null,
+        reason: status >= 500 ? 'server_error' : 'client_error',
+        status_code: status,
+      },
+    ).catch((err) => {
+      console.error('[scanner-billing] refund failed:', err);
+      return null;
+    });
+    c.set('creditsCharged', 0);
+    if (refundedBalance !== null) {
+      c.header('X-Credits-Remaining', String(refundedBalance));
+      console.log(
+        `[scanner-billing] refund tenant=${ctx.tenantId} amount=${cost} balance_after=${refundedBalance} status=${status} endpoint="${method} ${pathTemplate}"`,
+      );
+    }
+  } else {
+    c.header('X-Credits-Remaining', String(newBalance));
+  }
 }
 
 /**

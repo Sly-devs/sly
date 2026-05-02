@@ -54,8 +54,17 @@ export async function getBalanceSummary(tenantId: string): Promise<{
   let balance = 0;
   for (const row of rows) {
     balance += row.delta;
-    if (row.delta > 0) grantedTotal += row.delta;
-    else consumedTotal += -row.delta;
+    // Refunds cancel the original consume — net them against consumedTotal
+    // instead of inflating grantedTotal, so lifetime totals stay truthful
+    // (e.g. a partner who only ever scanned once and got refunded sees
+    // granted=N, consumed=0, not granted=N+1, consumed=1).
+    if (row.reason === 'refund') {
+      consumedTotal -= row.delta;
+    } else if (row.delta > 0) {
+      grantedTotal += row.delta;
+    } else {
+      consumedTotal += -row.delta;
+    }
   }
   return { balance, grantedTotal, consumedTotal };
 }

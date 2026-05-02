@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { AlertCircle, Coins, Mail, Radar, TrendingUp } from 'lucide-react';
+import { AlertCircle, Coins, ExternalLink, Mail, Radar, TrendingUp } from 'lucide-react';
 import { useScannerApi } from '@/lib/scanner-api';
 
 /**
@@ -109,10 +109,25 @@ export function ScannerSection() {
   const balance = balanceQuery.data?.balance ?? 0;
   const needsTopup = balanceQuery.isSuccess && balance < 500;
 
-  const monthRequests =
+  // "Scans" = billable activity. Credits map 1:1 to scan-style operations
+  // (1 credit / scan, 0.5 / batch domain, 5 / agent test); summing credits
+  // gives the partner's actual workload, not dashboard polling noise.
+  const monthScans =
     usageByDayQuery.data
       ?.filter((d) => d.day >= fromDay)
-      .reduce((sum, d) => sum + d.requests, 0) ?? 0;
+      .reduce((sum, d) => sum + d.credits, 0) ?? 0;
+
+  // Split each day into billable (= credits) and free (reads, polling),
+  // then keep a sparse view: only days with any activity. Stops the chart
+  // from drowning under 30 mostly-zero buckets when usage is light.
+  const chartData = (usageByDayQuery.data ?? [])
+    .map((d) => ({
+      day: d.day,
+      scans: d.credits,
+      reads: Math.max(0, d.requests - d.credits),
+      errors: d.errors,
+    }))
+    .filter((d) => d.scans > 0 || d.reads > 0 || d.errors > 0);
 
   return (
     <div id="scanner" className="space-y-6 pt-8 mt-8 border-t border-gray-200 dark:border-gray-700">
@@ -150,10 +165,44 @@ export function ScannerSection() {
           icon={<AlertCircle className="h-4 w-4 text-rose-500" />}
         />
         <Kpi
-          label="Requests (30d)"
-          value={usageByDayQuery.isLoading ? '—' : monthRequests.toLocaleString()}
+          label="Scans (30d)"
+          value={usageByDayQuery.isLoading ? '—' : monthScans.toLocaleString()}
           icon={<Radar className="h-4 w-4 text-indigo-500" />}
         />
+      </div>
+
+      {/* Pricing reference */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white">How credits are charged</h3>
+          <a
+            href="https://docs.getsly.ai/scanner/credits-and-billing"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-1"
+          >
+            View pricing docs <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        </div>
+        <ul className="text-sm space-y-1.5 text-gray-700 dark:text-gray-300">
+          <li>
+            <code className="text-xs bg-gray-100 dark:bg-gray-900 px-1.5 py-0.5 rounded">POST /v1/scanner/scan</code> — <strong>1 credit</strong> per domain
+          </li>
+          <li>
+            <code className="text-xs bg-gray-100 dark:bg-gray-900 px-1.5 py-0.5 rounded">POST /v1/scanner/scan/batch</code> — <strong>0.5 credit</strong> per domain in the batch
+          </li>
+          <li>
+            <code className="text-xs bg-gray-100 dark:bg-gray-900 px-1.5 py-0.5 rounded">POST /v1/scanner/tests</code> — <strong>5 credits</strong> per agent test run
+          </li>
+          <li>
+            All <code className="text-xs bg-gray-100 dark:bg-gray-900 px-1.5 py-0.5 rounded">GET</code> reads (balance, usage, ledger, scan results, keys) — <strong>free</strong>
+          </li>
+        </ul>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+          Validation errors and server errors are auto-refunded. Successful responses include
+          <code className="mx-1 text-xs bg-gray-100 dark:bg-gray-900 px-1 py-0.5 rounded">X-Credits-Remaining</code>
+          in the headers.
+        </p>
       </div>
 
       {needsTopup && (
@@ -182,19 +231,24 @@ export function ScannerSection() {
       {/* Usage chart */}
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Requests per day (last 30d)</h3>
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Activity per day (last 30d)</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Billable scans (indigo), free reads — balance/usage/ledger polling (gray), errors (red).
+            </p>
+          </div>
         </div>
         {usageByDayQuery.isLoading ? (
           <div className="h-56 flex items-center justify-center text-sm text-gray-500">Loading…</div>
-        ) : !usageByDayQuery.data || usageByDayQuery.data.length === 0 ? (
+        ) : chartData.length === 0 ? (
           <div className="h-56 flex items-center justify-center text-sm text-gray-500">
-            No scanner requests yet. Create a scanner key in{' '}
+            No scanner activity yet. Create a scanner key in{' '}
             <Link href="/dashboard/api-keys#scanner" className="underline ml-1">API Keys</Link>
             {' '}and make your first call.
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={usageByDayQuery.data}>
+            <BarChart data={chartData}>
               <XAxis dataKey="day" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
               <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
               <Tooltip
@@ -202,9 +256,9 @@ export function ScannerSection() {
                 contentStyle={{ fontSize: 12 }}
                 formatter={(v: number, name: string) => [v.toLocaleString(), name]}
               />
-              <Bar dataKey="requests" fill="#6366f1" radius={[3, 3, 0, 0]} />
-              <Bar dataKey="credits" fill="#f59e0b" radius={[3, 3, 0, 0]} />
-              <Bar dataKey="errors" fill="#ef4444" radius={[3, 3, 0, 0]} />
+              <Bar dataKey="scans" name="Scans (billable)" stackId="activity" fill="#6366f1" radius={[0, 0, 0, 0]} />
+              <Bar dataKey="reads" name="Reads (free)" stackId="activity" fill="#cbd5e1" radius={[3, 3, 0, 0]} />
+              <Bar dataKey="errors" name="Errors" fill="#ef4444" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         )}

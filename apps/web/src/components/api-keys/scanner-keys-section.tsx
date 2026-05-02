@@ -140,7 +140,7 @@ export function ScannerKeysSection() {
             Scanner API Keys
           </h2>
           <p className="text-sm text-muted-foreground">
-            Keys for the agentic-commerce scanner. <a href="/dashboard/operations#scanner" className="underline hover:text-foreground">Manage scanner credits →</a>
+            Keys for the agentic-commerce scanner. <a href="/dashboard/scanner" className="underline hover:text-foreground">Manage scanner credits →</a>
           </p>
         </div>
         <Button

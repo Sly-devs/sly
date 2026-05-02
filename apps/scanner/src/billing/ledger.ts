@@ -163,8 +163,8 @@ export async function refund(
 export async function listLedger(
   tenantId: string,
   opts: { from?: string; to?: string; limit?: number; offset?: number } = {},
-): Promise<
-  Array<{
+): Promise<{
+  entries: Array<{
     id: string;
     delta: number;
     reason: string;
@@ -172,19 +172,23 @@ export async function listLedger(
     balance_after: number;
     metadata: Record<string, unknown>;
     created_at: string;
-  }>
-> {
+  }>;
+  total: number;
+}> {
   const supabase = createClient();
+  // count: 'exact' returns the unfiltered (post-filter, pre-range) row count
+  // alongside the data slice so the dashboard can render proper pagination.
   let q = (supabase.from('scanner_credit_ledger') as any)
-    .select('id, delta, reason, source, balance_after, metadata, created_at')
+    .select('id, delta, reason, source, balance_after, metadata, created_at', {
+      count: 'exact',
+    })
     .eq('tenant_id', tenantId)
     .order('created_at', { ascending: false })
-    .limit(opts.limit ?? 100)
     .range(opts.offset ?? 0, (opts.offset ?? 0) + (opts.limit ?? 100) - 1);
 
   if (opts.from) q = q.gte('created_at', opts.from);
   if (opts.to) q = q.lte('created_at', opts.to);
 
-  const { data } = await q;
-  return (data as any[]) ?? [];
+  const { data, count } = await q;
+  return { entries: (data as any[]) ?? [], total: count ?? 0 };
 }

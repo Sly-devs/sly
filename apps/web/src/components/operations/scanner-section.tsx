@@ -23,6 +23,8 @@ import { useScannerApi } from '@/lib/scanner-api';
 export function ScannerSection() {
   const scanner = useScannerApi();
   const [openScanId, setOpenScanId] = useState<string | null>(null);
+  const [ledgerPage, setLedgerPage] = useState(1);
+  const [ledgerPageSize, setLedgerPageSize] = useState(10);
 
   const balanceQuery = useQuery({
     queryKey: ['scanner', 'balance'],
@@ -109,9 +111,11 @@ export function ScannerSection() {
   });
 
   const ledgerQuery = useQuery({
-    queryKey: ['scanner', 'ledger', 'expand-scan'],
+    queryKey: ['scanner', 'ledger', 'expand-scan', ledgerPage, ledgerPageSize],
     queryFn: async () => {
-      const res = await scanner.get('/v1/scanner/credits/ledger?limit=20&expand=scan');
+      const res = await scanner.get(
+        `/v1/scanner/credits/ledger?limit=${ledgerPageSize}&page=${ledgerPage}&expand=scan`,
+      );
       if (!res.ok) throw new Error('ledger-failed');
       const json = (await res.json()) as {
         data: Array<{
@@ -129,8 +133,9 @@ export function ScannerSection() {
             scan_status: string;
           };
         }>;
+        pagination: { page: number; limit: number; total: number; totalPages: number };
       };
-      return json.data ?? [];
+      return json;
     },
     staleTime: 30_000,
   });
@@ -168,20 +173,11 @@ export function ScannerSection() {
   })();
 
   return (
-    <div id="scanner" className="space-y-6 pt-8 mt-8 border-t border-gray-200 dark:border-gray-700">
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-            <Radar className="h-5 w-5" />
-            Scanner
-          </h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            Agentic-commerce scanner — credit-based, tracked separately from the main API.{' '}
-            <Link href="/dashboard/api-keys#scanner" className="underline hover:text-gray-900 dark:hover:text-white">
-              Manage scanner keys →
-            </Link>
-          </p>
-        </div>
+    <div id="scanner" className="space-y-6">
+      <div className="flex justify-end">
+        <Link href="/dashboard/api-keys#scanner" className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline">
+          Manage scanner keys →
+        </Link>
       </div>
 
       {/* Balance row */}
@@ -342,8 +338,24 @@ export function ScannerSection() {
 
       {/* Recent ledger */}
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Recent ledger activity</h3>
-        {!ledgerQuery.data || ledgerQuery.data.length === 0 ? (
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Ledger activity</h3>
+          <select
+            value={ledgerPageSize}
+            onChange={(e) => {
+              setLedgerPageSize(Number(e.target.value));
+              setLedgerPage(1);
+            }}
+            className="text-xs border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+            aria-label="Rows per page"
+            title="Rows per page"
+          >
+            {[10, 25, 50, 100].map((n) => (
+              <option key={n} value={n}>{n} / page</option>
+            ))}
+          </select>
+        </div>
+        {!ledgerQuery.data || ledgerQuery.data.data.length === 0 ? (
           <p className="text-sm text-gray-500">No ledger entries yet.</p>
         ) : (
           <div className="overflow-x-auto">
@@ -358,7 +370,7 @@ export function ScannerSection() {
                 </tr>
               </thead>
               <tbody>
-                {ledgerQuery.data.map((row) => (
+                {ledgerQuery.data.data.map((row) => (
                   <tr key={row.id} className="border-b border-gray-100 dark:border-gray-700/50">
                     <td className="py-2 text-gray-500 text-xs whitespace-nowrap">
                       {new Date(row.created_at).toLocaleString()}
@@ -410,6 +422,32 @@ export function ScannerSection() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {ledgerQuery.data?.pagination && (
+          <div className="flex items-center justify-between pt-4 mt-2 border-t border-gray-200 dark:border-gray-700">
+            <span className="text-xs text-gray-500">
+              Page {ledgerQuery.data.pagination.page} of {ledgerQuery.data.pagination.totalPages}
+              {' '}({ledgerQuery.data.pagination.total} total)
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setLedgerPage(Math.max(1, ledgerPage - 1))}
+                disabled={ledgerPage <= 1}
+                className="text-xs px-3 py-1 border rounded disabled:opacity-50 dark:border-gray-600"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() =>
+                  setLedgerPage(Math.min(ledgerQuery.data!.pagination.totalPages, ledgerPage + 1))
+                }
+                disabled={ledgerPage >= ledgerQuery.data.pagination.totalPages}
+                className="text-xs px-3 py-1 border rounded disabled:opacity-50 dark:border-gray-600"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </div>

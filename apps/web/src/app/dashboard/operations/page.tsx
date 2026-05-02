@@ -123,6 +123,7 @@ export default function OperationsPage() {
   const [protocolFilter, setProtocolFilter] = useState(searchParams.get('protocol') || '');
   const [successFilter, setSuccessFilter] = useState(searchParams.get('success') || '');
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // Sync filters with URL
   useEffect(() => {
@@ -163,7 +164,7 @@ export default function OperationsPage() {
   });
 
   // Build operations query string
-  const opsQueryParts = [`limit=50&page=${page}`];
+  const opsQueryParts = [`limit=${pageSize}&page=${page}`];
   if (categoryFilter) opsQueryParts.push(`category=${categoryFilter}`);
   if (protocolFilter) opsQueryParts.push(`protocol=${protocolFilter}`);
   if (successFilter) opsQueryParts.push(`success=${successFilter}`);
@@ -172,7 +173,7 @@ export default function OperationsPage() {
     data: OperationEvent[];
     pagination: { page: number; limit: number; total: number; totalPages: number };
   }>({
-    queryKey: ['operations', 'events', categoryFilter, protocolFilter, successFilter, page],
+    queryKey: ['operations', 'events', categoryFilter, protocolFilter, successFilter, page, pageSize],
     queryFn: () => fetchUsage(`/operations?${opsQueryParts.join('&')}`, token, apiUrl),
     enabled: isConfigured && !!token,
     staleTime: 30 * 1000,
@@ -350,6 +351,21 @@ export default function OperationsPage() {
                   Clear
                 </button>
               )}
+              {/* Page size */}
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(1);
+                }}
+                className="text-xs border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                aria-label="Rows per page"
+                title="Rows per page"
+              >
+                {[10, 25, 50, 100].map((n) => (
+                  <option key={n} value={n}>{n} / page</option>
+                ))}
+              </select>
             </div>
           </div>
         </div>

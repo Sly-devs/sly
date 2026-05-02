@@ -1,0 +1,60 @@
+{
+  "name": "@sly_ai/scanner",
+  "version": "0.1.0",
+  "description": "Official TypeScript SDK for the Sly Scanner — agentic-commerce readiness API",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "sly",
+    "scanner",
+    "agentic-commerce",
+    "ucp",
+    "acp",
+    "ap2",
+    "x402",
+    "mcp",
+    "merchant",
+    "readiness"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sly-devs/sly",
+    "directory": "packages/scanner-sdk"
+  },
+  "homepage": "https://docs.getsly.ai/scanner",
+  "author": "Sly",
+  "license": "MIT"
+}
